@@ -1,0 +1,2 @@
+[   60037ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:7890/api/status:1
+[   60037ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:7890/api/missing:1

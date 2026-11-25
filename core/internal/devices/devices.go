@@ -90,7 +90,8 @@ func Open(vaultRoot string) (*List, error) {
 }
 
 // Add pairs a new device. A key that was ever paired, even if revoked, is
-// refused: a revoked device must make a new key to come back.
+// refused: to come back, a revoked device is restored (Unrevoke) or makes a
+// new key.
 func (l *List) Add(id, name string) error {
 	if !idRe.MatchString(id) {
 		return ErrBadID
@@ -129,6 +130,28 @@ func (l *List) Revoke(id string) error {
 	l.mu.Unlock()
 	if hook != nil {
 		hook(id)
+	}
+	return nil
+}
+
+// Unrevoke lets a revoked device sync again. Only the atrium's own web UI
+// calls it; a revoked device cannot restore itself. A device that is not
+// revoked is left as it is.
+func (l *List) Unrevoke(id string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	d, ok := l.devs[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if d.RevokedAt == nil {
+		return nil
+	}
+	was := d.RevokedAt
+	d.RevokedAt = nil
+	if err := l.save(); err != nil {
+		d.RevokedAt = was
+		return err
 	}
 	return nil
 }

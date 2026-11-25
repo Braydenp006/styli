@@ -20,6 +20,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"styli/core/internal/devices"
 	"styli/core/internal/maid"
 	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
@@ -42,6 +43,8 @@ type Deps struct {
 	// Pairing, if set, lets the Settings screen pair new devices (nil when
 	// sync is off).
 	Pairing *pairing.Atrium
+	// Devices is the paired-device list, shown on Settings (nil when sync is off).
+	Devices *devices.List
 	// Addr is the address the server listens on, for example "127.0.0.1:7878".
 	// Only requests addressed to that port on a loopback name are accepted.
 	Addr string
@@ -99,6 +102,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/pairing", s.openPairing)
 	mux.HandleFunc("POST /api/pairing/approve", s.approvePairing)
 	mux.HandleFunc("POST /api/pairing/cancel", s.cancelPairing)
+	mux.HandleFunc("GET /api/devices", s.listDevices)
+	mux.HandleFunc("POST /api/devices/{id}/revoke", s.revokeDevice)
+	mux.HandleFunc("POST /api/devices/{id}/unrevoke", s.unrevokeDevice)
 	mux.HandleFunc("GET /api/maid/preview", s.maidPreview)
 	mux.HandleFunc("POST /api/maid/run", s.maidRun)
 

@@ -111,3 +111,22 @@ func TestLastSeenIsWrittenNowAndThen(t *testing.T) {
 	}
 	l.Seen(idB, now) // unknown device: ignored
 }
+
+func TestUnrevoke(t *testing.T) {
+	l, root := open(t)
+	if err := l.Unrevoke(idA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unrevoke unknown: %v", err)
+	}
+	l.Add(idA, "Laptop")
+	if err := l.Unrevoke(idA); err != nil || !l.Trusted(idA) {
+		t.Fatalf("unrevoke an active device: %v", err)
+	}
+	l.Revoke(idA)
+	if err := l.Unrevoke(idA); err != nil || !l.Trusted(idA) {
+		t.Fatalf("unrevoke: %v", err)
+	}
+	l2, _ := Open(root)
+	if !l2.Trusted(idA) || l2.List()[0].RevokedAt != nil {
+		t.Fatal("restore did not survive a reopen")
+	}
+}

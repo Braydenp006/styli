@@ -545,3 +545,34 @@ func TestPairingFromSettings(t *testing.T) {
 		t.Fatalf("cross-site open: %d", resp.StatusCode)
 	}
 }
+
+func TestDeviceListRevokeAndRestore(t *testing.T) {
+	e := newEnv(t)
+	e.call(t, "GET", "/api/devices", nil, 404) // sync off
+
+	devs := must(devices.Open(e.root))
+	id := strings.Repeat("b", 64)
+	devs.Add(id, "Tablet")
+	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: maid.New(e.v, e.set, t.Logf), Logf: t.Logf, Addr: e.host, Devices: devs})
+
+	list := func(m map[string]any) map[string]any { return m["devices"].([]any)[0].(map[string]any) }
+	if d := list(e.call(t, "GET", "/api/devices", nil, 200)); d["name"] != "Tablet" || d["revoked_at"] != nil {
+		t.Fatalf("%v", d)
+	}
+	for i := 0; i < 2; i++ { // revoking twice is harmless
+		if d := list(e.call(t, "POST", "/api/devices/"+id+"/revoke", nil, 200)); d["revoked_at"] == nil {
+			t.Fatalf("not revoked: %v", d)
+		}
+	}
+	if devs.Trusted(id) {
+		t.Fatal("still trusted")
+	}
+	if d := list(e.call(t, "POST", "/api/devices/"+id+"/unrevoke", nil, 200)); d["revoked_at"] != nil || !devs.Trusted(id) {
+		t.Fatalf("not restored: %v", d)
+	}
+	e.call(t, "POST", "/api/devices/"+strings.Repeat("c", 64)+"/revoke", nil, 404)
+	e.call(t, "POST", "/api/devices/nope/unrevoke", nil, 404)
+	if resp, _ := e.req(t, "POST", "/api/devices/"+id+"/revoke", nil, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != 403 || !devs.Trusted(id) {
+		t.Fatalf("cross-site revoke: %d", resp.StatusCode)
+	}
+}

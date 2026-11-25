@@ -162,6 +162,7 @@ func Run(parent context.Context, cfg Config) error {
 	// may face the network; the web UI below stays on this machine.
 	syncErr := make(chan error, 1)
 	var pair *pairing.Atrium
+	var devList *devices.List
 	if cfg.SyncAddr != "" {
 		key, err := devicekey.Load(cfg.ConfigDir)
 		if err != nil {
@@ -175,6 +176,7 @@ func Run(parent context.Context, cfg Config) error {
 		if err != nil {
 			return fmt.Errorf("cannot listen for sync on %s: %w", cfg.SyncAddr, err)
 		}
+		devList = devs
 		pair = pairing.NewAtrium(key.ID, devs)
 		ss := syncsrv.NewServer(syncsrv.Deps{Vault: v, Store: st, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair}, key, devs)
 		go func() { syncErr <- ss.Serve(sln) }()
@@ -196,7 +198,7 @@ func Run(parent context.Context, cfg Config) error {
 	}
 	addr := ln.Addr().String()
 	srv := &http.Server{
-		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair, Addr: addr}),
+		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair, Devices: devList, Addr: addr}),
 		// No WriteTimeout: a big PDF must be able to stream.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

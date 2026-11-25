@@ -289,6 +289,12 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
 }
 .save-bar-actions { display: flex; gap: var(--space-2); }
 
+/* Paired devices */
+.device-rows { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.device-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.device-row.is-revoked { opacity: 0.7; }
+.device-row .hint { margin: 0; }
+
 /* Pairing: the magic words and the emoji check (the only emoji in the UI). */
 .pair-body { display: flex; flex-direction: column; gap: var(--space-3); }
 .pair-words { font: 400 22px/32px var(--font-mono); letter-spacing: 0.02em; overflow-wrap: anywhere; }

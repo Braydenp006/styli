@@ -191,3 +191,20 @@ func TestRevokeSurvivesRestart(t *testing.T) {
 		t.Fatalf("revoked device trusted after restart: %v", err)
 	}
 }
+
+// Restoring a revoked device lets it back in on a fresh connection.
+func TestUnrevokedDeviceConnectsAgain(t *testing.T) {
+	e := tlsSetup(t)
+	k, c := e.device(t, true)
+	e.devs.Revoke(k.ID)
+	if code, err := get(c, e.url+"/sync/v1/hello"); err == nil && code == http.StatusOK {
+		t.Fatalf("revoked device served: %d", code)
+	}
+	if err := e.devs.Unrevoke(k.ID); err != nil {
+		t.Fatal(err)
+	}
+	c.CloseIdleConnections()
+	if code, err := get(c, e.url+"/sync/v1/hello"); err != nil || code != http.StatusOK {
+		t.Fatalf("restored device refused: %d %v", code, err)
+	}
+}

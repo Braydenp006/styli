@@ -1,7 +1,10 @@
 package web
 
 import (
+	"errors"
 	"net/http"
+
+	"styli/core/internal/devices"
 )
 
 // Pairing a new device, from the atrium's Settings screen. The device side
@@ -47,4 +50,46 @@ func (s *server) cancelPairing(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Pairing.Cancel("")
 	writeJSON(w, http.StatusOK, s.Pairing.Status())
+}
+
+// The device list on Settings: who is paired, and revoking or restoring one.
+// Revoking cuts the device off at once (see devices and syncsrv); restoring
+// only lifts that, it never re-pairs anything.
+
+func (s *server) devicesOff(w http.ResponseWriter) bool {
+	if s.Devices == nil {
+		fail(w, http.StatusNotFound, "sync_off", "Sync is off on this atrium, so there are no devices.")
+		return true
+	}
+	return false
+}
+
+func (s *server) listDevices(w http.ResponseWriter, r *http.Request) {
+	if s.devicesOff(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": s.Devices.List()})
+}
+
+func (s *server) changeDevice(w http.ResponseWriter, r *http.Request, do func(string) error) {
+	if s.devicesOff(w) {
+		return
+	}
+	switch err := do(r.PathValue("id")); {
+	case errors.Is(err, devices.ErrNotFound):
+		fail(w, http.StatusNotFound, "not_found", "That device isn't paired with this atrium.")
+	case err != nil:
+		s.Logf("web: device change: %v", err)
+		fail(w, http.StatusInternalServerError, "internal", "Couldn't save the device list. Nothing was changed.")
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"devices": s.Devices.List()})
+	}
+}
+
+func (s *server) revokeDevice(w http.ResponseWriter, r *http.Request) {
+	s.changeDevice(w, r, s.Devices.Revoke)
+}
+
+func (s *server) unrevokeDevice(w http.ResponseWriter, r *http.Request) {
+	s.changeDevice(w, r, s.Devices.Unrevoke)
 }
