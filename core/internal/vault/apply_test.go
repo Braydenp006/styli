@@ -238,7 +238,7 @@ func TestInterruptedApplyIsFinishedOnOpen(t *testing.T) {
 		t.Fatal("journal left behind")
 	}
 	got, err := v2.Apply(g.ID, g.Rev, want)
-	if err != nil || !sameState(got, want) {
+	if err != nil || !SameState(got, want) {
 		t.Fatalf("retry: %v", err)
 	}
 	if gs := must(v2.List()); len(gs) != 1 {

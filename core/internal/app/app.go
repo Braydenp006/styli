@@ -21,6 +21,7 @@ import (
 	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
 	"styli/core/internal/store"
+	"styli/core/internal/syncdev"
 	"styli/core/internal/syncsrv"
 	"styli/core/internal/vault"
 	"styli/core/internal/watch"
@@ -30,11 +31,14 @@ import (
 // DefaultAddr is where the atrium listens unless told otherwise.
 const DefaultAddr = "127.0.0.1:7878"
 
+// DefaultSyncAddr is where an atrium listens for its devices unless told otherwise.
+const DefaultSyncAddr = ":7879"
+
 // Config says what to run.
 type Config struct {
 	Vault     string // the notes folder; it must already exist
 	Addr      string // loopback only until login exists; default DefaultAddr
-	SyncAddr  string // where devices sync, behind mutual TLS; "" means no sync listener
+	SyncAddr  string // where devices sync, behind mutual TLS; "" means no sync listener. A device opens none.
 	DataDir   string // search index; default: the user cache folder
 	ConfigDir string // this device's settings; default: the user config folder
 	Logf      func(string, ...any)
@@ -158,6 +162,24 @@ func Run(parent context.Context, cfg Config) error {
 		}
 	}()
 
+	// A machine that has paired with an atrium is a device: it syncs with that
+	// atrium and opens no sync port, so nothing can pair with it.
+	var engine *syncdev.Engine
+	if link := set.Device().Atrium; link != nil {
+		if cfg.SyncAddr != "" && cfg.SyncAddr != DefaultSyncAddr {
+			return fmt.Errorf("this machine is a device of the atrium at %s, so it opens no sync port; leave out --sync-addr", link.Addr)
+		}
+		cfg.SyncAddr = ""
+		key, err := devicekey.Load(cfg.ConfigDir)
+		if err != nil {
+			return err
+		}
+		engine = syncdev.New(v, st, syncsrv.ClientTLS(key, link.ID), link.Addr, cfg.Logf)
+		wg.Add(1)
+		go func() { defer wg.Done(); engine.Run(ctx) }()
+		cfg.Logf("this device syncs with the atrium at %s", link.Addr)
+	}
+
 	// The sync API, for paired devices only (mutual TLS with pinned keys). It
 	// may face the network; the web UI below stays on this machine.
 	syncErr := make(chan error, 1)
@@ -198,7 +220,7 @@ func Run(parent context.Context, cfg Config) error {
 	}
 	addr := ln.Addr().String()
 	srv := &http.Server{
-		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair, Devices: devList, Addr: addr}),
+		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair, Devices: devList, Sync: engine, Addr: addr}),
 		// No WriteTimeout: a big PDF must be able to stream.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

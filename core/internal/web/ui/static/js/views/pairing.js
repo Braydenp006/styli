@@ -1,7 +1,7 @@
 // The "Devices" card on the Settings screen: pair a new device with four magic
 // words, then check the emoji match on both screens. The device side runs
 // `styli join`. Nothing is saved until the person approves on both devices.
-import { api } from "../api.js";
+import { api, ApiError } from "../api.js";
 import { h, setChildren } from "../dom.js";
 import { describePairing } from "../pairingtext.js";
 import { openDialog } from "../dialogs.js";
@@ -14,7 +14,7 @@ export function pairingCard() {
   const body = h("div", { class: "pair-body", "aria-live": "polite" });
   const card = h("section", { class: "dash-card settings-card", "aria-labelledby": "pair-title" },
     h("h2", { id: "pair-title" }, "Devices"),
-    h("p", { class: "hint" }, "Pair a new device so it can sync with this atrium. You need the device next to you."),
+    h("p", { class: "hint", id: "pair-intro" }, "Pair a new device so it can sync with this atrium. You need the device next to you."),
     body);
   const list = h("div", { class: "device-list" });
   card.insertBefore(list, body);
@@ -137,7 +137,36 @@ export function pairingCard() {
     }
   }
 
-  loadDevices();
-  call("GET", "/api/pairing");
+  begin();
   return card;
+
+  // On a device (it has paired with an atrium) the card shows how its sync is
+  // going instead; only the atrium pairs and lists devices.
+  async function begin() {
+    try {
+      showSync(await api.get("/api/sync"));
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.code !== "not_device") return draw(null, err.message);
+      loadDevices();
+      call("GET", "/api/pairing");
+    }
+  }
+
+  function showSync(st) {
+    card.querySelector("#pair-intro").textContent = `This device syncs with the atrium at ${st.atrium}.`;
+    const waiting = st.waiting || [];
+    setChildren(body,
+      h("p", {}, st.last_sync ? `Last synced ${relativeTime(st.last_sync)}.` : "Not synced yet."),
+      st.error ? h("p", { class: "field-error", role: "alert" }, `Can't sync right now: ${st.error}`) : null,
+      waiting.length
+        ? h("div", {},
+          h("p", {}, waiting.length === 1 ? "1 note can't sync yet. Nothing is lost: it stays on this device." : `${waiting.length} notes can't sync yet. Nothing is lost: they stay on this device.`),
+          h("ul", { class: "device-rows" }, waiting.map((w) => h("li", { class: "device-row" },
+            h("div", { class: "grow" }, h("strong", {}, w.path || w.id), h("div", { class: "hint" }, w.reason))))))
+        : null);
+    setTimeout(async () => {
+      if (!card.isConnected) return; // the person left the screen
+      try { showSync(await api.get("/api/sync")); } catch { /* the next look at Settings tries again */ }
+    }, 5000);
+  }
 }

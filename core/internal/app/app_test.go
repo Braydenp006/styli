@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"styli/core/internal/settings"
 	"styli/core/internal/vault"
 )
 
@@ -177,4 +178,54 @@ func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 			t.Fatal("index lost across restart")
 		}
 	})
+}
+
+// A machine that has paired with an atrium is a device: it opens no sync port,
+// refuses to be told to, and its sync status is on the web API.
+func TestDeviceMode(t *testing.T) {
+	vaultDir, cfgDir := t.TempDir(), t.TempDir()
+	set, err := settings.Open(vaultDir, cfgDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreachable := "127.0.0.1:1"
+	if err := set.SetAtrium(&settings.AtriumLink{ID: strings.Repeat("a", 64), Addr: unreachable, PairedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Run(context.Background(), Config{Vault: vaultDir, Addr: "127.0.0.1:0", SyncAddr: "127.0.0.1:0", DataDir: t.TempDir(), ConfigDir: cfgDir, Logf: t.Logf})
+	if err == nil || !strings.Contains(err.Error(), "device") {
+		t.Fatalf("explicit sync port on a device: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addrCh := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Config{Vault: vaultDir, Addr: "127.0.0.1:0", SyncAddr: DefaultSyncAddr, DataDir: t.TempDir(), ConfigDir: cfgDir,
+			Logf: t.Logf, Ready: func(a string) { addrCh <- a }})
+	}()
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case err := <-done:
+		t.Fatalf("device stopped: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("device did not start")
+	}
+	if code, m := get(t, "http://"+addr+"/api/sync"); code != 200 || m["atrium"] != unreachable {
+		t.Fatalf("sync status: %d %v", code, m)
+	}
+	if code, _ := get(t, "http://"+addr+"/api/pairing"); code != 404 {
+		t.Fatalf("a device offers pairing: %d", code)
+	}
+	if c, err := net.DialTimeout("tcp", "127.0.0.1"+DefaultSyncAddr, 200*time.Millisecond); err == nil {
+		c.Close()
+		t.Log("something listens on the default sync port; it may be another program") // can't assert: the port is shared
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }

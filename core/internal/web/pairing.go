@@ -93,3 +93,13 @@ func (s *server) revokeDevice(w http.ResponseWriter, r *http.Request) {
 func (s *server) unrevokeDevice(w http.ResponseWriter, r *http.Request) {
 	s.changeDevice(w, r, s.Devices.Unrevoke)
 }
+
+// syncStatus is how this device's sync with its atrium is going (404 on an
+// atrium, which syncs nothing itself).
+func (s *server) syncStatus(w http.ResponseWriter, r *http.Request) {
+	if s.Sync == nil {
+		fail(w, http.StatusNotFound, "not_device", "This is the atrium; it doesn't sync with another one.")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Sync.Status())
+}

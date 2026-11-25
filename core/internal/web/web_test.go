@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
 	"styli/core/internal/store"
+	"styli/core/internal/syncdev"
 	"styli/core/internal/vault"
 )
 
@@ -574,5 +576,17 @@ func TestDeviceListRevokeAndRestore(t *testing.T) {
 	e.call(t, "POST", "/api/devices/nope/unrevoke", nil, 404)
 	if resp, _ := e.req(t, "POST", "/api/devices/"+id+"/revoke", nil, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != 403 || !devs.Trusted(id) {
 		t.Fatalf("cross-site revoke: %d", resp.StatusCode)
+	}
+}
+
+func TestSyncStatusOnlyOnADevice(t *testing.T) {
+	e := newEnv(t)
+	if m := e.call(t, "GET", "/api/sync", nil, 404); m["code"] != "not_device" {
+		t.Fatalf("%v", m)
+	}
+	eng := syncdev.New(e.v, nil, &tls.Config{}, "atrium.example:7879", t.Logf)
+	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: maid.New(e.v, e.set, t.Logf), Logf: t.Logf, Addr: e.host, Sync: eng})
+	if m := e.call(t, "GET", "/api/sync", nil, 200); m["atrium"] != "atrium.example:7879" || m["waiting"] == nil {
+		t.Fatalf("%v", m)
 	}
 }

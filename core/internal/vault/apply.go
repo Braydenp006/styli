@@ -174,7 +174,7 @@ func (v *Vault) Apply(id string, base uint64, want Group) (Group, error) {
 			return Group{}, ErrNotFound
 		}
 	} else {
-		if sameState(cur, want) {
+		if SameState(cur, want) {
 			return cur, nil
 		}
 		if base == 0 || cur.Rev != base {
@@ -542,9 +542,9 @@ func (v *Vault) cleanBlobs(now time.Time) (int, error) {
 	return n, nil
 }
 
-// sameState reports whether two groups hold the same files, content and
+// SameState reports whether two groups hold the same files, content and
 // settings (Rev is ignored).
-func sameState(a, b Group) bool {
+func SameState(a, b Group) bool {
 	if (a.Note == nil) != (b.Note == nil) || (a.Note != nil && *a.Note != *b.Note) {
 		return false
 	}
