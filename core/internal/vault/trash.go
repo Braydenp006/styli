@@ -122,6 +122,8 @@ func (v *Vault) Trash(id string) error {
 		return err
 	}
 	delete(v.missing, id)
+	delete(v.revs, id)
+	v.signal()
 	return nil
 }
 

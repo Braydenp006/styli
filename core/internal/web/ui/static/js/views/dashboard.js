@@ -55,7 +55,7 @@ function draw() {
   const { status } = data;
   const hub = status.hub;
   const run = status.last_maid_run;
-  const items = attentionItems({ run, missing: data.missing });
+  const items = attentionItems({ run, missing: data.missing, failed: status.failed_commits });
   document.dispatchEvent(new CustomEvent("attention-count", { detail: items.length })); // keeps the sidebar badge in step
 
   setChildren(element,
@@ -94,6 +94,17 @@ function itemBody(item) {
           h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: () => trashMissing(item, name) }, "Move to trash…")),
       ];
     }
+    case "failed": {
+      const name = item.notePath ? `“${baseName(item.notePath).replace(/\.[^.]+$/, "")}”` : "a note";
+      return [
+        h("div", { class: "attention-text" },
+          h("strong", {}, `A change from a device to ${name} could not be finished`),
+          h("p", {}, `${fullDate(item.at)}. Reason: ${item.reason}.`),
+          h("p", { class: "hint" }, "Nothing was lost. The old text is in the note's saved versions, and the device still has its copy and will send it again.")),
+        h("div", { class: "attention-actions" },
+          h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: (e) => dismissFailed(item, e.currentTarget) }, "Dismiss")),
+      ];
+    }
     case "held": {
       const lines = item.jobs.map((j) => `${j.wouldDelete} of ${j.total} ${j.label} (${Math.round((100 * j.wouldDelete) / Math.max(1, j.total))}%)`);
       return [
@@ -123,6 +134,21 @@ function itemBody(item) {
           h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: (e) => runMaid(e.currentTarget) }, "Try again")),
       ];
   }
+}
+
+async function dismissFailed(item, button) {
+  button.disabled = true;
+  try {
+    await api.post(`/api/sync/failed/${encodeURIComponent(item.name)}/dismiss`);
+  } catch (err) {
+    if (!(err instanceof ApiError && err.code === "not_found")) {
+      button.disabled = false;
+      showToast(err.message);
+      return;
+    }
+  }
+  changed();
+  load();
 }
 
 function trashMissing(item, name) {

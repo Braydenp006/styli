@@ -90,6 +90,7 @@ func (s *server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/missing", s.listMissing)
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("POST /api/sync/failed/{name}/dismiss", s.dismissFailedCommit)
 	mux.HandleFunc("GET /api/maid/preview", s.maidPreview)
 	mux.HandleFunc("POST /api/maid/run", s.maidRun)
 

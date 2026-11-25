@@ -1,12 +1,14 @@
 // What needs the person's attention on the atrium, and how to say it. Pure
 // functions, so they are tested without a browser.
 
-// Turn the maid's last run and the list of missing notes into the things to
-// show: { kind, ... } where kind is "missing", "clock", "held" or "error".
+// Turn the maid's last run, the list of missing notes and the device changes
+// that could not be finished into the things to show: { kind, ... } where kind
+// is "missing", "failed", "clock", "held" or "error".
 // A held-back cleanup is one item however many jobs were held, because one
 // approval covers them all.
-export function attentionItems({ run, missing = [] }) {
+export function attentionItems({ run, missing = [], failed = [] }) {
   const items = missing.map((m) => ({ kind: "missing", id: m.id, paths: m.paths }));
+  for (const f of failed) items.push({ kind: "failed", name: f.name, notePath: f.note_path || "", at: f.at, reason: f.reason });
   if (!run) return items;
   if (run.time_check === "wrong") items.push({ kind: "clock", offsetSeconds: run.clock_offset_seconds });
   const held = [];

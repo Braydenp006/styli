@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"styli/core/internal/maid"
+	"styli/core/internal/vault"
 )
 
 type trashDTO struct {
@@ -145,7 +146,12 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.Logf("web: counts: %v", err)
 	}
-	out := map[string]any{"maid_running": st.Running, "last_maid_run": nil, "hub": hub}
+	failed, err := s.Vault.FailedCommits()
+	if err != nil {
+		s.Logf("web: failed sync commits: %v", err)
+		failed = []vault.FailedCommit{}
+	}
+	out := map[string]any{"maid_running": st.Running, "last_maid_run": nil, "hub": hub, "failed_commits": failed}
 	if st.Last != nil {
 		out["last_maid_run"] = toRunDTO(*st.Last)
 	}
@@ -213,4 +219,14 @@ func (s *server) putDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.settingsJSON())
+}
+
+// dismissFailedCommit clears a "change from a device could not be finished"
+// notice. It removes only the notice; the device sends its change again.
+func (s *server) dismissFailedCommit(w http.ResponseWriter, r *http.Request) {
+	if err := s.Vault.DismissFailedCommit(r.PathValue("name")); err != nil {
+		s.failErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

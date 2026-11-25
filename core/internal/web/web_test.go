@@ -494,3 +494,21 @@ func TestErrorMessagesReadLikeTheUI(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedSyncCommitsOnDashboard(t *testing.T) {
+	e := newEnv(t)
+	if f := e.call(t, "GET", "/api/status", nil, 200)["failed_commits"].([]any); len(f) != 0 {
+		t.Fatalf("none yet: %v", f)
+	}
+	name := "aaaaaaaaaaaaaaaaaaaaaaaaaa-1700000000000.json"
+	dir := filepath.Join(e.root, ".ids", "sync", "failed")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, name), []byte(`{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaa","note_path":"x/a.md","at":"2026-11-25T10:00:00Z","reason":"the content the device uploaded is gone"}`), 0o600)
+	f := e.call(t, "GET", "/api/status", nil, 200)["failed_commits"].([]any)
+	if len(f) != 1 || f[0].(map[string]any)["name"] != name || f[0].(map[string]any)["note_path"] != "x/a.md" {
+		t.Fatalf("%v", f)
+	}
+	e.call(t, "POST", "/api/sync/failed/"+name+"/dismiss", nil, 204)
+	e.call(t, "POST", "/api/sync/failed/"+name+"/dismiss", nil, 404)
+	e.call(t, "POST", "/api/sync/failed/..%2Fseq/dismiss", nil, 404)
+}

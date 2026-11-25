@@ -15,9 +15,12 @@ import (
 	"sync"
 	"time"
 
+	"styli/core/internal/devicekey"
+	"styli/core/internal/devices"
 	"styli/core/internal/maid"
 	"styli/core/internal/settings"
 	"styli/core/internal/store"
+	"styli/core/internal/syncsrv"
 	"styli/core/internal/vault"
 	"styli/core/internal/watch"
 	"styli/core/internal/web"
@@ -30,6 +33,7 @@ const DefaultAddr = "127.0.0.1:7878"
 type Config struct {
 	Vault     string // the notes folder; it must already exist
 	Addr      string // loopback only until login exists; default DefaultAddr
+	SyncAddr  string // where devices sync, behind mutual TLS; "" means no sync listener
 	DataDir   string // search index; default: the user cache folder
 	ConfigDir string // this device's settings; default: the user config folder
 	Logf      func(string, ...any)
@@ -132,6 +136,53 @@ func Run(parent context.Context, cfg Config) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); m.Run(ctx, maid.StartDelay, maid.Interval) }()
 
+	// Uploads from devices that never got committed: tidy them every hour, not
+	// only at startup, so an atrium that runs for months does not collect them.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if n, err := v.CleanBlobs(); err != nil {
+					cfg.Logf("sync: tidying uploads: %v", err)
+				} else if n > 0 {
+					cfg.Logf("sync: removed %d unused uploads", n)
+				}
+			}
+		}
+	}()
+
+	// The sync API, for paired devices only (mutual TLS with pinned keys). It
+	// may face the network; the web UI below stays on this machine.
+	syncErr := make(chan error, 1)
+	if cfg.SyncAddr != "" {
+		key, err := devicekey.Load(cfg.ConfigDir)
+		if err != nil {
+			return err
+		}
+		devs, err := devices.Open(cfg.Vault)
+		if err != nil {
+			return err
+		}
+		sln, err := net.Listen("tcp", cfg.SyncAddr)
+		if err != nil {
+			return fmt.Errorf("cannot listen for sync on %s: %w", cfg.SyncAddr, err)
+		}
+		ss := syncsrv.NewServer(syncsrv.Deps{Vault: v, Store: st, Logf: cfg.Logf, Version: cfg.Version}, key, devs)
+		go func() { syncErr <- ss.Serve(sln) }()
+		defer func() {
+			shutdown, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			ss.Shutdown(shutdown)
+		}()
+		cfg.Logf("sync is listening on %s for %d paired devices; this atrium's key: %s", sln.Addr(), len(devs.List()), key.ID)
+	}
+
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("cannot listen on %s (is the atrium already running?): %w", cfg.Addr, err)
@@ -158,6 +209,9 @@ func Run(parent context.Context, cfg Config) error {
 	select {
 	case err := <-serveErr:
 		return err
+	case err := <-syncErr:
+		srv.Close()
+		return fmt.Errorf("sync server: %w", err)
 	case <-ctx.Done():
 	}
 	cfg.Logf("shutting down…")

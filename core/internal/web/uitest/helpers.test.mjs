@@ -256,6 +256,13 @@ test("attentionItems reports a wrong clock and failures", () => {
   assert.deepEqual(attentionItems({ run: run({ time_check: "unreachable" }) }), []);
 });
 
+test("attentionItems lists device changes that could not be finished", () => {
+  const items = attentionItems({ run: null, missing: [{ id: "a", paths: ["x.md"] }], failed: [{ name: "n.json", note_path: "x/b.md", at: "2026-11-25T10:00:00Z", reason: "gone" }, { name: "m.json", at: "2026-11-25T11:00:00Z", reason: "unreadable" }] });
+  assert.deepEqual(items.map((i) => i.kind), ["missing", "failed", "failed"]);
+  assert.deepEqual([items[1].name, items[1].notePath, items[1].reason], ["n.json", "x/b.md", "gone"]);
+  assert.equal(items[2].notePath, "");
+});
+
 test("describeOffset says which way and how far", () => {
   assert.equal(describeOffset(600), "about 10 minutes behind");
   assert.equal(describeOffset(-600), "about 10 minutes ahead of");

@@ -84,6 +84,7 @@ func (v *Vault) highestRev() (uint64, []string, error) {
 	var unnumbered []string
 	for _, g := range groups {
 		top = max(top, g.Rev)
+		v.revs[g.ID] = g.Rev
 		if g.Rev == 0 {
 			unnumbered = append(unnumbered, g.ID)
 		}

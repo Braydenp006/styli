@@ -122,7 +122,11 @@ func (v *Vault) Rescan() (changes []Change, pending bool, err error) {
 	changed := map[int]Kind{}
 	var cands []entry // new files not in any record
 	candHash := map[string]string{}
+	inCommit := v.pendingPaths()
 	for _, e := range found {
+		if inCommit[e.rel] && owner[e.rel] == nil {
+			continue // written by a sync commit that has not finished yet
+		}
 		if d := now.Sub(e.mod); d >= 0 && d < Settle {
 			pending = true
 			continue

@@ -86,6 +86,11 @@ type Vault struct {
 	seq    uint64
 	epoch  string
 	mirror string // copy of seq outside the vault; "" until SetSeqMirror
+
+	// For the change feed (see apply.go): each live group's Rev, and a channel
+	// closed (then replaced) whenever a record is saved.
+	revs    map[string]uint64
+	changed chan struct{}
 }
 
 // Open opens (and if needed creates) a vault. Call Rescan afterwards to pick up
@@ -107,8 +112,12 @@ func Open(root string) (*Vault, error) {
 	v := &Vault{
 		root: root, dirMode: fi.Mode().Perm(), seen: map[string]cached{}, missing: map[string]bool{},
 		historyOn: true, historyWindow: 30 * time.Minute, loc: time.Local, now: time.Now,
+		revs: map[string]uint64{}, changed: make(chan struct{}),
 	}
 	if err := v.openRevs(); err != nil {
+		return nil, err
+	}
+	if err := v.openApply(); err != nil {
 		return nil, err
 	}
 	return v, nil
@@ -435,8 +444,12 @@ func (v *Vault) save(g *Group) error {
 	if err != nil {
 		return err
 	}
-	_, err = writeAtomic(filepath.Join(v.root, idsDir, g.ID), bytes.NewReader(b), true)
-	return err
+	if _, err = writeAtomic(filepath.Join(v.root, idsDir, g.ID), bytes.NewReader(b), true); err != nil {
+		return err
+	}
+	v.revs[g.ID] = g.Rev
+	v.signal()
+	return nil
 }
 
 func (v *Vault) list() ([]Group, error) {

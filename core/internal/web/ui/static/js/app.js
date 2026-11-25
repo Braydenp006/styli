@@ -72,7 +72,7 @@ let attentionCount = 0;
 async function refreshAttention() {
   try {
     const [status, missing] = await Promise.all([api.get("/api/status"), api.get("/api/missing")]);
-    attentionCount = attentionItems({ run: status.last_maid_run, missing: missing.missing }).length;
+    attentionCount = attentionItems({ run: status.last_maid_run, missing: missing.missing, failed: status.failed_commits }).length;
     drawNav();
   } catch {
     // keep the old number; the dashboard shows the real error if there is one

@@ -44,6 +44,7 @@ func serve(args []string, stdout, stderr io.Writer) int {
 	cfg := app.Config{}
 	fs.StringVar(&cfg.Vault, "vault", "", "the notes folder (must exist)")
 	fs.StringVar(&cfg.Addr, "addr", app.DefaultAddr, "listen address; loopback only until login exists")
+	fs.StringVar(&cfg.SyncAddr, "sync-addr", ":7879", "where paired devices sync (mutual TLS); empty turns sync off")
 	fs.StringVar(&cfg.DataDir, "data", "", "search index folder (default: user cache folder)")
 	fs.StringVar(&cfg.ConfigDir, "config", "", "this device's settings folder (default: user config folder)")
 	if err := fs.Parse(args); err != nil {
