@@ -79,6 +79,19 @@ func New(v *vault.Vault, st *store.Store, tc *tls.Config, addr string, logf func
 	return e
 }
 
+// Fallback adds addresses to try, after the one given to New, when the atrium
+// cannot be reached there. Call it before Run.
+func (e *Engine) Fallback(addrs ...string) { e.c.fallback(addrs...) }
+
+// Discover sets how to find the atrium on the network when the last address
+// that worked cannot be reached, and Remember what to do when a different
+// address works (save it). Call them before Run. An atrium found this way is
+// trusted no more than any other address: the connection still has to show
+// the atrium's pinned key.
+func (e *Engine) Discover(find func(ctx context.Context) []string, remember func(addr string)) {
+	e.c.find, e.c.worked = find, remember
+}
+
 // Status returns the last pass's status.
 func (e *Engine) Status() Status {
 	e.mu.Lock()
@@ -137,6 +150,7 @@ func (e *Engine) Sync(ctx context.Context) error {
 	err := e.sync(ctx, p)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.status.Atrium = e.c.current()
 	if err != nil {
 		e.status.Error = err.Error()
 		return err

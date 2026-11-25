@@ -17,6 +17,7 @@ import (
 
 	"styli/core/internal/devicekey"
 	"styli/core/internal/devices"
+	"styli/core/internal/discovery"
 	"styli/core/internal/maid"
 	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
@@ -36,14 +37,15 @@ const DefaultSyncAddr = ":7879"
 
 // Config says what to run.
 type Config struct {
-	Vault     string // the notes folder; it must already exist
-	Addr      string // loopback only until login exists; default DefaultAddr
-	SyncAddr  string // where devices sync, behind mutual TLS; "" means no sync listener. A device opens none.
-	DataDir   string // search index; default: the user cache folder
-	ConfigDir string // this device's settings; default: the user config folder
-	Logf      func(string, ...any)
-	Version   string            // shown on the dashboard
-	Ready     func(addr string) // called once the atrium is listening
+	Vault      string // the notes folder; it must already exist
+	Addr       string // loopback only until login exists; default DefaultAddr
+	SyncAddr   string // where devices sync, behind mutual TLS; "" means no sync listener. A device opens none.
+	NoAnnounce bool   // do not announce the atrium on the local network (mDNS)
+	DataDir    string // search index; default: the user cache folder
+	ConfigDir  string // this device's settings; default: the user config folder
+	Logf       func(string, ...any)
+	Version    string            // shown on the dashboard
+	Ready      func(addr string) // called once the atrium is listening
 }
 
 // CheckAddr refuses anything that is not a loopback address. The web API has
@@ -176,6 +178,27 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		engine = syncdev.New(v, st, syncsrv.ClientTLS(key, link.ID), link.Addr, cfg.Logf)
 		engine.DeviceName = set.Device().Name
+		// Other ways to the atrium when the last one that worked is down: the
+		// addresses given at pairing, and the atrium announcing itself nearby
+		// (only the atrium holding the pinned key counts; see discovery).
+		engine.Fallback(link.Addrs...)
+		engine.Discover(func(ctx context.Context) []string {
+			found, err := discovery.Browse(ctx, 2*time.Second)
+			if err != nil {
+				cfg.Logf("discovery: %v", err)
+			}
+			for _, f := range found {
+				if f.ID == link.ID {
+					return f.Addrs
+				}
+			}
+			return nil
+		}, func(addr string) {
+			cfg.Logf("sync: reached the atrium at %s", addr)
+			if err := set.RememberAddr(addr); err != nil {
+				cfg.Logf("sync: could not save the atrium's address: %v", err)
+			}
+		})
 		wg.Add(1)
 		go func() { defer wg.Done(); engine.Run(ctx) }()
 		cfg.Logf("this device syncs with the atrium at %s", link.Addr)
@@ -209,6 +232,13 @@ func Run(parent context.Context, cfg Config) error {
 			ss.Shutdown(shutdown)
 		}()
 		cfg.Logf("sync is listening on %s for %d paired devices; this atrium's key: %s", sln.Addr(), len(devs.List()), key.ID)
+		if !cfg.NoAnnounce {
+			if err := discovery.Announce(ctx, key.ID, sln.Addr().(*net.TCPAddr).Port, cfg.Logf); err != nil {
+				cfg.Logf("%v: devices will need this machine's address to pair and sync", err)
+			} else {
+				cfg.Logf("discovery: announced on the local network as styli-%s (--no-announce turns this off)", key.ID[:8])
+			}
+		}
 	}
 
 	ln, err := net.Listen("tcp", cfg.Addr)

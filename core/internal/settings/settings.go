@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -79,8 +80,12 @@ type Device struct {
 // AtriumLink is what a device keeps about its atrium: the atrium's key (sync
 // talks to nothing else) and where to reach it.
 type AtriumLink struct {
-	ID       string    `json:"id"`   // the atrium's key fingerprint
-	Addr     string    `json:"addr"` // host:port of its sync port
+	ID   string `json:"id"`   // the atrium's key fingerprint
+	Addr string `json:"addr"` // host:port of its sync port that last worked
+	// Addrs are the addresses the person gave when pairing (a home name, a VPN
+	// name). They are never dropped, so one that only works away from home
+	// survives the home address changing; Addr is tried first, these after.
+	Addrs    []string  `json:"addrs,omitempty"`
 	PairedAt time.Time `json:"paired_at"`
 }
 
@@ -244,6 +249,24 @@ func (s *Store) SetAtrium(a *AtriumLink) error {
 	return s.setDevice(d)
 }
 
+// RememberAddr records addr as the address that last worked, so it is tried
+// first next time. The first time it changes the address, the one saved at
+// pairing is kept in Addrs. It does nothing if there is no saved atrium.
+func (s *Store) RememberAddr(addr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.device.Atrium
+	if a == nil || a.Addr == addr {
+		return nil
+	}
+	d := copyDevice(s.device)
+	if len(d.Atrium.Addrs) == 0 {
+		d.Atrium.Addrs = []string{d.Atrium.Addr}
+	}
+	d.Atrium.Addr = addr
+	return s.setDevice(d)
+}
+
 func (s *Store) setDevice(d Device) error {
 	if err := validateDevice(d); err != nil {
 		return err
@@ -263,6 +286,7 @@ func copyDevice(d Device) Device {
 	}
 	if d.Atrium != nil {
 		a := *d.Atrium
+		a.Addrs = slices.Clone(a.Addrs)
 		d.Atrium = &a
 	}
 	return d
@@ -352,6 +376,8 @@ func validateDevice(d Device) error {
 		return invalid("the saved atrium's key is not valid")
 	case d.Atrium != nil && !validAddr(d.Atrium.Addr):
 		return invalid("the saved atrium's address must be host:port")
+	case d.Atrium != nil && (len(d.Atrium.Addrs) > 8 || slices.ContainsFunc(d.Atrium.Addrs, func(a string) bool { return !validAddr(a) })):
+		return invalid("the saved atrium's other addresses must be at most 8, each host:port")
 	}
 	return nil
 }

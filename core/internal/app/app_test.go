@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"styli/core/internal/devicekey"
+	"styli/core/internal/devices"
+	"styli/core/internal/discovery"
 	"styli/core/internal/settings"
 	"styli/core/internal/vault"
 )
@@ -228,4 +231,89 @@ func TestDeviceMode(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A device whose saved address is dead finds the atrium announcing itself on
+// the network, syncs, and keeps the address that worked (and the old one).
+func TestDeviceFindsTheAtriumOnTheNetwork(t *testing.T) {
+	if _, err := discovery.Browse(context.Background(), 50*time.Millisecond); err != nil {
+		t.Skipf("no network to announce on: %v", err)
+	}
+	atriumDir, atriumCfg, devDir, devCfg := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	atriumKey, devKey := must(devicekey.Load(atriumCfg)), must(devicekey.Load(devCfg))
+	if err := must(devices.Open(atriumDir)).Add(devKey.ID, "Laptop"); err != nil {
+		t.Fatal(err)
+	}
+	const dead = "127.0.0.1:1"
+	set := must(settings.Open(devDir, devCfg))
+	if err := set.SetAtrium(&settings.AtriumLink{ID: atriumKey.ID, Addr: dead, PairedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	must(vault.Open(devDir)).CreateNote("Found.md", []byte("hello\n"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 2)
+	run := func(c Config) { c.Logf, c.Addr = t.Logf, "127.0.0.1:0"; done <- Run(ctx, c) }
+	go run(Config{Vault: atriumDir, ConfigDir: atriumCfg, DataDir: t.TempDir(), SyncAddr: ":0"})
+	go run(Config{Vault: devDir, ConfigDir: devCfg, DataDir: t.TempDir(), SyncAddr: DefaultSyncAddr})
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if b, _ := os.ReadFile(filepath.Join(atriumDir, "Found.md")); string(b) == "hello\n" {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("the note never reached the atrium")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancel()
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := must(settings.Open(devDir, devCfg)).Device().Atrium
+	if a == nil || a.Addr == dead || len(a.Addrs) != 1 || a.Addrs[0] != dead {
+		t.Fatalf("saved atrium: %+v", a)
+	}
+}
+
+// With --no-announce nothing is announced, so the same device cannot find it.
+func TestNoAnnounceKeepsTheAtriumQuiet(t *testing.T) {
+	if _, err := discovery.Browse(context.Background(), 50*time.Millisecond); err != nil {
+		t.Skipf("no network to announce on: %v", err)
+	}
+	cfg := t.TempDir()
+	key := must(devicekey.Load(cfg))
+	ctx, cancel := context.WithCancel(context.Background())
+	ready, done := make(chan string, 1), make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Config{Vault: t.TempDir(), ConfigDir: cfg, DataDir: t.TempDir(), Addr: "127.0.0.1:0", SyncAddr: ":0", NoAnnounce: true, Logf: t.Logf, Ready: func(a string) { ready <- a }})
+	}()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("stopped: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("did not start")
+	}
+	found, _ := discovery.Browse(ctx, time.Second)
+	for _, f := range found {
+		if f.ID == key.ID {
+			t.Fatal("announced although told not to")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }

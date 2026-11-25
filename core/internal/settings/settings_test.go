@@ -311,7 +311,7 @@ func TestSavedAtrium(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := must(Open(root, dev)).Device()
-	if got.Name != "Laptop" || got.Atrium == nil || *got.Atrium != *link {
+	if got.Name != "Laptop" || got.Atrium == nil || !reflect.DeepEqual(got.Atrium, link) {
 		t.Fatalf("after reopen: %+v", got)
 	}
 	// A copy, not the stored value.
@@ -323,6 +323,8 @@ func TestSavedAtrium(t *testing.T) {
 		{ID: "short", Addr: "a:1"},
 		{ID: strings.Repeat("a", 64), Addr: "no-port"},
 		{ID: strings.Repeat("a", 64), Addr: "bad host!:1"},
+		{ID: strings.Repeat("a", 64), Addr: "a:1", Addrs: []string{"fine:1", "no-port"}},
+		{ID: strings.Repeat("a", 64), Addr: "a:1", Addrs: []string{"1:1", "2:1", "3:1", "4:1", "5:1", "6:1", "7:1", "8:1", "9:1"}},
 	} {
 		if err := s.SetAtrium(bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v accepted: %v", bad, err)
@@ -332,5 +334,33 @@ func TestSavedAtrium(t *testing.T) {
 	os.WriteFile(filepath.Join(dev, "device.json"), []byte(`{"version":1,"device":{"name":"x","atrium":{"id":"nope","addr":"a:1"}}}`), 0o600)
 	if _, err := Open(root, dev); err == nil {
 		t.Fatal("damaged atrium accepted")
+	}
+}
+
+// The address that last worked goes first, and the one the person gave at
+// pairing is never lost, so a VPN name still works after the home address moves.
+func TestRememberAddr(t *testing.T) {
+	root, dev := t.TempDir(), t.TempDir()
+	s := must(Open(root, dev))
+	if err := s.RememberAddr("a:1"); err != nil || s.Device().Atrium != nil {
+		t.Fatalf("with no atrium saved: %v %+v", err, s.Device().Atrium)
+	}
+	must(0, s.SetAtrium(&AtriumLink{ID: strings.Repeat("a", 64), Addr: "vpn.example:7879"}))
+	for _, addr := range []string{"192.168.1.20:7879", "192.168.1.31:7879", "192.168.1.31:7879"} {
+		if err := s.RememberAddr(addr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := must(Open(root, dev)).Device().Atrium
+	if got.Addr != "192.168.1.31:7879" || !reflect.DeepEqual(got.Addrs, []string{"vpn.example:7879"}) {
+		t.Fatalf("%+v", got)
+	}
+	// Going back to the given address changes nothing else.
+	must(0, s.RememberAddr("vpn.example:7879"))
+	if got := s.Device().Atrium; got.Addr != "vpn.example:7879" || len(got.Addrs) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.RememberAddr("bad host!:1"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a bad address was saved: %v", err)
 	}
 }

@@ -10,9 +10,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"styli/core/internal/syncsrv"
@@ -22,8 +26,17 @@ import (
 // client talks to the atrium's sync API (see syncsrv). Every call goes over
 // mutual TLS pinned to the atrium's key.
 type client struct {
-	hc  *http.Client
-	url string // "https://host:port"
+	hc *http.Client
+
+	mu    sync.Mutex
+	last  string   // the address that last worked: tried first
+	given []string // the addresses the person gave, in order; always kept
+	// find returns where the atrium is on the network now (nil: nobody looks).
+	// It is asked only when the last address could not be reached.
+	find func(ctx context.Context) []string
+	// worked is told when an address other than the last one worked, so it can
+	// be saved for next time.
+	worked func(addr string)
 }
 
 func newClient(tc *tls.Config, addr string) *client {
@@ -36,7 +49,37 @@ func newClient(tc *tls.Config, addr string) *client {
 			ResponseHeaderTimeout: syncsrv.MaxWait + 15*time.Second, // a long poll answers within MaxWait
 			IdleConnTimeout:       90 * time.Second,
 		}},
-		url: "https://" + addr,
+		last: addr, given: []string{addr},
+	}
+}
+
+// current is the address that last worked.
+func (c *client) current() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
+}
+
+// fallback adds addresses to try when the others cannot be reached.
+func (c *client) fallback(addrs ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, a := range addrs {
+		if !slices.Contains(c.given, a) {
+			c.given = append(c.given, a)
+		}
+	}
+}
+
+// remember makes addr the one tried first, and says so if it changed.
+func (c *client) remember(addr string) {
+	c.mu.Lock()
+	changed := c.last != addr
+	c.last = addr
+	worked := c.worked
+	c.mu.Unlock()
+	if changed && worked != nil {
+		worked(addr)
 	}
 }
 
@@ -57,11 +100,58 @@ func (c *client) do(ctx context.Context, method, path string, body io.Reader, si
 	return c.doWith(ctx, method, path, body, size, nil)
 }
 
-// doWith is do with extra request headers.
+// doWith is do with extra request headers. It tries the atrium's addresses in
+// turn, but only moves on from one that could not be connected to (nothing was
+// sent, or the atrium there did not show the pinned key): the last address
+// that worked, then what is on the network now, then the other given ones. An
+// answer from the atrium, an error or not, is final.
 func (c *client) doWith(ctx context.Context, method, path string, body io.Reader, size int64, hdr http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.url+path, body)
+	c.mu.Lock()
+	first, rest, find := c.last, slices.DeleteFunc(slices.Clone(c.given), func(a string) bool { return a == c.last }), c.find
+	c.mu.Unlock()
+
+	tried := map[string]bool{}
+	var lastErr error
+	try := func(addrs []string) (*http.Response, bool, error) {
+		for _, a := range addrs {
+			if tried[a] {
+				continue
+			}
+			tried[a] = true
+			res, connected, err := c.send(ctx, a, method, path, body, size, hdr)
+			if connected || ctx.Err() != nil {
+				if connected {
+					c.remember(a)
+				}
+				return res, true, err
+			}
+			lastErr = err
+		}
+		return nil, false, nil
+	}
+	if res, done, err := try([]string{first}); done {
+		return res, err
+	}
+	if find != nil {
+		if res, done, err := try(find(ctx)); done {
+			return res, err
+		}
+	}
+	if res, done, err := try(rest); done {
+		return res, err
+	}
+	return nil, lastErr
+}
+
+// send makes one request to addr. connected says a connection to it was made
+// (so the request may have been sent); if not, nothing was, and the body is
+// still unread for the next address.
+func (c *client) send(ctx context.Context, addr, method, path string, body io.Reader, size int64, hdr http.Header) (res *http.Response, connected bool, err error) {
+	var got atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { got.Store(true) }})
+	req, err := http.NewRequestWithContext(ctx, method, "https://"+addr+path, body)
 	if err != nil {
-		return nil, err
+		return nil, true, err // nothing to retry with another address
 	}
 	for k, v := range hdr {
 		req.Header[k] = v
@@ -69,17 +159,17 @@ func (c *client) doWith(ctx context.Context, method, path string, body io.Reader
 	if body != nil {
 		req.ContentLength = size
 	}
-	res, err := c.hc.Do(req)
+	res, err = c.hc.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, got.Load(), err
 	}
 	if res.StatusCode/100 != 2 {
 		defer res.Body.Close()
 		e := &apiError{Status: res.StatusCode}
 		json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(e) // a body that is not JSON still leaves the status
-		return nil, e
+		return nil, true, e
 	}
-	return res, nil
+	return res, true, nil
 }
 
 func (c *client) getJSON(ctx context.Context, path string, dst any) (string, error) {

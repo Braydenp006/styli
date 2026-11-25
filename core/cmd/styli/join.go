@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"styli/core/internal/devicekey"
+	"styli/core/internal/discovery"
 	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
 )
@@ -23,29 +24,54 @@ var stdin io.Reader = os.Stdin
 // DefaultSyncPort is the atrium's sync port when --atrium leaves it out.
 const DefaultSyncPort = "7879"
 
+// browse looks for atriums on the local network; tests replace it.
+var browse = discovery.Browse
+
+// addrList is a flag that can be given more than once.
+type addrList []string
+
+func (l *addrList) String() string { return strings.Join(*l, ", ") }
+func (l *addrList) Set(v string) error {
+	if _, _, err := net.SplitHostPort(v); err != nil {
+		v = net.JoinHostPort(strings.Trim(v, "[]"), DefaultSyncPort)
+	}
+	*l = append(*l, v)
+	return nil
+}
+
+// reachable returns the first of addrs that accepts a connection (the first
+// one if none does, so the error names it).
+func reachable(addrs []string) string {
+	for _, a := range addrs {
+		if c, err := net.DialTimeout("tcp", a, 3*time.Second); err == nil {
+			c.Close()
+			return a
+		}
+	}
+	return addrs[0]
+}
+
 // join pairs this device with an atrium: the person types the magic words the
 // atrium shows, then checks the emoji match on both screens.
 func join(args []string, in io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("join", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var vault, configDir, atrium, name string
+	var vault, configDir, name string
+	var given addrList
 	fs.StringVar(&vault, "vault", "", "this device's notes folder (must exist)")
 	fs.StringVar(&configDir, "config", "", "this device's settings folder (default: user config folder)")
-	fs.StringVar(&atrium, "atrium", "", "the atrium's address, host or host:port (port "+DefaultSyncPort+" if left out)")
+	fs.Var(&given, "atrium", "the atrium's address, host or host:port (port "+DefaultSyncPort+" if left out); give it more than once for other ways in, such as a VPN name. Left out, the atrium is looked for on this network")
 	fs.StringVar(&name, "name", "", "what to call this device on the atrium (default: its device name, or the computer's name)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if vault == "" || atrium == "" {
-		fmt.Fprintln(stderr, "join: --vault and --atrium are required")
+	if vault == "" {
+		fmt.Fprintln(stderr, "join: --vault is required")
 		return 2
 	}
 	if fi, err := os.Stat(vault); err != nil || !fi.IsDir() {
 		fmt.Fprintf(stderr, "join: vault folder %q does not exist; create it first\n", vault)
 		return 1
-	}
-	if _, _, err := net.SplitHostPort(atrium); err != nil {
-		atrium = net.JoinHostPort(strings.Trim(atrium, "[]"), DefaultSyncPort)
 	}
 	var err error
 	if configDir == "" {
@@ -74,6 +100,32 @@ func join(args []string, in io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "join:", err)
 		return 1
 	}
+
+	// Which atrium: the one named, or the one that answers on this network. An
+	// advert proves nothing; the words and the key check still decide who this
+	// device ends up paired with.
+	candidates := []string(given)
+	if len(candidates) == 0 {
+		fmt.Fprintln(stdout, "Looking for an atrium on this network…")
+		found, err := browse(context.Background(), 3*time.Second)
+		switch {
+		case len(found) == 0:
+			fmt.Fprintln(stderr, "join: no atrium was found on this network. Check that it is running (and not started with --no-announce) on the same network, or give its address with --atrium.")
+			if err != nil {
+				fmt.Fprintln(stderr, "join:", err)
+			}
+			return 1
+		case len(found) > 1:
+			fmt.Fprintln(stderr, "join: more than one atrium was found; run again with --atrium and the address of yours:")
+			for _, f := range found {
+				fmt.Fprintf(stderr, "    %s at %s\n", f.Name, strings.Join(f.Addrs, ", "))
+			}
+			return 1
+		}
+		fmt.Fprintf(stdout, "Found the atrium %s.\n", found[0].Name)
+		candidates = found[0].Addrs
+	}
+	atrium := reachable(candidates)
 
 	r := bufio.NewReader(in)
 	ask := func(prompt string) string {
@@ -112,7 +164,7 @@ func join(args []string, in io.Reader, stdout, stderr io.Writer) int {
 		atriumID, err := pairing.Join(ctx, atrium, key, words, name, compare)
 		switch {
 		case err == nil:
-			if err := set.SetAtrium(&settings.AtriumLink{ID: atriumID, Addr: atrium, PairedAt: time.Now().UTC()}); err != nil {
+			if err := set.SetAtrium(&settings.AtriumLink{ID: atriumID, Addr: atrium, Addrs: []string(given), PairedAt: time.Now().UTC()}); err != nil {
 				fmt.Fprintln(stderr, "join: paired, but this device could not save it:", err)
 				return 1
 			}
