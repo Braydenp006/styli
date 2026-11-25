@@ -90,6 +90,7 @@ type noteDTO struct {
 	Text           string    `json:"text"`
 	Files          []fileDTO `json:"files"`
 	HistoryEnabled bool      `json:"history_enabled"`
+	Conflict       bool      `json:"conflict"` // a sync merge left markers or kept both files
 }
 
 func (s *server) getNote(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +100,7 @@ func (s *server) getNote(w http.ResponseWriter, r *http.Request) {
 		s.failErr(w, err)
 		return
 	}
-	n := noteDTO{ID: id, Files: make([]fileDTO, 0, len(g.Files)), Tags: []string{}}
+	n := noteDTO{ID: id, Files: make([]fileDTO, 0, len(g.Files)), Tags: []string{}, Conflict: g.Conflict}
 	if info, err := s.Store.Note(id); err == nil { // the index may not know it yet; that is fine
 		n.Title, n.Modified, n.Tags = info.Title, info.Modified, info.Tags
 	}
@@ -313,6 +314,15 @@ func (s *server) setHistoryEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"history_enabled": on})
+}
+
+// clearConflict is "mark resolved": the person has sorted out the markers.
+func (s *server) clearConflict(w http.ResponseWriter, r *http.Request) {
+	if err := s.Vault.SetConflict(r.PathValue("id"), false); err != nil {
+		s.failErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"conflict": false})
 }
 
 func (s *server) listFolders(w http.ResponseWriter, r *http.Request) {

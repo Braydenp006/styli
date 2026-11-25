@@ -546,3 +546,38 @@ func TestOverwritingKeepsTheReplacedTextAsItsOwnVersion(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestWriteNoteMergedKeepsOldTextAndFlags(t *testing.T) {
+	v, _ := open(t)
+	g := must(v.CreateNote("n.md", []byte("mine")))
+	off := false
+	if err := v.SetHistory(g.ID, &off); err != nil {
+		t.Fatal(err)
+	}
+	_, ver, _ := v.ReadNote(g.ID)
+	if _, err := v.WriteNoteMerged(g.ID, []byte("merged"), ver, true); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := v.History(g.ID)
+	if err != nil || len(vs) == 0 {
+		t.Fatalf("no history kept with history off: %v %v", vs, err)
+	}
+	var kept bool
+	for _, x := range vs {
+		b, _ := v.ReadVersion(g.ID, x.ID)
+		kept = kept || string(b) == "mine"
+	}
+	if !kept {
+		t.Fatal("the replaced text was not kept")
+	}
+	got, _ := v.Get(g.ID)
+	if !got.Conflict {
+		t.Fatal("the flag was not saved with the text")
+	}
+	if err := v.SetConflict(g.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = v.Get(g.ID); got.Conflict {
+		t.Fatal("not cleared")
+	}
+}

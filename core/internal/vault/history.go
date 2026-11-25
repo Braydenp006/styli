@@ -142,7 +142,7 @@ func (v *Vault) RestoreVersion(id, versionID, base string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return v.writeNote(id, text, base, true)
+	return v.writeNote(id, text, base, true, false, false)
 }
 
 // snapshot saves a version (see saveVersion), then applies the count limit to

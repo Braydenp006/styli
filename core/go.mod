@@ -3,19 +3,20 @@ module styli/core
 go 1.27
 
 require (
+	filippo.io/cpace v0.0.0-20210101143347-24d601e2e469
+	github.com/epiclabs-io/diff3 v0.0.0-20260520111523-3b1669897fb1
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/yuin/goldmark v1.8.7
 	modernc.org/sqlite v1.63.0
 )
 
 require (
-	filippo.io/cpace v0.0.0-20210101143347-24d601e2e469 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gtank/ristretto255 v0.1.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/yuin/goldmark v1.8.7 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	modernc.org/libc v1.80.1 // indirect

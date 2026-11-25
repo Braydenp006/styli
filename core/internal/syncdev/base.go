@@ -25,11 +25,12 @@ import (
 // on: the atrium's rev for it, its paths and hashes, and the note's text then
 // (a merge needs it).
 type Base struct {
-	Rev     uint64       `json:"rev"`
-	Note    *vault.File  `json:"note,omitempty"`
-	Files   []vault.File `json:"files"`
-	History *bool        `json:"history,omitempty"`
-	Text    []byte       `json:"text,omitempty"`
+	Rev      uint64       `json:"rev"`
+	Note     *vault.File  `json:"note,omitempty"`
+	Files    []vault.File `json:"files"`
+	History  *bool        `json:"history,omitempty"`
+	Conflict bool         `json:"conflict,omitempty"`
+	Text     []byte       `json:"text,omitempty"`
 
 	// Parked is set while the engine has moved the group to a spare name to
 	// free its old one for another note (a swap of names on the atrium). It is
@@ -49,13 +50,13 @@ func (b *Base) isParked(local vault.Group) bool {
 	if b.Parked == nil {
 		return false
 	}
-	g := vault.Group{Note: b.Parked.Note, Files: b.Parked.Files, History: b.History}
+	g := vault.Group{Note: b.Parked.Note, Files: b.Parked.Files, History: b.History, Conflict: b.Conflict}
 	return vault.SameState(local, g)
 }
 
 // Group returns the base as a vault group, for comparing states.
 func (b *Base) Group(id string) vault.Group {
-	return vault.Group{ID: id, Note: b.Note, Files: b.Files, History: b.History, Rev: b.Rev}
+	return vault.Group{ID: id, Note: b.Note, Files: b.Files, History: b.History, Conflict: b.Conflict, Rev: b.Rev}
 }
 
 // Cursor is the newest atrium change this device has handled, and which epoch

@@ -175,6 +175,7 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		engine = syncdev.New(v, st, syncsrv.ClientTLS(key, link.ID), link.Addr, cfg.Logf)
+		engine.DeviceName = set.Device().Name
 		wg.Add(1)
 		go func() { defer wg.Done(); engine.Run(ctx) }()
 		cfg.Logf("this device syncs with the atrium at %s", link.Addr)

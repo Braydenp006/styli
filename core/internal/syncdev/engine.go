@@ -41,9 +41,13 @@ type Engine struct {
 	rec  records
 	logf func(string, ...any)
 
-	// Merge is nil until merging is built: a group changed on both sides is
-	// then left unsynced and listed in the status. Nothing is lost.
+	// Merge combines a group changed on both sides (mergeGroup). If nil, such a
+	// group is left unsynced and listed in the status; nothing is lost.
 	Merge MergeFunc
+
+	// DeviceName is how this device is named in the file it keeps when an
+	// attached file changed on both sides ("Photo (Tablet).png").
+	DeviceName string
 
 	mu     sync.Mutex
 	status Status
@@ -67,7 +71,9 @@ type Waiting struct {
 // New makes an engine for the vault v, talking to the atrium at addr with the
 // pinned TLS setup tc (see syncsrv.ClientTLS).
 func New(v *vault.Vault, st *store.Store, tc *tls.Config, addr string, logf func(string, ...any)) *Engine {
-	return &Engine{v: v, st: st, c: newClient(tc, addr), rec: newRecords(v.Root()), logf: logf, status: Status{Atrium: addr, Waiting: []Waiting{}}}
+	e := &Engine{v: v, st: st, c: newClient(tc, addr), rec: newRecords(v.Root()), logf: logf, status: Status{Atrium: addr, Waiting: []Waiting{}}}
+	e.Merge = e.mergeGroup
+	return e
 }
 
 // Status returns the last pass's status.
@@ -114,6 +120,7 @@ func groupErr(err error, reason string) error {
 type pass struct {
 	waiting map[string]string // group ID -> why it is waiting
 	paths   map[string]string // local path -> group ID; built when a name clash needs it
+	merges  map[string]int    // group ID -> merge rounds this pass (see maxMerges)
 }
 
 // Sync runs one pass. It returns an error only when the pass could not reach
@@ -320,6 +327,12 @@ func (e *Engine) group(ctx context.Context, p *pass, id string, remote *syncsrv.
 func (e *Engine) merge(ctx context.Context, p *pass, id string, base *Base, local, remote vault.Group) error {
 	if e.Merge == nil {
 		return held("changed here and on the atrium; waiting for merging, which isn't built yet")
+	}
+	if p.merges == nil {
+		p.merges = map[string]int{}
+	}
+	if p.merges[id]++; p.merges[id] > maxMerges {
+		return held("the atrium keeps changing while merging; trying again soon")
 	}
 	if err := e.Merge(ctx, id, base, local, remote); err != nil {
 		return groupErr(err, "the merge failed")
@@ -676,7 +689,7 @@ func (e *Engine) recordBase(id string, r vault.Group) error {
 }
 
 func (e *Engine) saveBase(id string, g vault.Group, text []byte) error {
-	return e.rec.saveBase(id, Base{Rev: g.Rev, Note: g.Note, Files: g.Files, History: g.History, Text: text})
+	return e.rec.saveBase(id, Base{Rev: g.Rev, Note: g.Note, Files: g.Files, History: g.History, Conflict: g.Conflict, Text: text})
 }
 
 func (e *Engine) refresh(id string) {
@@ -695,7 +708,7 @@ func fromWire(g syncsrv.Group) vault.Group {
 	if files == nil {
 		files = []vault.File{}
 	}
-	return vault.Group{ID: g.ID, Rev: g.Rev, Note: g.Note, Files: files, History: g.History}
+	return vault.Group{ID: g.ID, Rev: g.Rev, Note: g.Note, Files: files, History: g.History, Conflict: g.Conflict}
 }
 
 // allFiles returns pointers to the group's files, note first.

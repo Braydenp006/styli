@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -74,7 +73,7 @@ func (a *atrium) device(t *testing.T) *device {
 	})
 }
 
-// deviceWith makes a paired device that merges with merge.
+// deviceWith makes a paired device that merges with merge (nil: the real one).
 func (a *atrium) deviceWith(t *testing.T, merge MergeFunc) *device {
 	t.Helper()
 	d := &device{t: t, a: a, root: t.TempDir(), k: must(devicekey.Load(t.TempDir())), merge: merge, net: &faultNet{}}
@@ -90,10 +89,18 @@ func (a *atrium) deviceWith(t *testing.T, merge MergeFunc) *device {
 func (d *device) build() {
 	d.v = must(vault.Open(d.root))
 	d.v.SetHistoryWindow(0)
+	// The app scans at start, which picks up a note file a crash wrote before
+	// its record.
+	vault.Settle = 0
+	if _, _, err := d.v.Rescan(); err != nil {
+		d.t.Fatal(err)
+	}
 	d.e = New(d.v, nil, syncsrv.ClientTLS(d.k, d.a.key.ID), d.a.addr, d.t.Logf)
 	d.net.next = d.e.c.hc.Transport
 	d.e.c.hc.Transport = d.net
-	d.e.Merge = d.merge
+	if d.merge != nil { // nil keeps the real merge
+		d.e.Merge = d.merge
+	}
 }
 
 // sync runs a pass that must succeed.
@@ -103,36 +110,6 @@ func (d *device) sync(t *testing.T) Status {
 		t.Fatalf("sync: %v", err)
 	}
 	return d.e.Status()
-}
-
-// standinMerge keeps both sides in one text with conflict markers. It stands
-// in for the real three-way merge (phase 2, item 4), so devices can converge
-// in these tests; the real merge goes in the same slot.
-func (d *device) standinMerge(ctx context.Context, id string, _ *Base, local, remote vault.Group) error {
-	var theirs []byte
-	if remote.Note != nil {
-		// Through the engine's own download, so a dropped reply hits it too.
-		if err := d.e.download(ctx, id, -1, remote.Note.Version); err != nil {
-			return err
-		}
-		b, err := os.ReadFile(filepath.Join(d.root, ".ids", "sync", "blobs", remote.Note.Version))
-		if err != nil {
-			return err
-		}
-		theirs = b
-	}
-	mine, ver, err := d.v.ReadNote(id)
-	if err != nil {
-		return err
-	}
-	merged := "<<<<<<< this device\n" + string(mine) + "=======\n" + string(theirs) + ">>>>>>> atrium\n"
-	if _, err := d.v.WriteNoteKeepingOld(id, []byte(merged), ver); err != nil {
-		return err
-	}
-	if local.Note != nil && remote.Note != nil && path.Dir(local.Note.Path) != path.Dir(remote.Note.Path) {
-		return d.v.Move(id, path.Dir(remote.Note.Path)) // the atrium's folder wins
-	}
-	return nil
 }
 
 // ---- the network ----

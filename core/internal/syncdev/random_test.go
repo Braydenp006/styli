@@ -35,8 +35,6 @@ func randomRun(t *testing.T, seed uint64, steps int) {
 	devs := make([]*device, 3)
 	for i := range devs {
 		devs[i] = a.deviceWith(t, nil)
-		devs[i].merge = devs[i].standinMerge
-		devs[i].e.Merge = devs[i].merge
 	}
 	vaultOf := func(m int) *vault.Vault { // machine 3 is the atrium
 		if m == 3 {

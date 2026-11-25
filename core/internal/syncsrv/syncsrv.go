@@ -67,18 +67,19 @@ func newHandler(d Deps) http.Handler {
 
 // Group is a group as it travels over the wire.
 type Group struct {
-	ID      string       `json:"id"`
-	Rev     uint64       `json:"rev"`
-	Note    *vault.File  `json:"note,omitempty"`
-	Files   []vault.File `json:"files"`
-	History *bool        `json:"history,omitempty"`
+	ID       string       `json:"id"`
+	Rev      uint64       `json:"rev"`
+	Note     *vault.File  `json:"note,omitempty"`
+	Files    []vault.File `json:"files"`
+	History  *bool        `json:"history,omitempty"`
+	Conflict bool         `json:"conflict,omitempty"`
 }
 
 func wire(g vault.Group) Group {
 	if g.Files == nil {
 		g.Files = []vault.File{}
 	}
-	return Group{g.ID, g.Rev, g.Note, g.Files, g.History}
+	return Group{g.ID, g.Rev, g.Note, g.Files, g.History, g.Conflict}
 }
 
 func (s *server) hello(w http.ResponseWriter, r *http.Request) {
@@ -197,10 +198,11 @@ func (s *server) putBlob(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) commit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Base    uint64       `json:"base"`
-		Note    *vault.File  `json:"note"`
-		Files   []vault.File `json:"files"`
-		History *bool        `json:"history"`
+		Base     uint64       `json:"base"`
+		Note     *vault.File  `json:"note"`
+		Files    []vault.File `json:"files"`
+		History  *bool        `json:"history"`
+		Conflict bool         `json:"conflict"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBody))
 	dec.DisallowUnknownFields()
@@ -217,7 +219,7 @@ func (s *server) commit(w http.ResponseWriter, r *http.Request) {
 		req.Files = []vault.File{}
 	}
 	id := r.PathValue("id")
-	g, err := s.Vault.Apply(id, req.Base, vault.Group{Note: req.Note, Files: req.Files, History: req.History})
+	g, err := s.Vault.Apply(id, req.Base, vault.Group{Note: req.Note, Files: req.Files, History: req.History, Conflict: req.Conflict})
 	if errors.Is(err, vault.ErrConflict) {
 		// The device pulls this, merges and pushes again.
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "conflict", "error": "the group changed on the atrium", "current": wire(g)})

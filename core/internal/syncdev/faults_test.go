@@ -21,10 +21,6 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, a: newAtrium(t)}
 	w.d1 = w.a.deviceWith(t, nil)
 	w.d2 = w.a.deviceWith(t, nil)
-	for _, d := range []*device{w.d1, w.d2} {
-		d.merge = d.standinMerge
-		d.e.Merge = d.merge
-	}
 	return w
 }
 

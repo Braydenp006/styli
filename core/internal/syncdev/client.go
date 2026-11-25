@@ -146,7 +146,7 @@ func (c *client) commit(ctx context.Context, id string, base uint64, g vault.Gro
 	if files == nil {
 		files = []vault.File{}
 	}
-	b, err := json.Marshal(map[string]any{"base": base, "note": g.Note, "files": files, "history": g.History})
+	b, err := json.Marshal(map[string]any{"base": base, "note": g.Note, "files": files, "history": g.History, "conflict": g.Conflict})
 	if err != nil {
 		return syncsrv.Group{}, err
 	}

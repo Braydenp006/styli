@@ -551,7 +551,7 @@ func SameState(a, b Group) bool {
 	if (a.History == nil) != (b.History == nil) || (a.History != nil && *a.History != *b.History) {
 		return false
 	}
-	return slices.Equal(a.Files, b.Files)
+	return a.Conflict == b.Conflict && slices.Equal(a.Files, b.Files)
 }
 
 // FailedCommit is a change from a device that could not be finished and was

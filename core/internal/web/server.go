@@ -88,6 +88,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/notes/{id}/history/{vid}", s.getVersion)
 	mux.HandleFunc("POST /api/notes/{id}/history/{vid}/restore", s.restoreVersion)
 	mux.HandleFunc("PUT /api/notes/{id}/history-enabled", s.setHistoryEnabled)
+	mux.HandleFunc("DELETE /api/notes/{id}/conflict", s.clearConflict)
 
 	mux.HandleFunc("POST /api/render", s.render)
 

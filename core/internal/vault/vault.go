@@ -61,6 +61,11 @@ type Group struct {
 	// default, otherwise true or false. See history.go.
 	History *bool `json:"history,omitempty"`
 
+	// Conflict marks a note whose last merge left conflict markers (or kept
+	// both versions of an attached file) for someone to sort out. It syncs
+	// like any other field and stays until SetConflict clears it.
+	Conflict bool `json:"conflict,omitempty"`
+
 	// Rev is the number this vault gave the group's latest change (see rev.go).
 	Rev uint64 `json:"rev,omitempty"`
 }
@@ -299,7 +304,7 @@ func (v *Vault) readNote(id string) ([]byte, string, error) {
 func (v *Vault) WriteNote(id string, content []byte, base string) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.writeNote(id, content, base, false)
+	return v.writeNote(id, content, base, false, false, false)
 }
 
 // WriteNoteKeepingOld is WriteNote, except the text it replaces is always kept
@@ -309,12 +314,37 @@ func (v *Vault) WriteNote(id string, content []byte, base string) (string, error
 func (v *Vault) WriteNoteKeepingOld(id string, content []byte, base string) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.writeNote(id, content, base, true)
+	return v.writeNote(id, content, base, true, false, false)
+}
+
+// WriteNoteMerged writes the result of a sync merge. The text it replaces is
+// always kept as a history version, even when history is off for this note,
+// and conflict (if true) flags the note in the same save, so a crash cannot
+// leave markers without the flag.
+func (v *Vault) WriteNoteMerged(id string, content []byte, base string, conflict bool) (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.writeNote(id, content, base, true, true, conflict)
+}
+
+// SetConflict sets or clears a note's conflict flag.
+func (v *Vault) SetConflict(id string, on bool) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	g, err := v.load(id)
+	if err != nil {
+		return err
+	}
+	if g.Conflict == on {
+		return nil
+	}
+	g.Conflict = on
+	return v.save(&g)
 }
 
 // writeNote is WriteNote with the lock held. newVersion forces a new history
 // version instead of folding into the newest one (used by restores).
-func (v *Vault) writeNote(id string, content []byte, base string, newVersion bool) (string, error) {
+func (v *Vault) writeNote(id string, content []byte, base string, newVersion, alwaysKeep, conflict bool) (string, error) {
 	old, cur, err := v.readNote(id)
 	if err != nil {
 		return "", err
@@ -333,7 +363,12 @@ func (v *Vault) writeNote(id string, content []byte, base string, newVersion boo
 	if fi, err := os.Stat(abs); err == nil {
 		seed = &historySeed{old, fi.ModTime()}
 	}
-	if err := v.snapshot(g, content, seed, newVersion); err != nil {
+	hg := g
+	if alwaysKeep {
+		on := true
+		hg.History = &on // history is saved even if the note has it off
+	}
+	if err := v.snapshot(hg, content, seed, newVersion); err != nil {
 		return "", err
 	}
 	ver, err := writeAtomic(abs, bytes.NewReader(content), true)
@@ -341,6 +376,7 @@ func (v *Vault) writeNote(id string, content []byte, base string, newVersion boo
 		return "", err
 	}
 	g.Note.Version = ver
+	g.Conflict = g.Conflict || conflict
 	return ver, v.save(&g)
 }
 

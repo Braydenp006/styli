@@ -294,6 +294,24 @@ func TestHistoryEndpoints(t *testing.T) {
 	}
 }
 
+func TestConflictFlagCanBeCleared(t *testing.T) {
+	e := newEnv(t)
+	g := must(e.v.CreateNote("n.md", []byte("a")))
+	if e.call(t, "GET", "/api/notes/"+g.ID, nil, 200)["conflict"] != false {
+		t.Fatal("a new note is flagged")
+	}
+	if err := e.v.SetConflict(g.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if e.call(t, "GET", "/api/notes/"+g.ID, nil, 200)["conflict"] != true {
+		t.Fatal("the flag is not shown")
+	}
+	e.call(t, "DELETE", "/api/notes/"+g.ID+"/conflict", nil, 200)
+	if e.call(t, "GET", "/api/notes/"+g.ID, nil, 200)["conflict"] != false {
+		t.Fatal("the flag did not clear")
+	}
+}
+
 func TestFileEndpointServesSafely(t *testing.T) {
 	e := newEnv(t)
 	g := must(e.v.CreateNote("a/n.md", []byte("note")))

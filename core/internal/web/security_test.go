@@ -76,6 +76,7 @@ func TestEveryWriteMethodIsGuarded(t *testing.T) {
 	for _, c := range []struct{ method, path string }{
 		{"POST", "/api/notes"}, {"PUT", "/api/notes/" + id}, {"POST", "/api/notes/" + id + "/move"},
 		{"POST", "/api/notes/" + id + "/trash"}, {"PUT", "/api/notes/" + id + "/history-enabled"},
+		{"DELETE", "/api/notes/" + id + "/conflict"},
 		{"POST", "/api/trash/" + id + "/restore"}, {"POST", "/api/trash/" + id + "/delete-forever"},
 		{"POST", "/api/maid/run"}, {"PUT", "/api/settings/hub"}, {"PUT", "/api/settings/device"},
 		{"POST", "/api/notes/" + id + "/history/1234567890123/restore"},
