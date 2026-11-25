@@ -2,10 +2,10 @@
 
 Other notes apps worked well for me, but I realized that I ended up using a bunch of external tools to do things that I wish were just baked into my note taking app.
 
-I needed a markdown based knowledge base like obsidian with a native handwriting first approach, able to be hosted on my own devices, synced with one another without any accounts being made, I needed github like syncing across my different devices sharing notes.
+I needed a markdown based knowledge base like obsidian with a native handwriting first approach, able to be hosted on my own devices, synced with one another without any accounts being made. I wanted Github like syncing across my different devices sharing notes.
 I wanted an AI to help organize my notes via topic, instead of having to make the links myself, and without the security concern of an AI model in the cloud rummaging through all my notes.
 
-I couldn't find the right tool, and didnt want to jerry rig a bunch of systems together, thats why I am building Styli.
+I couldn't find the right tool, and didnt want to jerry-rig a bunch of systems together, thats why I am building Styli.
 
 ## Core Values
 
@@ -19,13 +19,17 @@ the AI that scans your notes to group them together on your mind map is the same
 Any service (within reason) can be turned off or altered to fit the users needs. Don't want a reader? turn it off, don't want version history? turn it off, I can't decide what is best for everyone, the defaults are mostly based off what I like, so I may as well let
 the user do the hard part of fine tuning all the settings to meet what they need.
 
-## Anybody Can Use It
+### Anybody Can Use It
 
 It's free, and easy to use, It is easy to setup the AI features, the hub, and the nodes, a complicated setup would make it so I probably couldn't use it either.
 
 ## Features
 
-### Native Handwriting support for android devices (drawing pad support will be implemented later on - same as IOS devices)
+### Native Handwriting Support
+
+Styli is being built with a handwriting-first approach on Android devices.
+
+Drawing tablet support will come later, along with support for iOS devices.
 
 ### The Hub (name is a work in progress) 
 
@@ -53,17 +57,32 @@ The reader also handles links, grouping notes together if they are the same topi
 
 ### Other features
 
-Version History, Github style merging, hub rebuilding protocol, pinning, 
+- Version history
+- GitHub-style merging
+- Hub rebuilding protocol
+- Pinning
+- Trash and recovery
 
 ## What can I run it on?
 
 The current plan for the initial release is that the hub can be run on Windows, Linux, and FreeBSD, MacOS will come in the future.
+
 Hopefully I can get native android support easily, for now iPhones will have to access through a web app cause I don't have apple dev account :(
 Mac users can still reach the web app as well obviously, just cannot be the hub.
 
 I do not plan on adding mobile hub support, but I will add standalone mobile support (no hub, don't know about adding AI to that yet)
 
-Status: phase 1 (the Go core on one machine) is complete! There is a hub server with a JSON API, and the web interface is being built screen by screen (the tabularium view with search and notes, and the editor with autosave, move and trash, and the Trash screen, version history, the hub dashboard and the Settings screen are in, which completes the screens planned for phase 1).
+## Development Status
+
+Phase 1 (the Go core on one machine) is complete! There is a hub server with a JSON API, and the web interface is being built screen by screen (the tabularium view with search and notes, and the editor with autosave, move and trash, and the Trash screen, version history, the hub dashboard and the Settings screen are in, which completes the screens planned for phase 1).
+
+The design is in `docs/DESIGN.md`.
+
+## Screenshot of it now
+
+It right now looks like garbage but I'll get on that
+
+<img width="2558" height="1437" alt="image" src="https://github.com/user-attachments/assets/50856137-d03b-4a3a-ad07-e706d875dd0f" />
 
 ## Run the hub
 
@@ -84,5 +103,3 @@ make test    # Go tests, plus the UI helper tests if Node (22.7 or newer) is ins
 make cross   # check it builds for linux, freebsd and windows
 make ui-assets  # copy the design system (design/) into the web UI; only when the design changes
 ```
-
-The design is in `docs/DESIGN.md`.
