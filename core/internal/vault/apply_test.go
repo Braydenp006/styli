@@ -408,3 +408,108 @@ func TestCleanBlobsWhileRunning(t *testing.T) {
 		}
 	}
 }
+
+const atriumID = "bbbbbbbbbbbbbbbbbbbbbbbbbb" // the atrium's ID for the same note
+
+// adoptSetup makes a never-synced note with some history, and the atrium's
+// group for the same files (with its own history setting).
+func adoptSetup(t *testing.T) (*Vault, string, Group, Group) {
+	t.Helper()
+	v, root := open(t)
+	g := must(v.CreateNote("a.md", []byte("same")))
+	g = must(v.AddFile(g.ID, "pic.png", strings.NewReader("png")))
+	if vs := must(v.History(g.ID)); len(vs) == 0 {
+		t.Fatal("setup: no history")
+	}
+	off := false
+	want := Group{Note: g.Note, Files: g.Files, History: &off, Conflict: true}
+	return v, root, g, want
+}
+
+func checkAdopted(t *testing.T, v *Vault, old Group, want Group) {
+	t.Helper()
+	if _, err := v.Get(old.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old ID still there: %v", err)
+	}
+	got := must(v.Get(atriumID))
+	if !SameState(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+	if vs, _ := v.History(atriumID); len(vs) == 0 {
+		t.Fatal("history did not move")
+	}
+	if gs := must(v.List()); len(gs) != 1 {
+		t.Fatalf("%d groups, want 1", len(gs))
+	}
+	if ch, _, _ := v.Rescan(); len(ch) != 0 {
+		t.Fatalf("a scan found changes: %v", ch)
+	}
+}
+
+func TestAdoptTakesTheAtriumsID(t *testing.T) {
+	v, _, g, want := adoptSetup(t)
+	got, err := v.Adopt(g.ID, atriumID, want)
+	if err != nil || got.ID != atriumID {
+		t.Fatalf("%v %+v", err, got)
+	}
+	checkAdopted(t, v, g, want)
+	if _, err := os.Stat(v.pendingPath(atriumID)); err == nil {
+		t.Fatal("journal left behind")
+	}
+}
+
+func TestAdoptRefuses(t *testing.T) {
+	v, _, g, want := adoptSetup(t)
+	other := want
+	other.Files = []File{{"pic.png", hashBytes([]byte("different"))}}
+	if _, err := v.Adopt(g.ID, atriumID, other); !errors.Is(err, ErrConflict) {
+		t.Fatalf("different files: %v", err)
+	}
+	moved := want
+	moved.Note = &File{"b.md", g.Note.Version}
+	if _, err := v.Adopt(g.ID, atriumID, moved); !errors.Is(err, ErrConflict) {
+		t.Fatalf("different path: %v", err)
+	}
+	if _, err := v.Adopt(deviceID, atriumID, want); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing source: %v", err)
+	}
+	if _, err := v.Adopt(g.ID, g.ID, want); !errors.Is(err, ErrBadGroup) {
+		t.Fatalf("same ID: %v", err)
+	}
+	taken := must(v.CreateNote("c.md", []byte("c")))
+	if _, err := v.Adopt(g.ID, taken.ID, want); !errors.Is(err, ErrExists) {
+		t.Fatalf("ID in use: %v", err)
+	}
+	if err := v.Trash(taken.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Adopt(g.ID, taken.ID, want); !errors.Is(err, ErrTrashed) {
+		t.Fatalf("ID in the trash: %v", err)
+	}
+	if must(v.Get(g.ID)).Note.Path != "a.md" {
+		t.Fatal("a refused adopt changed the group")
+	}
+}
+
+// A crash at any point of an adopt is finished when the vault next opens.
+func TestInterruptedAdoptIsFinishedOnOpen(t *testing.T) {
+	for _, stage := range []string{"nothing done", "history moved", "new record saved"} {
+		t.Run(stage, func(t *testing.T) {
+			v, root, g, want := adoptSetup(t)
+			w := want
+			w.ID = atriumID
+			writeJSONFile(t, v.pendingPath(atriumID), pendingApply{ID: atriumID, Group: w, Steps: []applyStep{}, From: g.ID})
+			if stage != "nothing done" {
+				if err := os.Rename(v.historyPath(g.ID), v.historyPath(atriumID)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if stage == "new record saved" {
+				if err := v.save(&w); err != nil {
+					t.Fatal(err)
+				}
+			}
+			checkAdopted(t, must(Open(root)), g, want)
+		})
+	}
+}

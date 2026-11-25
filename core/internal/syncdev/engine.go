@@ -445,6 +445,10 @@ func (e *Engine) pull(ctx context.Context, p *pass, id string, local *vault.Grou
 	var localRev uint64
 	if local != nil {
 		have, localRev = *local, local.Rev
+	} else if g, ok, err := e.adoptable(p, remote); err != nil {
+		return err
+	} else if ok {
+		return e.adopt(p, g, id, remote) // before downloading what is already here
 	}
 	if remote.Note != nil && (have.Note == nil || have.Note.Version != remote.Note.Version) {
 		if err := e.download(ctx, id, -1, remote.Note.Version); err != nil {
@@ -517,20 +521,12 @@ func (e *Engine) download(ctx context.Context, id string, index int, version str
 // this pass, puts it where the atrium has it. That is what lets two notes
 // swap names. A synced group with local changes waits for its merge.
 func (e *Engine) clearPaths(p *pass, id string, remote vault.Group) error {
-	if p.paths == nil {
-		gs, err := e.v.List()
-		if err != nil {
-			return err
-		}
-		p.paths = map[string]string{}
-		for _, g := range gs {
-			for _, f := range allFiles(g) {
-				p.paths[f.Path] = g.ID
-			}
-		}
+	paths, err := e.pathMap(p)
+	if err != nil {
+		return err
 	}
 	for _, f := range allFiles(remote) {
-		other, ok := p.paths[f.Path]
+		other, ok := paths[f.Path]
 		if !ok || other == id {
 			continue
 		}
@@ -559,6 +555,64 @@ func (e *Engine) clearPaths(p *pass, id string, remote vault.Group) error {
 		}
 	}
 	return nil
+}
+
+// pathMap returns the pass's map of local paths to group IDs, building it the
+// first time a pass needs it.
+func (e *Engine) pathMap(p *pass) (map[string]string, error) {
+	if p.paths == nil {
+		gs, err := e.v.List()
+		if err != nil {
+			return nil, err
+		}
+		p.paths = map[string]string{}
+		for _, g := range gs {
+			for _, f := range allFiles(g) {
+				p.paths[f.Path] = g.ID
+			}
+		}
+	}
+	return p.paths, nil
+}
+
+// adoptable returns the never-synced local group that holds exactly remote's
+// files at remote's paths, if there is one: a copy of the same note made
+// before this device joined (two copies of one vault, for example).
+func (e *Engine) adoptable(p *pass, remote vault.Group) (vault.Group, bool, error) {
+	paths, err := e.pathMap(p)
+	if err != nil {
+		return vault.Group{}, false, err
+	}
+	other, ok := paths[firstPath(remote)]
+	if !ok {
+		return vault.Group{}, false, nil
+	}
+	if b, err := e.rec.base(other); err != nil || b != nil {
+		return vault.Group{}, false, err // a synced group has a shared ID: never taken over
+	}
+	g, err := e.v.Get(other)
+	if err != nil {
+		return vault.Group{}, false, nil // gone since the map was built; the pull decides
+	}
+	return g, vault.SameFiles(g, remote), nil
+}
+
+// adopt gives the never-synced local group g the atrium's ID id, since it
+// holds the same files: no duplicate, and nothing to download. Its own ID was
+// never shared, so nothing else refers to it.
+func (e *Engine) adopt(p *pass, g vault.Group, id string, remote vault.Group) error {
+	saved, err := e.v.Adopt(g.ID, id, remote)
+	if err != nil {
+		return groupErr(err, "taking the atrium's ID for the same note here failed")
+	}
+	e.logf("sync: %s is already here, so it took the atrium's ID %s (was %s)", firstPath(saved), id, g.ID)
+	if e.st != nil {
+		if err := e.st.Remove(g.ID); err != nil {
+			e.logf("sync: index %s: %v", g.ID, err) // a restart reindexes
+		}
+	}
+	e.moved(p, g, saved)
+	return e.recordBase(id, remote)
 }
 
 // park moves a synced group to "Name (moving).md" (every file the same), the

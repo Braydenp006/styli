@@ -2,6 +2,7 @@ package syncdev
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,6 +244,52 @@ func TestNameClashOnPull(t *testing.T) {
 	}
 	if text(t, a.v, mine.ID) != "mine" { // renamed, then pushed in the same pass
 		t.Fatal("renamed note not pushed")
+	}
+}
+
+// Pull side, same content: the local copy takes the atrium's ID, keeps its
+// history, and nothing is renamed or downloaded.
+func TestIdenticalNoteTakesAtriumID(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	theirs := must(a.v.CreateNote("Same.md", []byte("same text")))
+	must(a.v.AddFile(theirs.ID, "pic.png", strings.NewReader("PNG")))
+	mine := must(d.v.CreateNote("Same.md", []byte("same text")))
+	must(d.v.AddFile(mine.ID, "pic.png", strings.NewReader("PNG")))
+	hist := len(must(d.v.History(mine.ID)))
+
+	noWaiting(t, d.sync(t))
+	if _, err := d.v.Get(mine.ID); !errors.Is(err, vault.ErrNotFound) {
+		t.Fatalf("the device's own ID is still there: %v", err)
+	}
+	if got := must(d.v.Get(theirs.ID)); got.Note.Path != "Same.md" {
+		t.Fatalf("at %s", got.Note.Path)
+	}
+	if n := len(must(d.v.History(theirs.ID))); n != hist || n == 0 {
+		t.Fatalf("history: %d versions, had %d", n, hist)
+	}
+	if b := must(d.e.rec.base(theirs.ID)); b == nil {
+		t.Fatal("no base recorded")
+	}
+	for _, v := range []*vault.Vault{a.v, d.v} {
+		if gs := must(v.List()); len(gs) != 1 {
+			t.Fatalf("%d groups, want 1", len(gs))
+		}
+	}
+	noWaiting(t, d.sync(t))
+}
+
+// Same note text but a different attached file: renamed as before.
+func TestNearlyIdenticalNoteIsRenamed(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	theirs := must(a.v.CreateNote("Same.md", []byte("same text")))
+	must(a.v.AddFile(theirs.ID, "pic.png", strings.NewReader("PNG")))
+	mine := must(d.v.CreateNote("Same.md", []byte("same text")))
+
+	noWaiting(t, d.sync(t))
+	if p := must(d.v.Get(mine.ID)).Note.Path; p != "Same 2.md" {
+		t.Fatalf("local note at %s", p)
 	}
 }
 

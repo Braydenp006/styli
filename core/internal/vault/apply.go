@@ -137,6 +137,10 @@ type pendingApply struct {
 	Group Group       `json:"group"`
 	Steps []applyStep `json:"steps"`
 
+	// From is set when the commit gives an existing group the ID ID (see
+	// Adopt): its history moves along and its record is removed.
+	From string `json:"from,omitempty"`
+
 	// Attempts counts the starts that could not finish it. After two it is
 	// set aside (see openApply).
 	Attempts int `json:"attempts,omitempty"`
@@ -300,6 +304,62 @@ func (v *Vault) Apply(id string, base uint64, want Group) (Group, error) {
 	return v.load(id)
 }
 
+// Adopt gives the group from the ID id, because the atrium already holds the
+// same files under id (two copies of one vault joining). from must never
+// have synced, so its ID was never shared. want is the atrium's group: its
+// files must equal from's, and its other fields (history setting, conflict
+// flag) win. The record and its history move to id; it returns the saved
+// group. A crash part way is finished when the vault next opens.
+func (v *Vault) Adopt(from, id string, want Group) (Group, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !idRe.MatchString(from) || !idRe.MatchString(id) || from == id {
+		return Group{}, ErrBadGroup
+	}
+	for _, x := range []string{from, id} {
+		if err := v.finishPending(x); err != nil {
+			return Group{}, err
+		}
+	}
+	if _, err := v.load(id); err == nil {
+		return Group{}, ErrExists
+	} else if !errors.Is(err, ErrNotFound) {
+		return Group{}, err
+	}
+	if _, err := v.readTrash(id); err == nil {
+		return Group{}, ErrTrashed
+	}
+	cur, err := v.load(from)
+	if err != nil {
+		return Group{}, err
+	}
+	if !SameFiles(cur, want) {
+		return cur, ErrConflict
+	}
+	want.ID, want.Rev = id, 0
+	p := pendingApply{ID: id, Group: want, Steps: []applyStep{}, From: from}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return Group{}, err
+	}
+	if _, err := writeAtomic(v.pendingPath(id), bytes.NewReader(b), true); err != nil {
+		return Group{}, err
+	}
+	if err := v.runApply(p); err != nil {
+		return Group{}, err // the journal stays; the next Apply, Adopt or Open finishes it
+	}
+	return v.load(id)
+}
+
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
 // checkShape refuses a group that is malformed or drops something the
 // current one has.
 func (v *Vault) checkShape(cur, want Group) error {
@@ -378,8 +438,30 @@ func (v *Vault) runApply(p pendingApply) error {
 	}
 	g := p.Group
 	g.ID = p.ID
+	if p.From != "" {
+		// History comes along first; it is only renamed once, so a rerun skips it.
+		old, nw := v.historyPath(p.From), v.historyPath(p.ID)
+		if _, err := os.Lstat(old); err == nil {
+			if _, err := os.Lstat(nw); errors.Is(err, fs.ErrNotExist) {
+				if err := os.Rename(old, nw); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if err := v.save(&g); err != nil {
 		return err
+	}
+	if p.From != "" {
+		// The old record goes only after the new one is saved, so the files
+		// always have a record and no scan takes them for a new note.
+		if err := os.Remove(filepath.Join(v.root, idsDir, p.From)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		delete(v.revs, p.From)
+		if err := fsyncDir(filepath.Join(v.root, idsDir)); err != nil {
+			return err // the journal stays, so the removal is checked again
+		}
 	}
 	os.Remove(v.pendingPath(p.ID))
 	for _, s := range p.Steps {
@@ -545,13 +627,19 @@ func (v *Vault) cleanBlobs(now time.Time) (int, error) {
 // SameState reports whether two groups hold the same files, content and
 // settings (Rev is ignored).
 func SameState(a, b Group) bool {
-	if (a.Note == nil) != (b.Note == nil) || (a.Note != nil && *a.Note != *b.Note) {
-		return false
-	}
 	if (a.History == nil) != (b.History == nil) || (a.History != nil && *a.History != *b.History) {
 		return false
 	}
-	return a.Conflict == b.Conflict && slices.Equal(a.Files, b.Files)
+	return a.Conflict == b.Conflict && SameFiles(a, b)
+}
+
+// SameFiles reports whether two groups hold the same files at the same paths
+// with the same content, whatever their settings.
+func SameFiles(a, b Group) bool {
+	if (a.Note == nil) != (b.Note == nil) || (a.Note != nil && *a.Note != *b.Note) {
+		return false
+	}
+	return slices.Equal(a.Files, b.Files)
 }
 
 // FailedCommit is a change from a device that could not be finished and was

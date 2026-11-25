@@ -115,6 +115,21 @@ var scenarios = []scenario{
 		},
 	},
 	{
+		name: "the same note made on both devices before they synced",
+		act: func(w *world) {
+			for _, d := range w.devices() {
+				g := must(d.v.CreateNote("Same.md", []byte("same\n")))
+				must(d.v.AddFile(g.ID, "pic.png", strings.NewReader("PNG")))
+			}
+		},
+		want: func(t *testing.T, f map[string]string) {
+			has(t, f, "Same.md", "same\n")
+			if len(f) != 2 {
+				t.Fatalf("want one note and its file: %v", f)
+			}
+		},
+	},
+	{
 		name: "names swapped on the atrium",
 		setup: func(w *world) {
 			w.id = must(w.d1.v.CreateNote("a.md", []byte("A"))).ID
