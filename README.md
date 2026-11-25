@@ -9,25 +9,25 @@ I couldn't find the right tool, and didnt want to jerry rig a bunch of systems t
 
 ## Core Values
 
-# Fully Local - nothing happens off your devices (other than an optional time check)
+### Fully Local - nothing happens off your devices (other than an optional time check)
 
 All services run on devices you own under your control, your notes are stored as plain markdown or pdf, the AI that creates the markdown copy of your handwritten notes runs locally on your machine, with you being able to choose which model to use as your reader, 
 the AI that scans your notes to group them together on your mind map is the same. All with the option of not having the feature on your device at all.
 
-# Complete User Control
+### Complete User Control
 
 Any service (within reason) can be turned off or altered to fit the users needs. Don't want a reader? turn it off, don't want version history? turn it off, I can't decide what is best for everyone, the defaults are mostly based off what I like, so I may as well let
 the user do the hard part of fine tuning all the settings to meet what they need.
 
-# Anybody Can Use It
+## Anybody Can Use It
 
 It's free, and easy to use, It is easy to setup the AI features, the hub, and the nodes, a complicated setup would make it so I probably couldn't use it either.
 
 ## Features
 
-# Native Handwriting support for android devices (drawing pad support will be implemented later on - same as IOS devices)
+### Native Handwriting support for android devices (drawing pad support will be implemented later on - same as IOS devices)
 
-# The Hub (name is a work in progress) 
+### The Hub (name is a work in progress) 
 
 The core node of the system, most likely the only node that holds every version of every file, the nodes report back to the hub, and the hub sends the required updates to the other nodes if needed
 
@@ -36,22 +36,22 @@ merge conflicts, zombie files (files that come back after being deleted due to e
 
 The hub also has a rebuilding protocol, let's say the hub dies, the PC running it exploded maybe, you can appoint a new hub, and ask all nodes to merge their locally stored files onto it (with no dupes of course), hopefully you had copies of everything but if not that's not on me.
 
-# The maid
+### The maid
 
 A programmable script that cleans your trash and version history based on parameters you set, its basically just like 4 settings
 
-# The Graph
+### The Graph
 
 Very similar to obsidian graph with their link system or whatever it is, but now this graph is automated, with the linked being generated automatically by the reader, also I may not present this in a graph like layout I have some ideas flowing
 
-# The Reader
+### The Reader
 
 A configurable, locally hosted AI that reads your PDF's you hand write and converts them to markdown, using mermaid code (who the hell named that by the way) for the graphs, implementing HTML that will be hidden in the markdown previews 
 to indicate page breaks, and layout changes
 
 The reader also handles links, grouping notes together if they are the same topic, although you are able to mark notes as do not group by pinning.
 
-# Other features
+### Other features
 
 Version History, Github style merging, hub rebuilding protocol, pinning, 
 
