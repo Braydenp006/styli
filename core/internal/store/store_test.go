@@ -41,7 +41,7 @@ func dump(t *testing.T, s *Store) []string {
 	t.Helper()
 	var out []string
 	for _, q := range []string{
-		`SELECT id, IFNULL(note_path,''), IFNULL(note_version,''), title, modified_at FROM groups ORDER BY id`,
+		`SELECT id, IFNULL(note_path,''), IFNULL(note_version,''), title, folder, modified_at FROM groups ORDER BY id`,
 		`SELECT g.id, f.path, f.version FROM files f JOIN groups g ON g.n = f.group_n ORDER BY 1, 2`,
 		`SELECT g.id, t.tag FROM tags t JOIN groups g ON g.n = t.group_n ORDER BY 1, 2`,
 		`SELECT g.id, fts.title, fts.body, fts.folder FROM notes_fts fts JOIN groups g ON g.n = fts.rowid ORDER BY 1`,
@@ -75,7 +75,7 @@ func TestFreshDatabaseMigratesAndReopens(t *testing.T) {
 	}
 	var v int
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 1 {
+	if v != 2 {
 		t.Fatalf("user_version %d", v)
 	}
 	s.Close()

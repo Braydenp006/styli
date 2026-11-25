@@ -38,8 +38,8 @@ func (s *Store) Upsert(g vault.Group, content []byte, modified time.Time) error 
 	err = tx.QueryRow(`SELECT n FROM groups WHERE id = ?`, g.ID).Scan(&n)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		res, err := tx.Exec(`INSERT INTO groups (id, note_path, note_version, title, created_at, modified_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, g.ID, notePath, noteVer, title, time.Now().Unix(), modified.Unix())
+		res, err := tx.Exec(`INSERT INTO groups (id, note_path, note_version, title, folder, created_at, modified_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, g.ID, notePath, noteVer, title, folderOf(g), time.Now().Unix(), modified.Unix())
 		if err != nil {
 			return err
 		}
@@ -49,8 +49,8 @@ func (s *Store) Upsert(g vault.Group, content []byte, modified time.Time) error 
 	case err != nil:
 		return err
 	default:
-		if _, err := tx.Exec(`UPDATE groups SET note_path = ?, note_version = ?, title = ?, modified_at = ?
-			WHERE n = ?`, notePath, noteVer, title, modified.Unix(), n); err != nil {
+		if _, err := tx.Exec(`UPDATE groups SET note_path = ?, note_version = ?, title = ?, folder = ?, modified_at = ?
+			WHERE n = ?`, notePath, noteVer, title, folderOf(g), modified.Unix(), n); err != nil {
 			return err
 		}
 	}
@@ -183,6 +183,22 @@ func (s *Store) refresh(v *vault.Vault, g vault.Group) error {
 		}
 	}
 	return s.Upsert(g, content, mod)
+}
+
+// folderOf is the folder a group lives in ("" for the vault root): its note's,
+// or its first file's when it has no note yet.
+func folderOf(g vault.Group) string {
+	p := ""
+	switch {
+	case g.Note != nil:
+		p = g.Note.Path
+	case len(g.Files) > 0:
+		p = g.Files[0].Path
+	}
+	if d := path.Dir(p); d != "." {
+		return d
+	}
+	return ""
 }
 
 // titleOf is the note's first "# " heading, else its file name without .md,
