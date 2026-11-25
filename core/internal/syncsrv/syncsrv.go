@@ -40,9 +40,19 @@ type Deps struct {
 	Version string // the app's version
 	// Pairing, if set, serves the pairing endpoints (atrium only).
 	Pairing *pairing.Atrium
+	// Protocol is the protocol number the atrium reports; 0 means Protocol.
+	// Only tests set it, to stand in for an atrium that is newer or older.
+	Protocol int
 }
 
 type server struct{ Deps }
+
+func (s *server) protocol() int {
+	if s.Deps.Protocol != 0 {
+		return s.Deps.Protocol
+	}
+	return Protocol
+}
 
 // newHandler returns the sync API's handlers, with no checks of who is
 // calling: Server puts them behind mutual TLS.
@@ -98,7 +108,7 @@ func deletion(t vault.TrashedGroup) Group {
 
 func (s *server) hello(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"protocol": Protocol, "version": s.Version, "epoch": s.Vault.Epoch(), "seq": s.Vault.Seq(),
+		"protocol": s.protocol(), "version": s.Version, "epoch": s.Vault.Epoch(), "seq": s.Vault.Seq(),
 		"forgotten": s.Vault.Forgotten(), // a device whose cursor is below this does a full check
 	})
 }

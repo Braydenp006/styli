@@ -132,6 +132,24 @@ func groupErr(err error, reason string) error {
 	return err
 }
 
+// protocolHere is the sync protocol this build speaks. A variable only so
+// tests can stand in for a newer build.
+var protocolHere = syncsrv.Protocol
+
+// ErrNewerDevice means this device speaks a newer sync protocol than the
+// atrium. Nothing is sent until the atrium is updated: older devices keep
+// syncing with a newer atrium, but not the other way round.
+var ErrNewerDevice = errors.New("this device is newer than the atrium")
+
+// checkProtocol allows a pass when the atrium speaks at least this device's
+// protocol. An atrium that is newer is fine; an older one pauses sync.
+func checkProtocol(atrium int) error {
+	if atrium >= protocolHere {
+		return nil
+	}
+	return fmt.Errorf("%w (sync protocol %d; the atrium has %d). Update the atrium to sync. Nothing was sent", ErrNewerDevice, protocolHere, atrium)
+}
+
 // pass is the state of one sync pass.
 type pass struct {
 	waiting  map[string]string // group ID -> why it is waiting
@@ -176,8 +194,8 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 	if err != nil {
 		return fmt.Errorf("cannot reach the atrium: %w", err)
 	}
-	if h.Protocol != syncsrv.Protocol {
-		return fmt.Errorf("the atrium speaks sync protocol %d and this device %d; update the older one", h.Protocol, syncsrv.Protocol)
+	if err := checkProtocol(h.Protocol); err != nil {
+		return err
 	}
 	cur, err := e.rec.cursor()
 	if err != nil {

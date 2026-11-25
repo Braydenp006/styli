@@ -42,6 +42,14 @@ func (e *Engine) Clear(ctx context.Context, id string) error {
 	if base == nil || base.Cleared || base.Deleted != 0 || base.Parked != nil || !vault.SameState(local, base.Group(id)) {
 		return ErrUnsynced
 	}
+	// The same protocol rule as a pass, before anything is asked of the atrium.
+	h, err := e.c.hello(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	if err := checkProtocol(h.Protocol); err != nil {
+		return err
+	}
 	r, err := e.c.group(ctx, id)
 	if err != nil {
 		var ae *apiError

@@ -42,7 +42,10 @@ type atrium struct {
 	addr string
 }
 
-func newAtrium(t *testing.T) *atrium {
+func newAtrium(t *testing.T) *atrium { return newAtriumProtocol(t, 0) }
+
+// newAtriumProtocol is newAtrium reporting sync protocol p (0: the build's).
+func newAtriumProtocol(t *testing.T, p int) *atrium {
 	t.Helper()
 	root := t.TempDir()
 	v := must(vault.Open(root))
@@ -50,7 +53,7 @@ func newAtrium(t *testing.T) *atrium {
 	devs := must(devices.Open(root))
 	key := must(devicekey.Load(t.TempDir()))
 	ln := must(net.Listen("tcp", "127.0.0.1:0"))
-	s := syncsrv.NewServer(syncsrv.Deps{Vault: v, Logf: t.Logf, Version: "test"}, key, devs)
+	s := syncsrv.NewServer(syncsrv.Deps{Vault: v, Logf: t.Logf, Version: "test", Protocol: p}, key, devs)
 	go s.Serve(ln)
 	t.Cleanup(func() { s.Shutdown(context.Background()) })
 	return &atrium{v, devs, key, ln.Addr().String()}

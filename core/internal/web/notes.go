@@ -227,6 +227,8 @@ func (s *server) clearNote(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusConflict, "unsynced", "This note has changes the atrium doesn't have yet. Nothing was removed; try again once it has synced.")
 	case errors.Is(err, syncdev.ErrAtriumDiffers):
 		fail(w, http.StatusConflict, "atrium_differs", "The atrium has a different version of this note. Nothing was removed; it syncs here first, then try again.")
+	case errors.Is(err, syncdev.ErrNewerDevice):
+		fail(w, http.StatusConflict, "newer_device", "This device is newer than the atrium. Update the atrium first; nothing was removed.")
 	case errors.Is(err, syncdev.ErrUnreachable):
 		s.Logf("web: clear %s: %v", r.PathValue("id"), err)
 		fail(w, http.StatusServiceUnavailable, "atrium_unreachable", "Can't reach the atrium to confirm it has this version. Nothing was removed.")
