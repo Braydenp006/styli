@@ -396,3 +396,30 @@ test("sameForm notices any change", () => {
   assert.equal(sameForm(a, { ...a, historyOn: false }), false);
   assert.equal(sameForm(a, { ...a, hubName: "Other" }), false);
 });
+
+import { describePairing, minutesLeft } from "../ui/static/js/pairingtext.js";
+
+test("minutesLeft rounds down and never says zero", () => {
+  const now = new Date("2026-11-25T12:00:00Z");
+  assert.equal(minutesLeft("2026-11-25T12:05:00Z", now), "5 minutes");
+  assert.equal(minutesLeft("2026-11-25T12:01:30Z", now), "1 minute");
+  assert.equal(minutesLeft("2026-11-25T12:00:30Z", now), "less than a minute");
+  assert.equal(minutesLeft("2026-11-25T11:59:00Z", now), "less than a minute");
+});
+
+test("describePairing says where pairing stands, in plain words", () => {
+  const now = new Date("2026-11-25T12:00:00Z");
+  assert.deepEqual(describePairing({ phase: "idle" }), { headline: "", detail: "" });
+  assert.match(describePairing({ phase: "waiting", expires: "2026-11-25T12:04:10Z" }, now).detail, /work once, for the next 4 minutes/);
+  assert.equal(describePairing({ phase: "checking", device_name: "Laptop" }).headline, "“Laptop” is trying the words…");
+  const cmp = (o) => describePairing({ phase: "comparing", device_name: "Laptop", ...o });
+  assert.equal(cmp({}).headline, "The words matched. “Laptop” wants to join.");
+  assert.match(cmp({}).detail, /They don't match/);
+  assert.match(cmp({ atrium_approved: true }).detail, /Now confirm on the device/);
+  assert.match(cmp({ device_approved: true }).detail, /confirm here too/);
+  assert.equal(describePairing({ phase: "paired", device_name: "Laptop" }).headline, "“Laptop” is paired and can sync now.");
+  const failed = describePairing({ phase: "failed", reason: "The words did not match. Start again for new words." });
+  assert.equal(failed.headline, "The words did not match. Start again for new words.");
+  assert.equal(failed.detail, "Nothing was saved.");
+  assert.equal(describePairing({ phase: "expired" }).headline, "The pairing ended.");
+});

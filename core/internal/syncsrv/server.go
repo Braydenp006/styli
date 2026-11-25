@@ -114,8 +114,12 @@ func NewServer(d Deps, key *devicekey.Key, devs *devices.List) *Server {
 	}
 	s := &Server{devs: devs, logf: d.Logf, conns: map[string]map[net.Conn]bool{}, owner: map[net.Conn]string{}}
 	s.srv = &http.Server{
-		Handler:   s.check(newHandler(d)),
-		TLSConfig: ServerTLS(key, devs.Trusted),
+		Handler: s.check(newHandler(d)),
+		TLSConfig: ServerTLS(key, func(id string) bool {
+			// A key that is not paired gets through the handshake only while a
+			// pairing is open; check below then keeps it to the pairing endpoints.
+			return devs.Trusted(id) || (d.Pairing != nil && d.Pairing.Admits(id))
+		}),
 		// No ReadTimeout or WriteTimeout: a large file must be able to stream,
 		// and only paired devices get past the handshake.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -160,13 +164,18 @@ func (s *Server) check(next http.Handler) http.Handler {
 		if c, ok := r.Context().Value(connKey).(net.Conn); ok {
 			s.track(id, c)
 		}
+		ctx := context.WithValue(r.Context(), deviceKey, id)
+		if strings.HasPrefix(r.URL.Path, "/pair/v1/") {
+			next.ServeHTTP(w, r.WithContext(ctx)) // the pairing endpoints check the device themselves
+			return
+		}
 		if !s.devs.Trusted(id) {
 			w.Header().Set("Connection", "close")
 			fail(w, http.StatusForbidden, "not_paired", errUnknown.Error())
 			return
 		}
 		s.devs.Seen(id, time.Now())
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), deviceKey, id)))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

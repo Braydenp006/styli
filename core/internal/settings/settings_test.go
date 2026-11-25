@@ -295,3 +295,42 @@ func TestDeviceFolderIsPrivate(t *testing.T) {
 		t.Errorf("not tightened: %o", fi.Mode().Perm())
 	}
 }
+
+func TestSavedAtrium(t *testing.T) {
+	root, dev := t.TempDir(), t.TempDir()
+	s := must(Open(root, dev))
+	link := &AtriumLink{ID: strings.Repeat("a", 64), Addr: "atrium.lan:7879", PairedAt: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)}
+	if err := s.SetAtrium(link); err != nil {
+		t.Fatal(err)
+	}
+	// The Settings form saving the device never touches the saved atrium,
+	// whatever it sends.
+	d := s.Device()
+	d.Name, d.Atrium = "Laptop", nil
+	if err := s.SetDevice(d); err != nil {
+		t.Fatal(err)
+	}
+	got := must(Open(root, dev)).Device()
+	if got.Name != "Laptop" || got.Atrium == nil || *got.Atrium != *link {
+		t.Fatalf("after reopen: %+v", got)
+	}
+	// A copy, not the stored value.
+	got.Atrium.Addr = "elsewhere:1"
+	if s.Device().Atrium.Addr != link.Addr {
+		t.Fatal("Device returned the stored atrium, not a copy")
+	}
+	for _, bad := range []*AtriumLink{
+		{ID: "short", Addr: "a:1"},
+		{ID: strings.Repeat("a", 64), Addr: "no-port"},
+		{ID: strings.Repeat("a", 64), Addr: "bad host!:1"},
+	} {
+		if err := s.SetAtrium(bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v accepted: %v", bad, err)
+		}
+	}
+	// A damaged saved atrium in the file stops the app instead of being dropped.
+	os.WriteFile(filepath.Join(dev, "device.json"), []byte(`{"version":1,"device":{"name":"x","atrium":{"id":"nope","addr":"a:1"}}}`), 0o600)
+	if _, err := Open(root, dev); err == nil {
+		t.Fatal("damaged atrium accepted")
+	}
+}

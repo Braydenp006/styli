@@ -1,6 +1,7 @@
 // Command styli is the single Styli binary.
 //
-//	styli serve --vault DIR [--addr 127.0.0.1:7878] [--data DIR] [--config DIR]
+//	styli serve --vault DIR [--addr 127.0.0.1:7878] [--sync-addr :7879] [--data DIR] [--config DIR]
+//	styli join --vault DIR --atrium HOST[:PORT] [--name NAME] [--config DIR]
 //	styli version
 package main
 
@@ -24,7 +25,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: styli serve --vault DIR | styli version")
+		fmt.Fprintln(stderr, "usage: styli serve --vault DIR | styli join --vault DIR --atrium HOST | styli version")
 		return 2
 	}
 	switch args[0] {
@@ -33,8 +34,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "serve":
 		return serve(args[1:], stdout, stderr)
+	case "join":
+		return join(args[1:], stdin, stdout, stderr)
 	}
-	fmt.Fprintf(stderr, "unknown command %q\nusage: styli serve --vault DIR | styli version\n", args[0])
+	fmt.Fprintf(stderr, "unknown command %q\nusage: styli serve --vault DIR | styli join --vault DIR --atrium HOST | styli version\n", args[0])
 	return 2
 }
 

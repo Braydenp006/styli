@@ -8,6 +8,7 @@ import { href } from "../router.js";
 import { openDialog } from "../dialogs.js";
 import { showToast } from "../toast.js";
 import { toForm, toSettings, sameForm, NAME_MAX } from "../settingsform.js";
+import { pairingCard } from "./pairing.js";
 
 let saved = null; // the form values as the atrium has them
 let form = null; // the form values as they are on screen
@@ -156,6 +157,8 @@ function draw() {
       toggle({ key: "timeOn", label: "Check the clock before deleting anything",
         help: "This contacts the server below. It sends none of your notes: it only tells that server this address asked for the time." }),
       field({ key: "timeServer", label: "Time server", help: "A name or address, like pool.ntp.org. Use your router's address to keep the check on your own network." })),
+
+    pairingCard(),
 
     card("This device", null,
       field({ key: "deviceName", label: "Device name", help: "How this device is shown in the atrium." }),

@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"styli/core/internal/devices"
 	"styli/core/internal/maid"
+	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
 	"styli/core/internal/store"
 	"styli/core/internal/vault"
@@ -511,4 +513,35 @@ func TestFailedSyncCommitsOnDashboard(t *testing.T) {
 	e.call(t, "POST", "/api/sync/failed/"+name+"/dismiss", nil, 204)
 	e.call(t, "POST", "/api/sync/failed/"+name+"/dismiss", nil, 404)
 	e.call(t, "POST", "/api/sync/failed/..%2Fseq/dismiss", nil, 404)
+}
+
+func TestPairingFromSettings(t *testing.T) {
+	e := newEnv(t)
+	// Sync off: pairing says so.
+	if m := e.call(t, "GET", "/api/pairing", nil, 404); m["code"] != "sync_off" {
+		t.Fatalf("%v", m)
+	}
+
+	devs := must(devices.Open(e.root))
+	p := pairing.NewAtrium(strings.Repeat("a", 64), devs)
+	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: maid.New(e.v, e.set, t.Logf), Logf: t.Logf, Addr: e.host, Pairing: p})
+
+	if m := e.call(t, "GET", "/api/pairing", nil, 200); m["phase"] != "idle" {
+		t.Fatalf("%v", m)
+	}
+	m := e.call(t, "POST", "/api/pairing", nil, 200)
+	if m["phase"] != "waiting" || len(strings.Split(m["words"].(string), "-")) != 4 || m["expires"] == nil {
+		t.Fatalf("open: %v", m)
+	}
+	// Approving with no device yet does nothing and says where things stand.
+	if m := e.call(t, "POST", "/api/pairing/approve", nil, 200); m["phase"] != "waiting" {
+		t.Fatalf("early approve: %v", m)
+	}
+	if m := e.call(t, "POST", "/api/pairing/cancel", nil, 200); m["phase"] != "cancelled" || m["words"] != nil {
+		t.Fatalf("cancel: %v", m)
+	}
+	// Changes come only as JSON from the app itself, like every other change.
+	if resp, _ := e.req(t, "POST", "/api/pairing", nil, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != 403 {
+		t.Fatalf("cross-site open: %d", resp.StatusCode)
+	}
 }

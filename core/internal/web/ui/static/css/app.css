@@ -288,3 +288,11 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
   padding: var(--space-3) var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card);
 }
 .save-bar-actions { display: flex; gap: var(--space-2); }
+
+/* Pairing: the magic words and the emoji check (the only emoji in the UI). */
+.pair-body { display: flex; flex-direction: column; gap: var(--space-3); }
+.pair-words { font: 400 22px/32px var(--font-mono); letter-spacing: 0.02em; overflow-wrap: anywhere; }
+.pair-emoji { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.pair-emoji li { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); min-width: 64px; }
+.pair-emoji-char { font-size: 36px; line-height: 44px; }
+.pair-emoji-name { font-size: 13px; color: var(--ink-muted); }

@@ -68,3 +68,19 @@ func TestDamagedKeyIsNeverReplaced(t *testing.T) {
 		})
 	}
 }
+
+func TestRetireKeepsTheOldKeyAndMakesANewOne(t *testing.T) {
+	dir := t.TempDir()
+	a, _ := Load(dir)
+	if err := Retire(dir); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil || b.ID == a.ID {
+		t.Fatalf("new key: %v", err)
+	}
+	ents, _ := os.ReadDir(dir)
+	if len(ents) != 2 {
+		t.Fatalf("old key not kept: %v", ents)
+	}
+}

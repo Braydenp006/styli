@@ -13,8 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +71,17 @@ type Device struct {
 	// TrashRetentionDays overrides the atrium's default. nil means "use the atrium's";
 	// a pointer to 0 means "keep forever on this device".
 	TrashRetentionDays *int `json:"trash_retention_days,omitempty"`
+	// Atrium is the atrium this device paired with; nil until it pairs. Only
+	// pairing changes it (SetAtrium): SetDevice keeps whatever is saved.
+	Atrium *AtriumLink `json:"atrium,omitempty"`
+}
+
+// AtriumLink is what a device keeps about its atrium: the atrium's key (sync
+// talks to nothing else) and where to reach it.
+type AtriumLink struct {
+	ID       string    `json:"id"`   // the atrium's key fingerprint
+	Addr     string    `json:"addr"` // host:port of its sync port
+	PairedAt time.Time `json:"paired_at"`
 }
 
 // DefaultHub is what a new atrium starts with.
@@ -213,14 +226,29 @@ func (s *Store) Device() Device {
 	return copyDevice(s.device)
 }
 
-// SetDevice validates and saves this device's settings.
+// SetDevice validates and saves this device's settings. The saved atrium is
+// kept as it is, whatever d holds: only SetAtrium changes it.
 func (s *Store) SetDevice(d Device) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d.Atrium = s.device.Atrium
+	return s.setDevice(d)
+}
+
+// SetAtrium saves the atrium this device paired with (nil forgets it).
+func (s *Store) SetAtrium(a *AtriumLink) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := copyDevice(s.device)
+	d.Atrium = a
+	return s.setDevice(d)
+}
+
+func (s *Store) setDevice(d Device) error {
 	if err := validateDevice(d); err != nil {
 		return err
 	}
 	d = copyDevice(d)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := save(s.devPath, deviceFile{fileVersion, d}); err != nil {
 		return err
 	}
@@ -232,6 +260,10 @@ func copyDevice(d Device) Device {
 	if d.TrashRetentionDays != nil {
 		n := *d.TrashRetentionDays
 		d.TrashRetentionDays = &n
+	}
+	if d.Atrium != nil {
+		a := *d.Atrium
+		d.Atrium = &a
 	}
 	return d
 }
@@ -316,6 +348,10 @@ func validateDevice(d Device) error {
 		return invalid("device name must be 100 characters or fewer, with no control characters")
 	case d.TrashRetentionDays != nil && (*d.TrashRetentionDays < 0 || *d.TrashRetentionDays > 36500):
 		return invalid("trash retention must be between 0 and 36500 days")
+	case d.Atrium != nil && !atriumIDRe.MatchString(d.Atrium.ID):
+		return invalid("the saved atrium's key is not valid")
+	case d.Atrium != nil && !validAddr(d.Atrium.Addr):
+		return invalid("the saved atrium's address must be host:port")
 	}
 	return nil
 }
@@ -330,6 +366,13 @@ func validName(n string) bool {
 		}
 	}
 	return true
+}
+
+var atriumIDRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func validAddr(a string) bool {
+	host, port, err := net.SplitHostPort(a)
+	return err == nil && host != "" && port != "" && validServer(a, true)
 }
 
 func invalid(msg string) error { return fmt.Errorf("%w: %s", ErrInvalid, msg) }

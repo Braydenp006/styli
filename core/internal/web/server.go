@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"styli/core/internal/maid"
+	"styli/core/internal/pairing"
 	"styli/core/internal/settings"
 	"styli/core/internal/store"
 	"styli/core/internal/vault"
@@ -38,6 +39,9 @@ type Deps struct {
 	Maid     *maid.Maid
 	Logf     func(string, ...any)
 	Version  string // the build version, shown on the dashboard
+	// Pairing, if set, lets the Settings screen pair new devices (nil when
+	// sync is off).
+	Pairing *pairing.Atrium
 	// Addr is the address the server listens on, for example "127.0.0.1:7878".
 	// Only requests addressed to that port on a loopback name are accepted.
 	Addr string
@@ -91,6 +95,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/missing", s.listMissing)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/sync/failed/{name}/dismiss", s.dismissFailedCommit)
+	mux.HandleFunc("GET /api/pairing", s.getPairing)
+	mux.HandleFunc("POST /api/pairing", s.openPairing)
+	mux.HandleFunc("POST /api/pairing/approve", s.approvePairing)
+	mux.HandleFunc("POST /api/pairing/cancel", s.cancelPairing)
 	mux.HandleFunc("GET /api/maid/preview", s.maidPreview)
 	mux.HandleFunc("POST /api/maid/run", s.maidRun)
 

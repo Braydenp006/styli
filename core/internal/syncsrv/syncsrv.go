@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"time"
 
+	"styli/core/internal/pairing"
 	"styli/core/internal/store"
 	"styli/core/internal/vault"
 )
@@ -36,6 +37,8 @@ type Deps struct {
 	Store   *store.Store // optional; kept in step with commits
 	Logf    func(string, ...any)
 	Version string // the app's version
+	// Pairing, if set, serves the pairing endpoints (atrium only).
+	Pairing *pairing.Atrium
 }
 
 type server struct{ Deps }
@@ -51,6 +54,9 @@ func newHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /sync/v1/groups/{id}/files/{n}", s.getFile)
 	mux.HandleFunc("PUT /sync/v1/blobs/{hash}", s.putBlob)
 	mux.HandleFunc("PUT /sync/v1/groups/{id}", s.commit)
+	if d.Pairing != nil {
+		s.pairRoutes(mux)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every answer says which epoch its numbers belong to.
 		w.Header().Set("Styli-Epoch", s.Vault.Epoch())

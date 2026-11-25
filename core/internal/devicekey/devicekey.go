@@ -109,3 +109,10 @@ func Fingerprint(c *x509.Certificate) string {
 	s := sha256.Sum256(c.RawSubjectPublicKeyInfo)
 	return hex.EncodeToString(s[:])
 }
+
+// Retire moves this device's key aside (it was revoked on the atrium), so the
+// next Load makes a new one. The old file is kept, renamed, never deleted.
+func Retire(dir string) error {
+	p := filepath.Join(dir, FileName)
+	return os.Rename(p, fmt.Sprintf("%s.revoked-%d", p, time.Now().UnixMilli()))
+}
