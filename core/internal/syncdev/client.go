@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"styli/core/internal/syncsrv"
@@ -52,9 +54,17 @@ func (e *apiError) Error() string {
 }
 
 func (c *client) do(ctx context.Context, method, path string, body io.Reader, size int64) (*http.Response, error) {
+	return c.doWith(ctx, method, path, body, size, nil)
+}
+
+// doWith is do with extra request headers.
+func (c *client) doWith(ctx context.Context, method, path string, body io.Reader, size int64, hdr http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.url+path, body)
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range hdr {
+		req.Header[k] = v
 	}
 	if body != nil {
 		req.ContentLength = size
@@ -120,17 +130,30 @@ func (c *client) changes(ctx context.Context, since uint64, wait int) (page, err
 }
 
 // download streams the note (index -1) or attached file index of group id,
-// which must still have the given version on the atrium.
-func (c *client) download(ctx context.Context, id string, index int, version string) (io.ReadCloser, error) {
+// which must still have the given version on the atrium. With from > 0 it asks
+// for the content from that byte on. It returns the byte the stream starts at:
+// from, or 0 if the atrium sent the whole file instead.
+func (c *client) download(ctx context.Context, id string, index int, version string, from int64) (io.ReadCloser, int64, error) {
 	p := "/sync/v1/groups/" + url.PathEscape(id) + "/note"
 	if index >= 0 {
 		p = "/sync/v1/groups/" + url.PathEscape(id) + "/files/" + strconv.Itoa(index)
 	}
-	res, err := c.do(ctx, http.MethodGet, p+"?version="+url.QueryEscape(version), nil, 0)
-	if err != nil {
-		return nil, err
+	var hdr http.Header
+	if from > 0 {
+		hdr = http.Header{"Range": {fmt.Sprintf("bytes=%d-", from)}}
 	}
-	return res.Body, nil
+	res, err := c.doWith(ctx, http.MethodGet, p+"?version="+url.QueryEscape(version), nil, 0, hdr)
+	if err != nil {
+		return nil, 0, err
+	}
+	if res.StatusCode != http.StatusPartialContent {
+		return res.Body, 0, nil
+	}
+	if !strings.HasPrefix(res.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", from)) {
+		res.Body.Close()
+		return nil, 0, errors.New("sync: the atrium sent a different part of the file than asked for")
+	}
+	return res.Body, from, nil
 }
 
 // group asks the atrium what it holds of group id right now (see
@@ -141,13 +164,55 @@ func (c *client) group(ctx context.Context, id string) (syncsrv.Group, error) {
 	return g, err
 }
 
-func (c *client) putBlob(ctx context.Context, hash string, r io.Reader, size int64) error {
-	res, err := c.do(ctx, http.MethodPut, "/sync/v1/blobs/"+url.PathEscape(hash), r, size)
-	if err != nil {
-		return err
+// ResumeAbove is the size from which an upload can carry on after it is cut
+// off. Smaller files go up in one request, without asking first.
+var ResumeAbove int64 = 8 << 20
+
+// putBlob uploads size bytes from r under their hash. A large upload first
+// asks the atrium how much of it a cut-off earlier attempt left there, and
+// sends the rest.
+func (c *client) putBlob(ctx context.Context, hash string, r io.ReadSeeker, size int64) error {
+	path := "/sync/v1/blobs/" + url.PathEscape(hash)
+	if size <= ResumeAbove {
+		res, err := c.do(ctx, http.MethodPut, path, r, size)
+		if err != nil {
+			return err
+		}
+		res.Body.Close()
+		return nil
 	}
-	res.Body.Close()
-	return nil
+	var err error
+	for try := 0; try < 3; try++ {
+		var head *http.Response
+		if head, err = c.do(ctx, http.MethodHead, path, nil, 0); err != nil {
+			return err
+		}
+		head.Body.Close()
+		if head.Header.Get("Upload-Complete") != "" {
+			return nil
+		}
+		offset, _ := strconv.ParseInt(head.Header.Get("Upload-Offset"), 10, 64)
+		if offset < 0 || offset >= size {
+			offset = 0 // not a part of this file (or all of it, unchecked): start again
+		}
+		if _, err = r.Seek(offset, io.SeekStart); err != nil {
+			return err
+		}
+		hdr := http.Header{"Content-Range": {fmt.Sprintf("bytes %d-%d/%d", offset, size-1, size)}}
+		var res *http.Response
+		res, err = c.doWith(ctx, http.MethodPut, path, io.LimitReader(r, size-offset), size-offset, hdr)
+		if err == nil {
+			res.Body.Close()
+			return nil
+		}
+		var ae *apiError
+		if !errors.As(err, &ae) || ae.Status != http.StatusConflict || ae.Code != "offset" {
+			return err
+		}
+		// The atrium's part moved on since we asked (a cut-off request it was
+		// still reading): ask again.
+	}
+	return err
 }
 
 // deleteGroup asks the atrium to trash group id, if its rev is still base. It

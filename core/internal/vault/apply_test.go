@@ -3,6 +3,7 @@ package vault
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -658,3 +659,100 @@ func TestVerifyRefusesAnUnscannedEdit(t *testing.T) {
 		t.Fatal("an ordinary delete is marked local only")
 	}
 }
+
+// A staged part carries on from where it stopped, and is staged only once the
+// whole content matches its hash.
+func TestStageBlobAtResumes(t *testing.T) {
+	v, root := open(t)
+	content := strings.Repeat("0123456789", 100)
+	h := hashBytes([]byte(content))
+	blob := filepath.Join(root, ".ids", "sync", "blobs", h)
+
+	if n := must(v.BlobPartSize(h)); n != 0 {
+		t.Fatalf("part before anything: %d", n)
+	}
+	// A transfer cut at byte 400 keeps what arrived, and is not staged.
+	cut := io.MultiReader(strings.NewReader(content[:400]), iotestErr{})
+	if err := v.StageBlobAt(h, 0, cut, 1<<20); err == nil {
+		t.Fatal("a cut transfer reported success")
+	}
+	if n := must(v.BlobPartSize(h)); n != 400 {
+		t.Fatalf("part is %d bytes, want 400", n)
+	}
+	if _, err := os.Stat(blob); err == nil {
+		t.Fatal("staged before it was complete")
+	}
+	// The wrong offset is refused and changes nothing.
+	if err := v.StageBlobAt(h, 300, strings.NewReader(content[300:]), 1<<20); !errors.Is(err, ErrOffset) {
+		t.Fatalf("wrong offset: %v", err)
+	}
+	if n := must(v.BlobPartSize(h)); n != 400 {
+		t.Fatalf("a refused call changed the part: %d", n)
+	}
+	if err := v.StageBlobAt(h, 400, strings.NewReader(content[400:]), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(blob); string(b) != content {
+		t.Fatal("staged content differs")
+	}
+	if n := must(v.BlobPartSize(h)); n != 0 {
+		t.Fatalf("part left after staging: %d", n)
+	}
+}
+
+func TestStageBlobAtRefusesWhatCannotBeCarriedOn(t *testing.T) {
+	v, _ := open(t)
+	h := hashBytes([]byte("right"))
+	// Wrong content: the part is thrown away.
+	if err := v.StageBlobAt(h, 0, strings.NewReader("wrong"), 100); !errors.Is(err, ErrHashMismatch) {
+		t.Fatalf("%v", err)
+	}
+	if n := must(v.BlobPartSize(h)); n != 0 {
+		t.Fatalf("a mismatched part was kept: %d", n)
+	}
+	// Over the cap, whether in one go or across a resume.
+	big := strings.Repeat("a", 50)
+	hb := hashBytes([]byte(big))
+	if err := v.StageBlobAt(hb, 0, strings.NewReader(big), 10); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("%v", err)
+	}
+	v.StageBlobAt(hb, 0, io.MultiReader(strings.NewReader(big[:8]), iotestErr{}), 10)
+	if err := v.StageBlobAt(hb, 8, strings.NewReader(big[8:]), 10); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("across a resume: %v", err)
+	}
+	if n := must(v.BlobPartSize(hb)); n != 0 {
+		t.Fatalf("an oversize part was kept: %d", n)
+	}
+	for _, bad := range []string{"../../etc", "short"} {
+		if err := v.StageBlobAt(bad, 0, strings.NewReader(""), 10); !errors.Is(err, ErrBadGroup) {
+			t.Fatalf("%q: %v", bad, err)
+		}
+		if _, err := v.BlobPartSize(bad); !errors.Is(err, ErrBadGroup) {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+}
+
+// A part nobody finished goes with the other unused uploads.
+func TestCleanBlobsRemovesStaleParts(t *testing.T) {
+	v, _ := open(t)
+	h := hashBytes([]byte("abcdef"))
+	v.StageBlobAt(h, 0, io.MultiReader(strings.NewReader("abc"), iotestErr{}), 100)
+	if n := must(v.CleanBlobs()); n != 0 {
+		t.Fatalf("removed a fresh part: %d", n)
+	}
+	old := StaleBlobAge
+	StaleBlobAge = 0
+	defer func() { StaleBlobAge = old }()
+	time.Sleep(10 * time.Millisecond)
+	if n := must(v.CleanBlobs()); n != 1 {
+		t.Fatalf("removed %d, want the stale part", n)
+	}
+	if n := must(v.BlobPartSize(h)); n != 0 {
+		t.Fatalf("part still there: %d", n)
+	}
+}
+
+type iotestErr struct{}
+
+func (iotestErr) Read([]byte) (int, error) { return 0, errors.New("connection lost") }

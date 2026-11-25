@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -354,3 +355,83 @@ func TestGetGroupConfirmsTheDisk(t *testing.T) {
 		t.Fatalf("emptied: %d %+v", res.StatusCode, ae)
 	}
 }
+
+// raw sends one request with extra headers and returns the status and headers.
+func (e *env) raw(t *testing.T, method, path, body string, hdr map[string]string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader(body))
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	return res
+}
+
+// An upload can be asked how far it got and carried on from there.
+func TestUploadCarriesOnFromWhereItStopped(t *testing.T) {
+	e := setup(t)
+	content := strings.Repeat("0123456789", 50)
+	h := hash(content)
+	path := "/sync/v1/blobs/" + h
+	rng := func(from int) map[string]string {
+		return map[string]string{"Content-Range": fmt.Sprintf("bytes %d-%d/%d", from, len(content)-1, len(content))}
+	}
+
+	if res := e.raw(t, "HEAD", path, "", nil); res.StatusCode != 204 || res.Header.Get("Upload-Offset") != "0" || res.Header.Get("Upload-Complete") != "" {
+		t.Fatalf("nothing staged: %d %v", res.StatusCode, res.Header)
+	}
+	// A part is left by an upload cut off after 200 bytes.
+	if err := e.v.StageBlobAt(h, 0, io.MultiReader(strings.NewReader(content[:200]), errReader{}), 1<<20); err == nil {
+		t.Fatal("want the cut to fail")
+	}
+	if res := e.raw(t, "HEAD", path, "", nil); res.Header.Get("Upload-Offset") != "200" || res.Header.Get("Upload-Complete") != "" {
+		t.Fatalf("part: %v", res.Header)
+	}
+	// Carrying on from the wrong byte is refused, and says where it ends.
+	if res := e.raw(t, "PUT", path, content[100:], rng(100)); res.StatusCode != 409 || res.Header.Get("Upload-Offset") != "200" {
+		t.Fatalf("wrong offset: %d %v", res.StatusCode, res.Header)
+	}
+	for name, hdr := range map[string]map[string]string{
+		"not a range":    {"Content-Range": "pages 1-2/3"},
+		"not to the end": {"Content-Range": "bytes 200-299/500"},
+		"length differs": {"Content-Range": fmt.Sprintf("bytes 200-%d/%d", len(content)-2, len(content)-1)},
+		"reversed":       {"Content-Range": "bytes 300-200/201"},
+	} {
+		if res := e.raw(t, "PUT", path, content[200:], hdr); res.StatusCode != 400 {
+			t.Fatalf("%s: %d", name, res.StatusCode)
+		}
+	}
+	if res := e.raw(t, "PUT", path, "x", map[string]string{"Content-Range": fmt.Sprintf("bytes 0-%d/%d", MaxBlob, MaxBlob+1)}); res.StatusCode != 413 {
+		t.Fatalf("over the cap: %d", res.StatusCode)
+	}
+	if res := e.raw(t, "PUT", path, content[200:], rng(200)); res.StatusCode != 204 {
+		t.Fatalf("carry on: %d", res.StatusCode)
+	}
+	if res := e.raw(t, "HEAD", path, "", nil); res.Header.Get("Upload-Complete") != "1" || res.Header.Get("Upload-Offset") != fmt.Sprint(len(content)) {
+		t.Fatalf("complete: %v", res.Header)
+	}
+	// The same upload sent again, whole or in part, is not an error.
+	if res := e.raw(t, "PUT", path, content, nil); res.StatusCode != 204 {
+		t.Fatalf("whole again: %d", res.StatusCode)
+	}
+	// Content that does not match its hash is refused, and nothing is kept.
+	other := strings.Repeat("a", 100)
+	bad := "/sync/v1/blobs/" + hash("not the content")
+	if res := e.raw(t, "PUT", bad, other, map[string]string{"Content-Range": "bytes 0-99/100"}); res.StatusCode != 422 {
+		t.Fatalf("hash mismatch: %d", res.StatusCode)
+	}
+	if res := e.raw(t, "HEAD", bad, "", nil); res.Header.Get("Upload-Offset") != "0" {
+		t.Fatalf("a wrong upload left a part: %v", res.Header)
+	}
+	if res := e.raw(t, "HEAD", "/sync/v1/blobs/not-a-hash", "", nil); res.StatusCode != 400 {
+		t.Fatalf("bad hash: %d", res.StatusCode)
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("connection lost") }

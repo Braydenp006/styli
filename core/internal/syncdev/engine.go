@@ -14,6 +14,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -769,15 +770,29 @@ func (e *Engine) pull(ctx context.Context, p *pass, id string, local *vault.Grou
 }
 
 // download fetches one file of the atrium's group into this vault's staging
-// area, where vault.Apply takes it from. The vault checks its hash.
+// area, where vault.Apply takes it from. The vault checks its hash. A download
+// that was cut off carries on from the bytes already staged (the part is named
+// by the content's hash, so a newer version of the file never joins onto it).
 func (e *Engine) download(ctx context.Context, id string, index int, version string) error {
-	rc, err := e.c.download(ctx, id, index, version)
+	have, err := e.v.BlobPartSize(version)
+	if err != nil {
+		return err
+	}
+	rc, from, err := e.c.download(ctx, id, index, version, have)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.Status == http.StatusRequestedRangeNotSatisfiable {
+		// The part is as long as the file or longer: it cannot be right.
+		if err := e.v.DropBlobPart(version); err != nil {
+			return err
+		}
+		rc, from, err = e.c.download(ctx, id, index, version, 0)
+	}
 	if err != nil {
 		return groupErr(err, "downloading from the atrium failed")
 	}
 	defer rc.Close()
-	if err := e.v.StageBlob(version, rc, syncsrv.MaxBlob); err != nil {
-		if errors.Is(err, vault.ErrHashMismatch) || errors.Is(err, vault.ErrTooLarge) {
+	if err := e.v.StageBlobAt(version, from, rc, syncsrv.MaxBlob); err != nil {
+		if errors.Is(err, vault.ErrHashMismatch) || errors.Is(err, vault.ErrTooLarge) || errors.Is(err, vault.ErrOffset) {
 			return held(fmt.Sprintf("the download was damaged (%v); trying again", err))
 		}
 		return err // this disk, or the connection dropped mid-file

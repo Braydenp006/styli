@@ -1,6 +1,7 @@
 package syncdev
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -68,6 +69,22 @@ func plan(w *world) {
 }
 
 var scenarios = []scenario{
+	{
+		// Everything goes through the resumable paths: ResumeAbove is lowered so
+		// even the note's text asks the atrium how much it holds first.
+		name: "new note with a large attached file",
+		act: func(w *world) {
+			old := ResumeAbove
+			ResumeAbove = 1
+			w.t.Cleanup(func() { ResumeAbove = old })
+			g := must(w.d1.v.CreateNote("Scan.md", []byte("scanned\n")))
+			must(w.d1.v.AddFile(g.ID, "scan.bin", bytes.NewReader(bigFile(200000))))
+		},
+		want: func(t *testing.T, f map[string]string) {
+			has(t, f, "Scan.md", "scanned\n")
+			has(t, f, "scan.bin", string(bigFile(200000)))
+		},
+	},
 	{
 		name: "new note with an attached file",
 		act: func(w *world) {
@@ -227,6 +244,7 @@ type faultKind string
 const (
 	dropRequest faultKind = "request dropped"
 	dropReply   faultKind = "reply lost"
+	cutReply    faultKind = "reply cut off"
 	crash       faultKind = "crash before write"
 )
 
@@ -255,6 +273,8 @@ func (sc scenario) run(t *testing.T, target int, kind faultKind, k int) int {
 			d.net.dropReq = k
 		case dropReply:
 			d.net.dropReply = k
+		case cutReply:
+			d.net.cutReply = k
 		case crash:
 			writes = d.writes(k)
 		}
@@ -275,7 +295,8 @@ func (sc scenario) run(t *testing.T, target int, kind faultKind, k int) int {
 	return count
 }
 
-// For every request a device's first pass makes, drop it, or lose its reply:
+// For every request a device's first pass makes, drop it, lose its reply, or
+// cut the reply off part way through its body (a download that stops):
 // the devices must still end up with the same, right files.
 func TestEveryDroppedRequestAndLostReply(t *testing.T) {
 	for _, sc := range scenarios {
@@ -286,7 +307,7 @@ func TestEveryDroppedRequestAndLostReply(t *testing.T) {
 				if n == 0 {
 					t.Fatalf("device %d made no requests", target+1)
 				}
-				for _, kind := range []faultKind{dropRequest, dropReply} {
+				for _, kind := range []faultKind{dropRequest, dropReply, cutReply} {
 					for k := 1; k <= n; k++ {
 						t.Run(fmt.Sprintf("device %d, %s, request %d of %d", target+1, kind, k, n), func(t *testing.T) {
 							sc.run(t, target, kind, k)

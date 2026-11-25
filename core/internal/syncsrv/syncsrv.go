@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -54,6 +55,7 @@ func newHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /sync/v1/groups/{id}/note", s.getNote)
 	mux.HandleFunc("GET /sync/v1/groups/{id}/files/{n}", s.getFile)
 	mux.HandleFunc("PUT /sync/v1/blobs/{hash}", s.putBlob)
+	mux.HandleFunc("HEAD /sync/v1/blobs/{hash}", s.headBlob)
 	mux.HandleFunc("PUT /sync/v1/groups/{id}", s.commit)
 	mux.HandleFunc("DELETE /sync/v1/groups/{id}", s.deleteGroup)
 	mux.HandleFunc("POST /sync/v1/groups/{id}/recovery", s.recovery)
@@ -221,12 +223,67 @@ func (s *server) getFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", fi.ModTime(), f)
 }
 
+// headBlob tells a device how much of an upload the atrium already holds, so a
+// cut-off upload can carry on: Upload-Offset is the bytes staged so far, and
+// Upload-Complete is set when the whole blob is already here.
+func (s *server) headBlob(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	size, whole, err := s.Vault.BlobStaged(hash)
+	if err == nil && !whole {
+		size, err = s.Vault.BlobPartSize(hash)
+	}
+	if err != nil {
+		s.failErr(w, err)
+		return
+	}
+	w.Header().Set("Upload-Offset", strconv.FormatInt(size, 10))
+	if whole {
+		w.Header().Set("Upload-Complete", "1")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// putBlob stages an upload. A plain PUT carries the whole file. With
+// Content-Range: bytes N-(T-1)/T it carries the rest of a file of T bytes from
+// byte N, which must be where the atrium's staged part ends (409 offset
+// otherwise, with Upload-Offset saying where it does end).
 func (s *server) putBlob(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
 	if r.ContentLength > MaxBlob {
 		fail(w, http.StatusRequestEntityTooLarge, "too_large", "that file is too large")
 		return
 	}
-	if err := s.Vault.StageBlob(r.PathValue("hash"), r.Body, MaxBlob); err != nil {
+	cr := r.Header.Get("Content-Range")
+	if cr == "" {
+		if err := s.Vault.StageBlob(hash, r.Body, MaxBlob); err != nil {
+			s.failErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var from, to, total int64
+	if n, err := fmt.Sscanf(cr, "bytes %d-%d/%d", &from, &to, &total); err != nil || n != 3 ||
+		from < 0 || to < from || total != to+1 {
+		fail(w, http.StatusBadRequest, "bad_request", "Content-Range must say the rest of the file: bytes N-(T-1)/T")
+		return
+	}
+	if total > MaxBlob {
+		fail(w, http.StatusRequestEntityTooLarge, "too_large", "that file is too large")
+		return
+	}
+	if r.ContentLength != total-from {
+		fail(w, http.StatusBadRequest, "bad_request", "the body must be exactly the bytes Content-Range names")
+		return
+	}
+	err := s.Vault.StageBlobAt(hash, from, r.Body, MaxBlob)
+	if errors.Is(err, vault.ErrOffset) {
+		have, _ := s.Vault.BlobPartSize(hash)
+		w.Header().Set("Upload-Offset", strconv.FormatInt(have, 10))
+		fail(w, http.StatusConflict, "offset", "the atrium holds a different amount of this upload; ask where to carry on")
+		return
+	}
+	if err != nil {
 		s.failErr(w, err)
 		return
 	}

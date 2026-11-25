@@ -19,6 +19,9 @@ const TmpPrefix = ".styli-tmp-"
 // ErrExists means dst exists and overwrite was not allowed.
 var ErrExists = errors.New("already exists")
 
+// ErrOffset means Append found dst a different length than the caller expected.
+var ErrOffset = errors.New("the file is not the length expected")
+
 var beforeWrite atomic.Pointer[func(dst string)]
 
 // SetBeforeWrite sets f (nil clears it) to be called with the destination
@@ -30,6 +33,41 @@ func SetBeforeWrite(f func(dst string)) {
 		return
 	}
 	beforeWrite.Store(&f)
+}
+
+// Append adds r to the end of dst, which must be exactly offset bytes long
+// (offset 0 starts it afresh), and returns its length afterwards. Unlike Write
+// it is not atomic: a copy that fails part way keeps what arrived, so dst is
+// always a prefix of what was being written, for the caller to continue from
+// (or throw away; it never holds anything else).
+func Append(dst string, offset int64, r io.Reader) (int64, error) {
+	if f := beforeWrite.Load(); f != nil {
+		(*f)(dst)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return 0, err
+	}
+	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if offset == 0 {
+		flag |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(dst, flag, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	fi, err := f.Stat()
+	if err != nil || fi.Size() != offset {
+		f.Close()
+		return 0, errors.Join(ErrOffset, err)
+	}
+	n, err := io.Copy(f, r)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return offset + n, err
 }
 
 // Write writes r to dst via a temp file in the same folder, then renames it

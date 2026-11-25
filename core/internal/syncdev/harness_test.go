@@ -130,17 +130,24 @@ type faultNet struct {
 	n         int  // requests so far
 	dropReq   int  // drop the n-th request (1-based); 0 = none
 	dropReply int  // lose the reply to the n-th request; 0 = none
+	cutReply  int  // cut the n-th reply off after a few bytes of its body; 0 = none
 	down      bool // the device is offline: every request fails
 	rate      float64
 	rng       *rand.Rand // used with rate: each request faults with this chance
 	onRequest func()     // if set, runs before each request is sent
+
+	cutFiles  int64    // if > 0, a file download's body fails after this many bytes
+	cutUpload int64    // if > 0, a blob upload's body fails after this many bytes
+	puts      []string // each blob upload: its Content-Range, or "whole"
+	noRange   bool     // the atrium ignores Range requests (the header is removed)
+	ranges    []string // the Range header of each file download that had one
 }
 
 // reset forgets counts and planned faults; down and rate stay.
 func (f *faultNet) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.n, f.dropReq, f.dropReply = 0, 0, 0
+	f.n, f.dropReq, f.dropReply, f.cutReply = 0, 0, 0, 0
 }
 
 func (f *faultNet) requests() int {
@@ -161,10 +168,35 @@ func (f *faultNet) RoundTrip(r *http.Request) (*http.Response, error) {
 	case f.rate > 0 && f.rng.Float64() < f.rate:
 		fault = []string{"request", "reply"}[f.rng.IntN(2)]
 	}
-	next, hook := f.next, f.onRequest
+	next, hook, cut, noRange := f.next, f.onRequest, f.cutFiles, f.noRange
+	cutThis := f.n == f.cutReply
+	if cutThis {
+		cut = 3
+	}
+	file := strings.Contains(r.URL.Path, "/files/")
+	if rg := r.Header.Get("Range"); rg != "" && file {
+		f.ranges = append(f.ranges, rg)
+	}
 	f.mu.Unlock()
 	if hook != nil {
 		hook()
+	}
+	if noRange {
+		r.Header.Del("Range")
+	}
+	if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/blobs/") {
+		rg := r.Header.Get("Content-Range")
+		if rg == "" {
+			rg = "whole"
+		}
+		f.mu.Lock()
+		f.puts = append(f.puts, rg)
+		cutUp := f.cutUpload
+		f.mu.Unlock()
+		if cutUp > 0 && fault == "" {
+			r = r.Clone(r.Context())
+			r.Body = &cutBody{r.Body, cutUp}
+		}
 	}
 	if fault == "request" {
 		if r.Body != nil {
@@ -177,7 +209,28 @@ func (f *faultNet) RoundTrip(r *http.Request) (*http.Response, error) {
 		res.Body.Close()
 		return nil, errDropped
 	}
+	if err == nil && cut > 0 && (file || cutThis) {
+		res.Body = &cutBody{res.Body, cut}
+	}
 	return res, err
+}
+
+// cutBody lets left bytes through, then fails: a connection lost mid-file.
+type cutBody struct {
+	io.ReadCloser
+	left int64
+}
+
+func (c *cutBody) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, errDropped
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.ReadCloser.Read(p)
+	c.left -= int64(n)
+	return n, err
 }
 
 // ---- crashes ----

@@ -76,6 +76,9 @@ type Group struct {
 
 // Vault is a folder of notes. Safe for concurrent use inside one process.
 type Vault struct {
+	partMu sync.Mutex           // guards parts
+	parts  map[string]*partLock // writers of a staged part, by hash (see lockPart)
+
 	root    string
 	dirMode fs.FileMode // the vault folder's permissions, given to folders the vault creates
 	mu      sync.Mutex
@@ -124,7 +127,7 @@ func Open(root string) (*Vault, error) {
 	v := &Vault{
 		root: root, dirMode: fi.Mode().Perm(), seen: map[string]cached{}, missing: map[string]bool{},
 		historyOn: true, historyWindow: 30 * time.Minute, loc: time.Local, now: time.Now,
-		revs: map[string]uint64{}, changed: make(chan struct{}), dels: map[string]uint64{},
+		parts: map[string]*partLock{}, revs: map[string]uint64{}, changed: make(chan struct{}), dels: map[string]uint64{},
 	}
 	if err := v.openRevs(); err != nil {
 		return nil, err

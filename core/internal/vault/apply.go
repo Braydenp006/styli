@@ -13,7 +13,11 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
+	"sync"
 	"time"
+
+	"styli/core/internal/atomicfile"
 )
 
 // The atrium side of sync (see "Sync protocol" in DESIGN.md).
@@ -136,6 +140,124 @@ func (v *Vault) StageBlob(hash string, r io.Reader, max int64) error {
 		return ErrHashMismatch
 	}
 	return nil
+}
+
+// ErrOffset means a staged part is not the length the caller expected.
+var ErrOffset = errors.New("vault: the staged part is not the length expected")
+
+func (v *Vault) partPath(hash string) string { return v.blobPath(hash) + ".part" }
+
+// BlobPartSize is how many bytes of blob hash an earlier, interrupted
+// transfer staged (0 if none): where StageBlobAt can carry on.
+func (v *Vault) BlobPartSize(hash string) (int64, error) {
+	if !hashRe.MatchString(hash) {
+		return 0, ErrBadGroup
+	}
+	fi, err := os.Stat(v.partPath(hash))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
+// BlobStaged reports whether blob hash is staged whole (checked against its
+// hash when it was), and its size.
+func (v *Vault) BlobStaged(hash string) (int64, bool, error) {
+	if !hashRe.MatchString(hash) {
+		return 0, false, ErrBadGroup
+	}
+	fi, err := os.Stat(v.blobPath(hash))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return fi.Size(), true, nil
+}
+
+// DropBlobPart throws away the staged part of blob hash.
+func (v *Vault) DropBlobPart(hash string) error {
+	if !hashRe.MatchString(hash) {
+		return ErrBadGroup
+	}
+	unlock := v.lockPart(hash)
+	defer unlock()
+	if err := os.Remove(v.partPath(hash)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// lockPart serialises the writers of one part; the entry goes when the last
+// one unlocks, so the map does not grow.
+func (v *Vault) lockPart(hash string) (unlock func()) {
+	v.partMu.Lock()
+	l := v.parts[hash]
+	if l == nil {
+		l = &partLock{}
+		v.parts[hash] = l
+	}
+	l.users++
+	v.partMu.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		v.partMu.Lock()
+		if l.users--; l.users == 0 {
+			delete(v.parts, hash)
+		}
+		v.partMu.Unlock()
+	}
+}
+
+type partLock struct {
+	sync.Mutex
+	users int
+}
+
+// StageBlobAt is StageBlob that can be continued. r holds the content from
+// byte offset on, and the part staged so far must be exactly offset bytes
+// (ErrOffset otherwise; offset 0 starts again). A copy that fails part way
+// keeps what arrived, so the next call carries on from BlobPartSize. When r
+// ends the whole content is checked: a match is staged like StageBlob's, a
+// mismatch throws the part away (ErrHashMismatch), and so does going over max
+// (ErrTooLarge), since neither can be carried on.
+func (v *Vault) StageBlobAt(hash string, offset int64, r io.Reader, max int64) error {
+	if !hashRe.MatchString(hash) {
+		return ErrBadGroup
+	}
+	if offset < 0 || offset > max {
+		return ErrTooLarge
+	}
+	unlock := v.lockPart(hash)
+	defer unlock()
+	part := v.partPath(hash)
+	size, err := atomicfile.Append(part, offset, &io.LimitedReader{R: r, N: max - offset + 1})
+	switch {
+	case errors.Is(err, atomicfile.ErrOffset):
+		return ErrOffset
+	case size > max:
+		os.Remove(part)
+		return ErrTooLarge
+	case err != nil:
+		return err
+	}
+	got, err := hashFile(part)
+	if err != nil {
+		return err
+	}
+	if got != hash {
+		os.Remove(part)
+		return ErrHashMismatch
+	}
+	if err := os.Rename(part, v.blobPath(hash)); err != nil {
+		return err
+	}
+	return fsyncDir(filepath.Dir(part))
 }
 
 // applyStep is one file of a commit: moved from Src (empty for a new file) to
@@ -646,9 +768,9 @@ func (v *Vault) cleanBlobs(now time.Time) (int, error) {
 	}
 	n := 0
 	for _, e := range ents {
-		// Only finished uploads (named by their hash); an upload still being
-		// written has a temporary name.
-		if !hashRe.MatchString(e.Name()) || needed[e.Name()] {
+		// Finished uploads (named by their hash) and parts of unfinished ones
+		// (hash.part); an upload being written in one go has a temporary name.
+		if !hashRe.MatchString(strings.TrimSuffix(e.Name(), ".part")) || needed[e.Name()] {
 			continue
 		}
 		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > StaleBlobAge {
