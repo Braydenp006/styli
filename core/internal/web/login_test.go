@@ -20,7 +20,7 @@ func (e *tenv) as(t *testing.T, session, method, path string, body any) (*http.R
 	c := "Cookie"
 	v := ""
 	if session != "" {
-		v = sessionCookie + "=" + session
+		v = e.cookieName + "=" + session
 	}
 	resp, b := e.req(t, method, path, body, c, v)
 	var m map[string]any
@@ -31,7 +31,7 @@ func (e *tenv) as(t *testing.T, session, method, path string, body any) (*http.R
 func sessionFrom(t *testing.T, resp *http.Response) *http.Cookie {
 	t.Helper()
 	for _, c := range resp.Cookies() {
-		if c.Name == sessionCookie {
+		if c.Name == sessionCookie || c.Name == "__Host-"+sessionCookie {
 			return c
 		}
 	}

@@ -53,6 +53,15 @@ type Deps struct {
 	// call then needs a signed-in browser (see auth). nil on a device, whose
 	// page is for this machine only.
 	Browsers *browsers.List
+	// Names are host names the server may also be reached by, on Addr's
+	// port: the names in its HTTPS certificate.
+	Names []string
+	// LinkHost is the host:port written into sign-in links, the name another
+	// device can reach the atrium by ("" uses the name the request came in on).
+	LinkHost string
+	// CA, if set, is the atrium's own certificate authority, which phones and
+	// laptops install once (served at /ca.crt).
+	CA *CA
 	// Addr is the address the server listens on, for example "127.0.0.1:7878".
 	// Only requests addressed to that port on a loopback name are accepted.
 	Addr string
@@ -71,8 +80,8 @@ func New(d Deps) http.Handler {
 	}
 	s := &server{Deps: d, hosts: map[string]bool{}}
 	_, port, _ := net.SplitHostPort(d.Addr)
-	for _, h := range []string{"127.0.0.1", "localhost", "[::1]"} {
-		s.hosts[h+":"+port] = true
+	for _, h := range append([]string{"127.0.0.1", "localhost", "[::1]"}, d.Names...) {
+		s.hosts[strings.ToLower(h)+":"+port] = true
 	}
 
 	mux := http.NewServeMux()
@@ -172,7 +181,7 @@ func (s *server) guard(next http.Handler) http.Handler {
 			}
 			// A browser always sends Origin on a cross-site write; curl does not.
 			if o := r.Header.Get("Origin"); o != "" {
-				if u, err := url.Parse(o); err != nil || u.Scheme != "http" || strings.ToLower(u.Host) != strings.ToLower(r.Host) {
+				if u, err := url.Parse(o); err != nil || u.Scheme != scheme(r) || strings.ToLower(u.Host) != strings.ToLower(r.Host) {
 					fail(w, http.StatusForbidden, "forbidden_origin", "request came from another origin")
 					return
 				}
@@ -184,6 +193,14 @@ func (s *server) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// scheme is how this request reached the server.
+func scheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // sameSiteOK applies the Fetch Metadata rule described in guard.

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"styli/core/internal/browsers"
 	"styli/core/internal/devices"
@@ -23,17 +27,21 @@ import (
 	"styli/core/internal/store"
 	"styli/core/internal/syncdev"
 	"styli/core/internal/vault"
+	"styli/core/internal/webtls"
 )
 
 type tenv struct {
-	ts     *httptest.Server
-	br     *browsers.List
-	cookie string // the signed-in test browser's session; req sends it unless told not to
-	v      *vault.Vault
-	st     *store.Store
-	set    *settings.Store
-	root   string
-	host   string
+	ts         *httptest.Server
+	br         *browsers.List
+	cookie     string // the signed-in test browser's session; req sends it unless told not to
+	v          *vault.Vault
+	st         *store.Store
+	set        *settings.Store
+	root       string
+	host       string
+	client     *http.Client  // trusts the atrium's CA in an HTTPS env
+	tls        *webtls.Setup // nil for plain http
+	cookieName string
 }
 
 func must[T any](v T, err error) T {
@@ -43,9 +51,18 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-func newEnv(t *testing.T) *tenv {
+func newEnv(t *testing.T) *tenv { return newEnvWith(t, nil) }
+
+// newTLSEnv is an atrium serving HTTPS with its own CA, as on a network. The
+// test's client has installed that CA.
+func newTLSEnv(t *testing.T) *tenv {
 	t.Helper()
-	e := &tenv{root: t.TempDir()}
+	return newEnvWith(t, must(webtls.Load(t.TempDir(), []string{"styli-1a2b3c4d.local", "localhost"}, false, time.Now())))
+}
+
+func newEnvWith(t *testing.T, ts *webtls.Setup) *tenv {
+	t.Helper()
+	e := &tenv{root: t.TempDir(), client: http.DefaultClient, tls: ts, cookieName: sessionCookie}
 	e.v = must(vault.Open(e.root))
 	e.set = must(settings.Open(e.root, t.TempDir()))
 	must(0, e.set.ApplyTo(e.v))
@@ -59,8 +76,22 @@ func newEnv(t *testing.T) *tenv {
 	e.br = must(browsers.Open(e.root))
 	secret, _, _ := e.br.NewLink(browsers.LinkLife)
 	_, e.cookie, _ = e.br.Redeem(secret, "Test browser")
-	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: m, Logf: t.Logf, Addr: e.host, Browsers: e.br})
-	e.ts.Start()
+	d := Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: m, Logf: t.Logf, Addr: e.host, Browsers: e.br}
+	if ts != nil {
+		_, port, _ := net.SplitHostPort(e.host)
+		d.Names, d.LinkHost, d.CA = ts.Names, "styli-1a2b3c4d.local:"+port, &CA{ts.CADER, ts.Fingerprint}
+		e.ts.TLS = &tls.Config{Certificates: []tls.Certificate{ts.Cert}}
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ts.CADER}))
+		e.client = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}}
+		e.cookieName = "__Host-" + sessionCookie
+	}
+	e.ts.Config.Handler = New(d)
+	if ts != nil {
+		e.ts.StartTLS()
+	} else {
+		e.ts.Start()
+	}
 	t.Cleanup(e.ts.Close)
 	return e
 }
@@ -86,7 +117,7 @@ func (e *tenv) req(t *testing.T, method, path string, body any, hdr ...string) (
 		r.Header.Set("Content-Type", "application/json")
 	}
 	if e.cookie != "" {
-		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: e.cookie})
+		r.AddCookie(&http.Cookie{Name: e.cookieName, Value: e.cookie})
 	}
 	for i := 0; i+1 < len(hdr); i += 2 {
 		switch {
@@ -98,7 +129,7 @@ func (e *tenv) req(t *testing.T, method, path string, body any, hdr ...string) (
 			r.Header.Set(hdr[i], hdr[i+1])
 		}
 	}
-	resp, err := http.DefaultClient.Do(r)
+	resp, err := e.client.Do(r)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,6 +46,26 @@ func (s *server) staticRoutes(mux *http.ServeMux) {
 		http.ServeFileFS(w, r, root, "index.html")
 	})
 	mux.Handle("GET /static/", http.FileServerFS(root))
+	mux.HandleFunc("GET /ca.crt", s.caCert)
+}
+
+// CA is the atrium's own certificate authority, for phones to install.
+type CA struct {
+	DER         []byte
+	Fingerprint string // SHA-256, as phones show it: "AB CD …"
+}
+
+// caCert hands out the atrium's CA certificate. It needs no sign-in: a phone
+// installs it before it can reach the atrium without a warning, and a CA
+// certificate is public by nature (the person checks its fingerprint).
+func (s *server) caCert(w http.ResponseWriter, r *http.Request) {
+	if s.CA == nil {
+		fail(w, http.StatusNotFound, "no_ca", "This atrium doesn't use its own certificate.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="styli-atrium.crt"`)
+	w.Write(s.CA.DER)
 }
 
 // render turns a note's Markdown into safe HTML (see mdrender).

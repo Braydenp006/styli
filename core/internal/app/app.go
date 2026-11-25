@@ -4,6 +4,8 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -28,6 +30,7 @@ import (
 	"styli/core/internal/vault"
 	"styli/core/internal/watch"
 	"styli/core/internal/web"
+	"styli/core/internal/webtls"
 )
 
 // DefaultAddr is where the atrium listens unless told otherwise.
@@ -52,24 +55,33 @@ type Config struct {
 	NewBrowserLink bool
 	// BrowserLink, if set, is also given that link (tests sign in with it).
 	BrowserLink func(url string)
+	// HTTPS for the web UI, needed to listen beyond loopback. Without
+	// TLSCert/TLSKey the atrium uses its own certificate authority.
+	TLSCert, TLSKey string
+	WebNames        []string // more names phones reach the atrium by (a VPN name); the first is used in links
+	NewCA           bool     // replace the atrium's certificate authority (every phone installs the new one)
 }
 
-// CheckAddr refuses anything that is not a loopback address. The web API has
-// no login yet, so it must never be reachable from the network.
-func CheckAddr(addr string) error {
+// CheckAddr checks a listen address and says whether it is this machine only
+// (loopback). Anything else is the network, which only an atrium may listen
+// on, and only with HTTPS (see Run). It must be an IP address (0.0.0.0 or ::
+// for every interface), or localhost.
+func CheckAddr(addr string) (loopback bool, err error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("bad address %q: %w", addr, err)
+		return false, fmt.Errorf("bad address %q: %w", addr, err)
+	}
+	if host == "localhost" {
+		return true, nil
 	}
 	if host == "" {
-		return fmt.Errorf("refusing to listen on %q: that is every network interface; use 127.0.0.1", addr)
+		return false, nil // every interface
 	}
-	if host != "localhost" {
-		if ip := net.ParseIP(strings.Trim(host, "[]")); ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("refusing to listen on %q: until login exists the atrium only listens on this machine (127.0.0.1)", addr)
-		}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false, fmt.Errorf("bad address %q: use an IP address, such as 127.0.0.1 for this machine only or 0.0.0.0 for the network", addr)
 	}
-	return nil
+	return ip.IsLoopback(), nil
 }
 
 // Run starts the atrium and blocks until ctx ends, then shuts down cleanly.
@@ -80,8 +92,9 @@ func Run(parent context.Context, cfg Config) error {
 	if cfg.Addr == "" {
 		cfg.Addr = DefaultAddr
 	}
-	if err := CheckAddr(cfg.Addr); err != nil {
-		return err
+	loopback, aerr := CheckAddr(cfg.Addr)
+	if aerr != nil {
+		return aerr
 	}
 	if fi, err := os.Stat(cfg.Vault); err != nil || !fi.IsDir() {
 		return fmt.Errorf("vault folder %q does not exist; create it first", cfg.Vault)
@@ -247,6 +260,62 @@ func Run(parent context.Context, cfg Config) error {
 		}
 	}
 
+	// How the web UI is reached and secured. A device's page is for that
+	// machine alone (it has no sign-in), so it stays on loopback, plain http.
+	// The atrium may listen on the network, but only with HTTPS: its own
+	// certificate authority (see webtls), or a certificate brought with
+	// --tls-cert and --tls-key.
+	if engine != nil && (!loopback || cfg.TLSCert != "" || cfg.TLSKey != "") {
+		return fmt.Errorf("this machine is a device of the atrium at %s: its page is for this machine only, so it listens on 127.0.0.1 without --tls-cert", set.Device().Atrium.Addr)
+	}
+	var webTLS *tls.Config
+	var webCA *web.CA
+	var webNames []string
+	linkName := "" // the name sign-in links use: one another device can reach
+	switch {
+	case cfg.TLSCert != "" || cfg.TLSKey != "":
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+		if err != nil {
+			return fmt.Errorf("--tls-cert and --tls-key: %w", err)
+		}
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return fmt.Errorf("--tls-cert: %w", err)
+		}
+		webNames = append(webNames, leaf.DNSNames...)
+		for _, ip := range leaf.IPAddresses {
+			webNames = append(webNames, hostLiteral(ip))
+		}
+		webTLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+		if len(cfg.WebNames) > 0 {
+			linkName = cfg.WebNames[0]
+		} else if len(leaf.DNSNames) > 0 {
+			linkName = leaf.DNSNames[0]
+		}
+	case !loopback:
+		key, err := devicekey.Load(cfg.ConfigDir)
+		if err != nil {
+			return err
+		}
+		local := "styli-" + key.ID[:8] + ".local" // the name discovery announces
+		setup, err := webtls.Load(cfg.ConfigDir, append([]string{local, "localhost"}, cfg.WebNames...), cfg.NewCA, time.Now())
+		if err != nil {
+			return err
+		}
+		webTLS = &tls.Config{Certificates: []tls.Certificate{setup.Cert}}
+		webCA = &web.CA{DER: setup.CADER, Fingerprint: setup.Fingerprint}
+		webNames = setup.Names
+		linkName = local
+		if len(cfg.WebNames) > 0 {
+			linkName = cfg.WebNames[0]
+		} else if cfg.NoAnnounce || cfg.SyncAddr == "" {
+			cfg.Logf("this atrium does not announce itself, so phones cannot find %s: give it a name they can reach with --web-name", local)
+		}
+	}
+	if webTLS != nil {
+		webTLS.MinVersion = tls.VersionTLS12
+	}
+
 	// The atrium's web UI is for trusted browsers only (see browsers). A
 	// device's page is for that machine alone, until the desktop app replaces it.
 	var brs *browsers.List
@@ -260,29 +329,54 @@ func Run(parent context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("cannot listen on %s (is the atrium already running?): %w", cfg.Addr, err)
 	}
-	if tcp, ok := ln.Addr().(*net.TCPAddr); !ok || !tcp.IP.IsLoopback() {
+	if tcp, ok := ln.Addr().(*net.TCPAddr); !ok || (!tcp.IP.IsLoopback() && webTLS == nil) {
 		ln.Close()
-		return fmt.Errorf("refusing to serve on %s: not a loopback address", ln.Addr())
+		return fmt.Errorf("refusing to serve on %s without HTTPS", ln.Addr())
 	}
 	addr := ln.Addr().String()
+	_, port, _ := net.SplitHostPort(addr)
+	linkHost := ""
+	if linkName != "" {
+		linkHost = net.JoinHostPort(linkName, port)
+	}
+	scheme := "http"
+	if webTLS != nil {
+		scheme = "https"
+	}
 	srv := &http.Server{
-		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair, Devices: devList, Sync: engine, Addr: addr, Browsers: brs}),
+		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Pairing: pair, Devices: devList, Sync: engine, Addr: addr, Browsers: brs,
+			Names: webNames, LinkHost: linkHost, CA: webCA}),
 		// No WriteTimeout: a big PDF must be able to stream.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(ln) }()
-	cfg.Logf("atrium is listening on http://%s", addr)
+	if webTLS != nil {
+		srv.TLSConfig = webTLS
+		go func() { serveErr <- srv.ServeTLS(ln, "", "") }()
+	} else {
+		go func() { serveErr <- srv.Serve(ln) }()
+	}
+	cfg.Logf("atrium is listening on %s://%s", scheme, addr)
+	if linkHost != "" {
+		cfg.Logf("other devices reach it at %s://%s", scheme, linkHost)
+	}
+	if webCA != nil {
+		cfg.Logf("each phone or laptop installs this atrium's certificate once, from %s://%s/ca.crt (it warns that the connection isn't private until then). Check that its SHA-256 fingerprint is:\n\n    %s\n", scheme, linkHost, webCA.Fingerprint)
+	}
 	if brs != nil && (brs.Count() == 0 || cfg.NewBrowserLink) {
 		secret, expires, err := brs.NewLink(browsers.SetupLinkLife)
 		if err != nil {
 			srv.Close()
 			return err
 		}
-		link := web.JoinURL(false, addr, secret)
-		cfg.Logf("to sign in, open this link in a browser on this machine. It works once, until %s:\n\n    %s\n", expires.Local().Format("15:04"), link)
+		host := linkHost
+		if host == "" {
+			host = addr
+		}
+		link := web.JoinURL(webTLS != nil, host, secret)
+		cfg.Logf("to sign in, open this link in a browser. It works once, until %s:\n\n    %s\n", expires.Local().Format("15:04"), link)
 		if cfg.BrowserLink != nil {
 			cfg.BrowserLink(link)
 		}
@@ -306,4 +400,12 @@ func Run(parent context.Context, cfg Config) error {
 		srv.Close()
 	}
 	return nil
+}
+
+// hostLiteral is ip as a Host header writes it ([::1] for IPv6).
+func hostLiteral(ip net.IP) string {
+	if ip.To4() != nil {
+		return ip.String()
+	}
+	return "[" + ip.String() + "]"
 }

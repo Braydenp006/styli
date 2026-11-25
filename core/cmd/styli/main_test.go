@@ -25,7 +25,7 @@ func TestRunCommands(t *testing.T) {
 		"serve no vault":          {[]string{"serve"}, 2, "", "--vault is required"},
 		"serve bad flag":          {[]string{"serve", "--nope"}, 2, "", "flag provided but not defined"},
 		"serve missing vault dir": {[]string{"serve", "--vault", "/definitely/not/here"}, 1, "", "does not exist"},
-		"serve public address":    {[]string{"serve", "--vault", t.TempDir(), "--addr", "0.0.0.0:7878"}, 1, "", "refusing to listen"},
+		"serve bad address":       {[]string{"serve", "--vault", t.TempDir(), "--addr", "example.com:7878"}, 1, "", "bad address"},
 	} {
 		var out, errb bytes.Buffer
 		if code := run(c.args, &out, &errb); code != c.code ||

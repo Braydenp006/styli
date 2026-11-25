@@ -16,9 +16,17 @@ import (
 
 // sessionCookie carries a trusted browser's session secret. HttpOnly keeps it
 // from the page's scripts, SameSite=Strict from requests other sites start.
-// shortcut: on plain http (loopback, phase 2 round 1) it cannot be Secure or
-// __Host-; with HTTPS (round 2) it becomes __Host-styli_session, Secure.
+// Over HTTPS it is __Host-styli_session and Secure: never sent without TLS,
+// and only to this exact host. Plain http is loopback only, where neither can
+// be set.
 const sessionCookie = "styli_session"
+
+func cookieName(r *http.Request) string {
+	if r.TLS != nil {
+		return "__Host-" + sessionCookie
+	}
+	return sessionCookie
+}
 
 // Failed joins (an unknown, used or expired link) allowed per minute, from
 // anyone, before joining is refused for a while. A link is 256 random bits, so
@@ -51,7 +59,7 @@ func (s *server) auth(next http.Handler) http.Handler {
 			return
 		}
 		var secret string
-		if c, err := r.Cookie(sessionCookie); err == nil {
+		if c, err := r.Cookie(cookieName(r)); err == nil {
 			secret = c.Value
 		}
 		b, renewed, ok := s.Browsers.Check(secret)
@@ -67,12 +75,12 @@ func (s *server) auth(next http.Handler) http.Handler {
 }
 
 func setSession(w http.ResponseWriter, r *http.Request, secret string) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: secret, Path: "/", MaxAge: int(browsers.SessionLife.Seconds()),
+	http.SetCookie(w, &http.Cookie{Name: cookieName(r), Value: secret, Path: "/", MaxAge: int(browsers.SessionLife.Seconds()),
 		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
 }
 
 func clearSession(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
+	http.SetCookie(w, &http.Cookie{Name: cookieName(r), Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
 }
 
@@ -198,13 +206,28 @@ func (s *server) newBrowserLink(w http.ResponseWriter, r *http.Request) {
 		s.failErr(w, err)
 		return
 	}
-	url := JoinURL(r.TLS != nil, r.Host, secret)
+	host := s.LinkHost
+	if host == "" {
+		host = r.Host
+	}
+	url := JoinURL(r.TLS != nil, host, secret)
 	svg, err := qrSVG(url)
 	if err != nil {
 		s.failErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"url": url, "qr_svg": svg, "expires_at": expires})
+	out := map[string]any{"url": url, "qr_svg": svg, "expires_at": expires}
+	if s.CA != nil {
+		// The other device installs the atrium's certificate first, once.
+		caURL := scheme(r) + "://" + host + "/ca.crt"
+		caSVG, err := qrSVG(caURL)
+		if err != nil {
+			s.failErr(w, err)
+			return
+		}
+		out["ca"] = map[string]any{"url": caURL, "qr_svg": caSVG, "fingerprint": s.CA.Fingerprint}
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 func (s *server) removeBrowser(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +249,7 @@ func (s *server) removeBrowser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"browsers": s.browserList(r), "signed_out": self})
 }
 
-// JoinURL is the address a new browser opens. The secret is in the part after
+// JoinURL is the address a new browser opens (https is how it reaches the atrium). The secret is in the part after
 // "#", which browsers never send to a server, so it stays out of logs and
 // Referer headers; the page reads it and posts it.
 func JoinURL(https bool, host, secret string) string {

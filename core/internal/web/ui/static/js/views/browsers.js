@@ -53,8 +53,8 @@ export function browsersCard() {
     const until = new Date(link.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const url = h("input", { class: "sty-input", id: "join-url", type: "text", value: link.url, readonly: true, onfocus: (e) => e.target.select() });
     const here = loopback.has(new URL(link.url).hostname);
-    setChildren(body, h("div", { class: "join-link" },
-      h("img", { class: "join-qr", src: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(link.qr_svg), alt: "QR code of the sign-in link", width: "200", height: "200" }),
+    const signIn = h("div", { class: "join-link" },
+      qr(link.qr_svg, "QR code of the sign-in link"),
       h("div", { class: "grow" },
         h("p", {}, "Scan the code with the other device's camera, or open the link in the browser you're adding."),
         h("label", { class: "sty-field", for: "join-url" }, h("span", {}, "Sign-in link"), url),
@@ -62,7 +62,29 @@ export function browsersCard() {
         here ? h("p", { class: "hint" }, "For now this atrium can only be reached from this computer, so the link only works in a browser here.") : null,
         h("div", { class: "banner-actions" },
           button("Copy link", "secondary", () => copy(link.url, url)),
-          button("Done", "ghost", load)))));
+          button("Done", "ghost", load))));
+    if (!link.ca) return setChildren(body, signIn);
+    // The atrium is its own certificate authority: the other device installs
+    // its certificate first (once), then signs in.
+    setChildren(body,
+      h("h3", {}, "1. Install this atrium's certificate"),
+      h("div", { class: "join-link" },
+        qr(link.ca.qr_svg, "QR code of the certificate download"),
+        h("div", { class: "grow" },
+          h("p", {}, "Do this once on each phone or laptop, so it trusts this atrium. Scan the code, or open ", h("code", {}, link.ca.url), ". Until the certificate is installed the browser warns that the connection isn't private; that is expected here, so continue to the page."),
+          h("p", {}, "Before you trust the certificate, check that its SHA-256 fingerprint is exactly this:"),
+          h("p", { class: "fingerprint" }, link.ca.fingerprint),
+          h("details", { class: "how-to" },
+            h("summary", {}, "How to install it"),
+            h("p", {}, h("strong", {}, "iPhone or iPad: "), "allow the download, then open Settings, General, VPN & Device Management, choose the Styli atrium profile and install it (its fingerprint is under More Details). Then open Settings, General, About, Certificate Trust Settings, and turn on full trust for it."),
+            h("p", {}, h("strong", {}, "Android: "), "open Settings, search for “CA certificate”, choose Install, and pick the downloaded file."),
+            h("p", {}, h("strong", {}, "Mac: "), "open the downloaded file, then in Keychain Access set the certificate to Always Trust. ", h("strong", {}, "Windows: "), "open the file and install it in Trusted Root Certification Authorities. ", h("strong", {}, "Linux: "), "add it to the system's or the browser's trusted certificates.")))),
+      h("h3", {}, "2. Sign in"),
+      signIn);
+  }
+
+  function qr(svg, alt) {
+    return h("img", { class: "join-qr", src: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg), alt, width: "200", height: "200" });
   }
 
   async function copy(text, input) {

@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net"
@@ -18,24 +20,34 @@ import (
 	"styli/core/internal/discovery"
 	"styli/core/internal/settings"
 	"styli/core/internal/vault"
+	"styli/core/internal/webtls"
 )
 
-func TestCheckAddrOnlyAllowsLoopback(t *testing.T) {
-	for addr, ok := range map[string]bool{
-		"127.0.0.1:7878": true, "localhost:7878": true, "[::1]:7878": true, "127.0.0.2:80": true, "127.0.0.1:0": true,
-		"0.0.0.0:7878": false, ":7878": false, "[::]:7878": false, "192.168.1.5:7878": false, "10.0.0.1:1": false,
-		"example.com:80": false, "8.8.8.8:53": false, "localhost": false, "": false, "nonsense": false, "127.0.0.1": false,
+func TestCheckAddrTellsLoopbackFromTheNetwork(t *testing.T) {
+	const bad, network, here = 0, 1, 2
+	for addr, want := range map[string]int{
+		"127.0.0.1:7878": here, "localhost:7878": here, "[::1]:7878": here, "127.0.0.2:80": here, "127.0.0.1:0": here,
+		"0.0.0.0:7878": network, ":7878": network, "[::]:7878": network, "192.168.1.5:7878": network, "10.0.0.1:1": network,
+		"example.com:80": bad, "localhost": bad, "": bad, "nonsense": bad, "127.0.0.1": bad,
 	} {
-		if err := CheckAddr(addr); (err == nil) != ok {
-			t.Errorf("%q: %v", addr, err)
+		loopback, err := CheckAddr(addr)
+		got := network
+		switch {
+		case err != nil:
+			got = bad
+		case loopback:
+			got = here
+		}
+		if got != want {
+			t.Errorf("%q: loopback %v, err %v", addr, loopback, err)
 		}
 	}
 }
 
 func TestRefusedBeforeTouchingTheVault(t *testing.T) {
 	vaultDir := t.TempDir()
-	err := Run(context.Background(), Config{Vault: vaultDir, Addr: "0.0.0.0:0", DataDir: t.TempDir(), ConfigDir: t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "refusing") {
+	err := Run(context.Background(), Config{Vault: vaultDir, Addr: "example.com:0", DataDir: t.TempDir(), ConfigDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "bad address") {
 		t.Fatalf("got %v", err)
 	}
 	if ents, _ := os.ReadDir(vaultDir); len(ents) != 0 {
@@ -360,4 +372,121 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// A device's page has no sign-in, so it never leaves this machine.
+func TestADeviceStaysOnThisMachine(t *testing.T) {
+	vaultDir, cfgDir := t.TempDir(), t.TempDir()
+	set := must(settings.Open(vaultDir, cfgDir))
+	must(0, set.SetAtrium(&settings.AtriumLink{ID: strings.Repeat("a", 64), Addr: "127.0.0.1:1", PairedAt: time.Now()}))
+	for name, c := range map[string]Config{
+		"on the network":     {Addr: "0.0.0.0:0"},
+		"with a certificate": {Addr: "127.0.0.1:0", TLSCert: "x.crt", TLSKey: "x.key"},
+	} {
+		c.Vault, c.DataDir, c.ConfigDir, c.Logf = vaultDir, t.TempDir(), cfgDir, t.Logf
+		// A refusal returns at once; a device that started would run until this deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := Run(ctx, c); err == nil || !strings.Contains(err.Error(), "device") {
+			t.Errorf("%s: %v", name, err)
+		}
+		cancel()
+	}
+}
+
+// start runs an atrium until the test ends and returns its address and the
+// sign-in link it printed.
+func start(t *testing.T, c Config) (addr, link string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	addrCh, done := make(chan string, 1), make(chan error, 1)
+	c.Logf, c.DataDir = t.Logf, t.TempDir()
+	c.Ready = func(a string) { addrCh <- a }
+	c.BrowserLink = func(l string) { link = l }
+	go func() { done <- Run(ctx, c) }()
+	select {
+	case addr = <-addrCh:
+	case err := <-done:
+		t.Fatalf("stopped: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("did not start")
+	}
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	return addr, link
+}
+
+// httpsClient trusts the CA in pemFile, as a phone that installed it would.
+func httpsClient(t *testing.T, pemFile string) *http.Client {
+	t.Helper()
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(must(os.ReadFile(pemFile))) {
+		t.Fatalf("no certificate in %s", pemFile)
+	}
+	jar, _ := cookiejar.New(nil)
+	return &http.Client{Jar: jar, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}}
+}
+
+// On the network the atrium serves HTTPS with its own CA: a browser that
+// installed the CA signs in and works, plain http gets nothing, and links name
+// the atrium the way other devices reach it.
+func TestAnAtriumOnTheNetworkServesHTTPSWithItsOwnCA(t *testing.T) {
+	cfgDir := t.TempDir()
+	addr, link := start(t, Config{Vault: t.TempDir(), ConfigDir: cfgDir, Addr: "0.0.0.0:0", SyncAddr: "", WebNames: []string{"notes.example.ts.net"}})
+	_, port, _ := net.SplitHostPort(addr)
+	if !strings.HasPrefix(link, "https://notes.example.ts.net:"+port+"/#/join/") {
+		t.Fatalf("link %q", link)
+	}
+	c := httpsClient(t, filepath.Join(cfgDir, "web-ca.crt"))
+	base := "https://localhost:" + port // a name in the certificate that resolves here
+
+	resp := must(c.Get(base + "/ca.crt"))
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("ca.crt: %d", resp.StatusCode)
+	}
+	_, token, _ := strings.Cut(link, "/#/join/")
+	resp = must(c.Post(base+"/api/join", "application/json", strings.NewReader(`{"token":"`+token+`","name":"Phone"}`)))
+	resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("join over https: %d", resp.StatusCode)
+	}
+	resp = must(c.Get(base + "/api/status"))
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("signed in over https: %d", resp.StatusCode)
+	}
+	// A browser that has not installed the CA is warned (here: refused).
+	if _, err := (&http.Client{}).Get(base + "/"); err == nil {
+		t.Fatal("a browser without the CA connected without a warning")
+	}
+	// Plain http on the same port gets no page.
+	if resp, err := http.Get("http://127.0.0.1:" + port + "/"); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			t.Fatal("plain http served the page")
+		}
+	}
+}
+
+// --tls-cert and --tls-key bring a certificate from elsewhere (tailscale cert,
+// a domain): HTTPS without the atrium's own CA.
+func TestYourOwnCertificate(t *testing.T) {
+	certDir := t.TempDir()
+	must(webtls.Load(certDir, []string{"localhost"}, false, time.Now())) // stands in for a certificate made elsewhere
+	addr, link := start(t, Config{Vault: t.TempDir(), ConfigDir: t.TempDir(), Addr: "127.0.0.1:0",
+		TLSCert: filepath.Join(certDir, "web.crt"), TLSKey: filepath.Join(certDir, "web.key")})
+	_, port, _ := net.SplitHostPort(addr)
+	if !strings.HasPrefix(link, "https://localhost:"+port+"/#/join/") {
+		t.Fatalf("link %q", link)
+	}
+	c := httpsClient(t, filepath.Join(certDir, "web-ca.crt"))
+	resp := must(c.Get("https://localhost:" + port + "/ca.crt"))
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("an atrium with your own certificate offered a CA: %d", resp.StatusCode)
+	}
 }
