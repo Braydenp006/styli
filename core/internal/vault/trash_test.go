@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -183,7 +184,7 @@ func TestPurgeRemovesOnlyOldEntries(t *testing.T) {
 	v.Trash(fresh.ID)
 	age(t, v, old.ID, 40*24*time.Hour)
 
-	n, err := v.Purge(time.Now().Add(-30 * 24 * time.Hour))
+	n, err := purge(v, time.Now().Add(-30*24*time.Hour))
 	if err != nil || n != 1 {
 		t.Fatalf("purged %d, %v", n, err)
 	}
@@ -197,7 +198,7 @@ func TestPurgeRemovesOnlyOldEntries(t *testing.T) {
 	if b, _, err := v.ReadNote(live.ID); err != nil || string(b) != "live" || !exists(root, "c/live.md") {
 		t.Fatal("purge touched the live vault")
 	}
-	if n, _ := v.Purge(time.Now().Add(-30 * 24 * time.Hour)); n != 0 {
+	if n, _ := purge(v, time.Now().Add(-30*24*time.Hour)); n != 0 {
 		t.Fatalf("second purge removed %d", n)
 	}
 }
@@ -209,7 +210,7 @@ func TestPurgeSkipsEntryThatIsAlsoLive(t *testing.T) {
 	rec, _ := v.readTrash(g.ID)
 	v.save(rec.Group) // interrupted Trash: live record plus trash entry
 	age(t, v, g.ID, 90*24*time.Hour)
-	if n, err := v.Purge(time.Now()); n != 0 || err != nil {
+	if n, err := purge(v, time.Now()); n != 0 || err != nil {
 		t.Fatalf("purged %d, %v", n, err)
 	}
 	if err := v.Restore(g.ID, ""); err != nil || !exists(root, "a/n.md") {
@@ -232,10 +233,49 @@ func TestTrashBadIDsAndStrayFolders(t *testing.T) {
 	if tr, err := v.ListTrash(); err != nil || len(tr) != 0 {
 		t.Fatalf("%+v %v", tr, err)
 	}
-	if n, err := v.Purge(time.Now()); err != nil || n != 0 {
+	if n, err := purge(v, time.Now()); err != nil || n != 0 {
 		t.Fatalf("%d %v", n, err)
 	}
 	if !exists(root, ".ids/trash/not-an-id/files") {
 		t.Fatal("purge deleted a folder that is not a trash entry")
+	}
+}
+
+// purge and prune keep the older (count, error) shape for these tests.
+func purge(v *Vault, before time.Time) (int, error) {
+	ids, _, err := v.Purge(before, false)
+	return len(ids), err
+}
+
+func prune(v *Vault, dryRun bool) (int, error) {
+	n, _, err := v.PruneHistory(v.now(), dryRun)
+	return n, err
+}
+
+func TestPurgeDryRunAndTotals(t *testing.T) {
+	v, _ := open(t)
+	a := must(v.CreateNote("a.md", []byte("a")))
+	b := must(v.CreateNote("b.md", []byte("b")))
+	c := must(v.CreateNote("c.md", []byte("c")))
+	for _, g := range []Group{a, b, c} {
+		v.Trash(g.ID)
+	}
+	age(t, v, a.ID, 40*24*time.Hour)
+	age(t, v, b.ID, 40*24*time.Hour)
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+
+	ids, total, err := v.Purge(cutoff, true)
+	if len(ids) != 2 || total != 3 || err != nil {
+		t.Fatalf("dry run: %v of %d, %v", ids, total, err)
+	}
+	if len(must(v.ListTrash())) != 3 {
+		t.Fatal("dry run deleted something")
+	}
+	got, total, _ := v.Purge(cutoff, false)
+	if !reflect.DeepEqual(got, ids) || total != 3 {
+		t.Fatalf("purged %v of %d, dry run said %v", got, total, ids)
+	}
+	if tr := must(v.ListTrash()); len(tr) != 1 || tr[0].Group.ID != c.ID {
+		t.Fatalf("left: %+v", tr)
 	}
 }

@@ -239,18 +239,19 @@ func (v *Vault) Restore(id, folder string) error {
 	return nil
 }
 
-// Purge permanently deletes trash entries deleted before the given time and
-// returns how many it removed. It deletes only inside .ids/trash/<id>/, skips
-// any entry whose note is also live (an interrupted Trash), and removes files
+// Purge permanently deletes trash entries deleted before the given time. It
+// returns the IDs it removed and how many entries the trash held in total.
+// With dryRun it deletes nothing and returns the IDs it would remove. It
+// deletes only inside .ids/trash/<id>/ (and that note's history), skips any
+// entry whose note is also live (an interrupted Trash), and removes files
 // before the record so an interruption just means the next Purge finishes.
-func (v *Vault) Purge(before time.Time) (int, error) {
+func (v *Vault) Purge(before time.Time, dryRun bool) (purged []string, total int, err error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	ids, err := v.trashIDs()
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
-	n := 0
 	var errs []error
 	for _, id := range ids {
 		r, err := v.readTrash(id)
@@ -261,10 +262,15 @@ func (v *Vault) Purge(before time.Time) (int, error) {
 			errs = append(errs, err)
 			continue
 		}
+		total++
 		if !r.DeletedAt.Before(before) {
 			continue
 		}
 		if _, err := os.Lstat(filepath.Join(v.root, idsDir, id)); err == nil {
+			continue
+		}
+		if dryRun {
+			purged = append(purged, id)
 			continue
 		}
 		tdir := v.trashPath(id)
@@ -281,7 +287,7 @@ func (v *Vault) Purge(before time.Time) (int, error) {
 			continue
 		}
 		os.Remove(tdir)
-		n++
+		purged = append(purged, id)
 	}
-	return n, errors.Join(errs...)
+	return purged, total, errors.Join(errs...)
 }

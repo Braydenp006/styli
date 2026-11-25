@@ -145,15 +145,17 @@ func (v *Vault) RestoreVersion(id, versionID, base string) (string, error) {
 	return v.writeNote(id, text, base, true)
 }
 
-// snapshot saves a version (see saveVersion), then prunes the note's history
-// under the current policy. Pruning is best effort: if it fails the save still
-// stands, and the next PruneHistory reports the problem.
+// snapshot saves a version (see saveVersion), then applies the count limit to
+// the note's history. Only the count limit runs here: the age and per-period
+// limits depend on the clock, so they run only in PruneHistory, which the maid
+// calls behind its safety checks. Pruning here is best effort: if it fails the
+// save still stands, and the next PruneHistory reports the problem.
 func (v *Vault) snapshot(g Group, content []byte, seed *historySeed, force bool) error {
 	if err := v.saveVersion(g, content, seed, force); err != nil {
 		return err
 	}
-	if v.historyFor(g) {
-		v.pruneDir(v.historyPath(g.ID), v.now(), false)
+	if v.historyFor(g) && v.historyPolicy.MaxVersions > 0 {
+		v.pruneDir(v.historyPath(g.ID), HistoryPolicy{MaxVersions: v.historyPolicy.MaxVersions}, v.now(), false)
 	}
 	return nil
 }
@@ -301,36 +303,37 @@ func (v *Vault) SetHistoryPolicy(p HistoryPolicy) error {
 	return nil
 }
 
-// PruneHistory applies the policy to every note's history and returns how many
-// versions it deleted. With dryRun it deletes nothing and returns how many it
-// would delete. Run it daily: the per-period rule needs it for notes nobody is
-// editing. Trashed notes are skipped (Purge deletes their history).
-func (v *Vault) PruneHistory(dryRun bool) (int, error) {
+// PruneHistory applies the whole policy to every note's history, with now as
+// the current time (the maid passes the time it has checked). It returns how
+// many versions it deleted and how many versions there were in total. With
+// dryRun it deletes nothing and returns how many it would delete. Trashed
+// notes are skipped (Purge deletes their history).
+func (v *Vault) PruneHistory(now time.Time, dryRun bool) (deleted, total int, err error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	groups, err := v.list()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	total := 0
 	var errs []error
 	for _, g := range groups {
-		n, err := v.pruneDir(v.historyPath(g.ID), v.now(), dryRun)
-		total += n
+		n, t, err := v.pruneDir(v.historyPath(g.ID), v.historyPolicy, now, dryRun)
+		deleted += n
+		total += t
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return total, errors.Join(errs...)
+	return deleted, total, errors.Join(errs...)
 }
 
-// pruneDir applies the policy to one note's history folder. It only ever
-// removes version files (<13 digits>.gz) inside dir.
-func (v *Vault) pruneDir(dir string, now time.Time, dryRun bool) (int, error) {
-	p := v.historyPolicy
+// pruneDir applies policy p to one note's history folder and returns how many
+// versions it deleted (or would delete, with dryRun) and how many there were.
+// It only ever removes version files (<13 digits>.gz) inside dir.
+func (v *Vault) pruneDir(dir string, p HistoryPolicy, now time.Time, dryRun bool) (int, int, error) {
 	vs, err := listVersions(dir) // oldest first
 	if err != nil || len(vs) < 2 {
-		return 0, err
+		return 0, len(vs), err
 	}
 	newest := len(vs) - 1
 	drop := make([]bool, len(vs))
@@ -384,7 +387,7 @@ func (v *Vault) pruneDir(dir string, now time.Time, dryRun bool) (int, error) {
 		}
 		n++
 	}
-	return n, errors.Join(errs...)
+	return n, len(vs), errors.Join(errs...)
 }
 
 // periodStart is the start of the day, week (Monday) or month containing t, in

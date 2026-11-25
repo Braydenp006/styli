@@ -30,7 +30,8 @@ func ptr(n int) *int { return &n }
 
 func TestDefaultsWhenNoFilesAndNothingIsWritten(t *testing.T) {
 	s, root, dev := open(t)
-	want := Hub{History: History{On: true, WindowMinutes: 30}, TrashRetentionDays: 30}
+	want := Hub{History: History{On: true, WindowMinutes: 30}, TrashRetentionDays: 30,
+		TimeCheck: TimeCheck{On: false, Server: "pool.ntp.org"}}
 	if got := s.Hub(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
 	}
@@ -89,6 +90,9 @@ func TestInvalidValuesAreRejectedAndWriteNothing(t *testing.T) {
 		"per period no period": bad(func(h *Hub) { h.History.PerPeriod = 1 }),
 		"bad period":           bad(func(h *Hub) { h.History.PerPeriod = 1; h.History.Period = "year" }),
 		"negative retention":   bad(func(h *Hub) { h.TrashRetentionDays = -5 }),
+		"time check no server": bad(func(h *Hub) { h.TimeCheck = TimeCheck{On: true} }),
+		"time server spaces":   bad(func(h *Hub) { h.TimeCheck.Server = "pool ntp org" }),
+		"time server url":      bad(func(h *Hub) { h.TimeCheck.Server = "http://x/y" }),
 	} {
 		if err := s.SetHub(h); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
@@ -252,5 +256,21 @@ func TestDeviceDirIsStablePerVault(t *testing.T) {
 	b, _ := DeviceDir("/x/other")
 	if a1 != a2 || a1 == b {
 		t.Fatalf("%q %q %q", a1, a2, b)
+	}
+}
+
+func TestTimeServerForms(t *testing.T) {
+	s, _, _ := open(t)
+	for _, srv := range []string{"pool.ntp.org", "time.local:123", "192.168.1.1", "::1", "[fe80::1]:123"} {
+		h := DefaultHub()
+		h.TimeCheck = TimeCheck{On: true, Server: srv}
+		if err := s.SetHub(h); err != nil {
+			t.Errorf("%q: %v", srv, err)
+		}
+	}
+	h := DefaultHub()
+	h.TimeCheck = TimeCheck{On: false, Server: ""} // empty is fine while off
+	if err := s.SetHub(h); err != nil {
+		t.Fatal(err)
 	}
 }

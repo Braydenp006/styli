@@ -205,7 +205,7 @@ func TestPurgeRemovesHistory(t *testing.T) {
 	keep := must(v.CreateNote("keep.md", []byte("keep")))
 	v.Trash(g.ID)
 	age(t, v, g.ID, 90*24*time.Hour)
-	if n, err := v.Purge(time.Now().Add(-time.Hour)); n != 1 || err != nil {
+	if n, err := purge(v, time.Now().Add(-time.Hour)); n != 1 || err != nil {
 		t.Fatalf("%d %v", n, err)
 	}
 	if _, err := os.Stat(v.historyPath(g.ID)); !os.IsNotExist(err) {
@@ -325,15 +325,15 @@ func TestMaxAgeDropsOldVersionsAndDryRunDeletesNothing(t *testing.T) {
 	g := noteWithVersions(t, v, clock, day(2026, 1, 1, 0), "a", day(2026, 1, 2, 0), "b", day(2026, 1, 3, 0), "c", day(2026, 1, 4, 0), "d")
 	*clock = day(2026, 1, 4, 8) // a is 80h old, b 56h, c 32h
 	setPolicy(t, v, HistoryPolicy{MaxAge: 36 * time.Hour})
-	if n, err := v.PruneHistory(true); n != 2 || err != nil {
+	if n, err := prune(v, true); n != 2 || err != nil {
 		t.Fatalf("dry run: %d %v", n, err)
 	}
 	eq(t, versions(t, v, g.ID), "d", "c", "b", "a")
-	if n, err := v.PruneHistory(false); n != 2 || err != nil {
+	if n, err := prune(v, false); n != 2 || err != nil {
 		t.Fatalf("prune: %d %v", n, err)
 	}
 	eq(t, versions(t, v, g.ID), "d", "c")
-	if n, _ := v.PruneHistory(false); n != 0 {
+	if n, _ := prune(v, false); n != 0 {
 		t.Fatalf("second prune deleted %d", n)
 	}
 }
@@ -344,7 +344,7 @@ func TestNewestVersionIsNeverPruned(t *testing.T) {
 	g := noteWithVersions(t, v, clock, day(2026, 1, 1, 9), "only")
 	*clock = day(2026, 6, 1, 9)
 	setPolicy(t, v, HistoryPolicy{MaxAge: time.Hour, MaxVersions: 1, PerPeriod: 1, Period: PeriodDay})
-	if n, _ := v.PruneHistory(false); n != 0 {
+	if n, _ := prune(v, false); n != 0 {
 		t.Fatalf("deleted %d", n)
 	}
 	eq(t, versions(t, v, g.ID), "only")
@@ -357,14 +357,14 @@ func TestOneVersionPerDayThinsFinishedDaysOnly(t *testing.T) {
 		day(2026, 1, 2, 9), "b1", day(2026, 1, 2, 15), "b2")
 	*clock = day(2026, 1, 2, 20) // Jan 2 is still today
 	setPolicy(t, v, HistoryPolicy{PerPeriod: 1, Period: PeriodDay})
-	if n, _ := v.PruneHistory(true); n != 2 {
+	if n, _ := prune(v, true); n != 2 {
 		t.Fatalf("dry run counted %d", n)
 	}
-	v.PruneHistory(false)
+	prune(v, false)
 	eq(t, versions(t, v, g.ID), "b2", "b1", "a3") // yesterday: its last state; today: untouched
 
 	*clock = day(2026, 1, 3, 8) // the day after: today's versions are thinned too
-	v.PruneHistory(false)
+	prune(v, false)
 	eq(t, versions(t, v, g.ID), "b2", "a3")
 }
 
@@ -374,7 +374,7 @@ func TestPerPeriodCountAndASingleBusyDay(t *testing.T) {
 	g := noteWithVersions(t, v, clock, day(2026, 1, 1, 10), "a1", day(2026, 1, 1, 12), "a2", day(2026, 1, 1, 18), "a3")
 	*clock = day(2026, 1, 9, 8)
 	setPolicy(t, v, HistoryPolicy{PerPeriod: 2, Period: PeriodDay})
-	v.PruneHistory(false)
+	prune(v, false)
 	eq(t, versions(t, v, g.ID), "a3", "a2")
 }
 
@@ -384,7 +384,7 @@ func TestWeeklyThinning(t *testing.T) {
 	g := noteWithVersions(t, v, clock, day(2026, 1, 5, 9), "w1a", day(2026, 1, 7, 9), "w1b", day(2026, 1, 9, 9), "w1c", day(2026, 1, 12, 9), "w2a")
 	*clock = day(2026, 1, 13, 9) // Mondays are Jan 5 and Jan 12
 	setPolicy(t, v, HistoryPolicy{PerPeriod: 1, Period: PeriodWeek})
-	v.PruneHistory(false)
+	prune(v, false)
 	eq(t, versions(t, v, g.ID), "w2a", "w1c")
 }
 
@@ -394,7 +394,7 @@ func TestMonthlyThinningAcrossNewYear(t *testing.T) {
 	g := noteWithVersions(t, v, clock, day(2025, 12, 10, 9), "d1", day(2025, 12, 20, 9), "d2", day(2026, 1, 3, 9), "j1")
 	*clock = day(2026, 1, 20, 9)
 	setPolicy(t, v, HistoryPolicy{PerPeriod: 1, Period: PeriodMonth})
-	v.PruneHistory(false)
+	prune(v, false)
 	eq(t, versions(t, v, g.ID), "j1", "d2")
 }
 
@@ -405,7 +405,7 @@ func TestDaysFollowTheVaultTimeZone(t *testing.T) {
 	g := noteWithVersions(t, v, clock, time.Date(2026, 1, 1, 20, 0, 0, 0, time.UTC), "x1", time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC), "x2")
 	*clock = day(2026, 1, 5, 9)
 	setPolicy(t, v, HistoryPolicy{PerPeriod: 1, Period: PeriodDay})
-	v.PruneHistory(false)
+	prune(v, false)
 	eq(t, versions(t, v, g.ID), "x2")
 }
 
@@ -416,7 +416,7 @@ func TestLimitsCombine(t *testing.T) {
 		day(2026, 1, 2, 15), "b2", day(2026, 1, 3, 9), "c1")
 	*clock = day(2026, 1, 3, 12)
 	setPolicy(t, v, HistoryPolicy{PerPeriod: 1, Period: PeriodDay, MaxVersions: 2})
-	v.PruneHistory(false) // thinning leaves a2, b2, c1; the count limit then drops a2
+	prune(v, false) // thinning leaves a2, b2, c1; the count limit then drops a2
 	eq(t, versions(t, v, g.ID), "c1", "b2")
 }
 
@@ -431,7 +431,7 @@ func TestPruningLeavesEverythingElseAlone(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".styli-tmp-1"), []byte("half"), 0o600)
 	*clock = day(2026, 6, 1, 9)
 	setPolicy(t, v, HistoryPolicy{MaxAge: time.Hour, MaxVersions: 1})
-	if n, err := v.PruneHistory(false); n != 1 || err != nil {
+	if n, err := prune(v, false); n != 1 || err != nil {
 		t.Fatalf("%d %v", n, err)
 	}
 	for _, f := range []string{"notes.txt", ".styli-tmp-1"} {
@@ -452,7 +452,7 @@ func TestRestoreStillWorksAfterPruning(t *testing.T) {
 	clock := fakeClock(v)
 	g := noteWithVersions(t, v, clock, day(2026, 1, 1, 9), "a", day(2026, 1, 2, 9), "b", day(2026, 1, 3, 9), "c")
 	setPolicy(t, v, HistoryPolicy{MaxVersions: 2})
-	v.PruneHistory(false)
+	prune(v, false)
 	vs := must(v.History(g.ID))
 	_, base, _ := v.ReadNote(g.ID)
 	if _, err := v.RestoreVersion(g.ID, vs[1].ID, base); err != nil { // "b"
@@ -483,8 +483,40 @@ func TestNothingIsPrunedByDefault(t *testing.T) {
 	clock := fakeClock(v)
 	g := noteWithVersions(t, v, clock, day(2020, 1, 1, 9), "a", day(2021, 1, 1, 9), "b", day(2022, 1, 1, 9), "c")
 	*clock = day(2030, 1, 1, 9)
-	if n, _ := v.PruneHistory(false); n != 0 {
+	if n, _ := prune(v, false); n != 0 {
 		t.Fatalf("deleted %d with no policy set", n)
 	}
 	eq(t, versions(t, v, g.ID), "c", "b", "a")
+}
+
+func TestSavingAppliesOnlyTheCountLimit(t *testing.T) {
+	v, _ := open(t)
+	clock := fakeClock(v)
+	g := noteWithVersions(t, v, clock, day(2026, 1, 1, 9), "a1", day(2026, 1, 1, 12), "a2", day(2026, 1, 2, 9), "b")
+	// Age and per-day limits depend on the clock: saving must not apply them,
+	// even with the clock far ahead. Only the maid (PruneHistory) does.
+	setPolicy(t, v, HistoryPolicy{MaxAge: time.Hour, PerPeriod: 1, Period: PeriodDay})
+	*clock = day(2099, 1, 1, 9)
+	write2(t, v, g.ID, "c")
+	eq(t, versions(t, v, g.ID), "c", "b", "a2", "a1")
+
+	setPolicy(t, v, HistoryPolicy{MaxVersions: 2}) // the count limit does apply on save
+	write2(t, v, g.ID, "d")
+	eq(t, versions(t, v, g.ID), "d", "c")
+}
+
+func TestPruneHistoryReportsTotals(t *testing.T) {
+	v, _ := open(t)
+	clock := fakeClock(v)
+	noteWithVersions(t, v, clock, day(2026, 1, 1, 9), "a", day(2026, 1, 2, 9), "b", day(2026, 1, 3, 9), "c")
+	must(v.CreateNote("other.md", []byte("x"))) // one more version
+	setPolicy(t, v, HistoryPolicy{MaxVersions: 1})
+	n, total, err := v.PruneHistory(v.now(), true)
+	if n != 2 || total != 4 || err != nil {
+		t.Fatalf("dry run: %d of %d, %v", n, total, err)
+	}
+	n, total, _ = v.PruneHistory(v.now(), false)
+	if n != 2 || total != 4 {
+		t.Fatalf("prune: %d of %d", n, total)
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -43,11 +44,23 @@ type History struct {
 	Period        string `json:"period,omitempty"` // "day", "week" or "month"
 }
 
+// TimeCheck asks a time server whether this machine's clock is right before
+// the maid deletes anything. Off by default: it is a call to an outside
+// server (it sends no notes, only reveals that this address asked the time).
+type TimeCheck struct {
+	On     bool   `json:"on"`
+	Server string `json:"server"` // host or host:port; port 123 if left out
+}
+
+// DefaultTimeServer is the public NTP pool; a local server can replace it.
+const DefaultTimeServer = "pool.ntp.org"
+
 // Hub is the vault-wide settings.
 type Hub struct {
-	Name               string  `json:"name"`
-	History            History `json:"history"`
-	TrashRetentionDays int     `json:"trash_retention_days"` // 0 keeps trash forever
+	Name               string    `json:"name"`
+	History            History   `json:"history"`
+	TrashRetentionDays int       `json:"trash_retention_days"` // 0 keeps trash forever
+	TimeCheck          TimeCheck `json:"time_check"`
 }
 
 // Device is this device's own settings.
@@ -60,7 +73,11 @@ type Device struct {
 
 // DefaultHub is what a new hub starts with.
 func DefaultHub() Hub {
-	return Hub{History: History{On: true, WindowMinutes: 30}, TrashRetentionDays: 30}
+	return Hub{
+		History:            History{On: true, WindowMinutes: 30},
+		TrashRetentionDays: 30,
+		TimeCheck:          TimeCheck{Server: DefaultTimeServer},
+	}
 }
 
 type hubFile struct {
@@ -264,8 +281,27 @@ func validateHub(h Hub) error {
 		return invalid("versions per period needs a period")
 	case h.TrashRetentionDays < 0 || h.TrashRetentionDays > 36500:
 		return invalid("trash retention must be between 0 and 36500 days")
+	case !validServer(h.TimeCheck.Server, h.TimeCheck.On):
+		return invalid("time server must be a host name or address, with an optional :port")
 	}
 	return nil
+}
+
+// validServer allows host, host:port, an IPv6 address or [v6]:port, made only
+// of the characters those use. Empty is allowed only while the check is off.
+func validServer(s string, on bool) bool {
+	if s == "" {
+		return !on
+	}
+	if len(s) > 255 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(".-:[]", r)) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDevice(d Device) error {
