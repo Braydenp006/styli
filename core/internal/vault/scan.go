@@ -142,10 +142,28 @@ func (v *Vault) Rescan() (changes []Change, pending bool, err error) {
 		}
 		seen[e.rel] = cached{e.size, e.mod, h}
 		if f, claimed := owner[e.rel]; claimed {
+			gi := groupOf[e.rel]
+			if h != f.Version && groups[gi].Note == f {
+				// A note edited outside the app: save the new text as a version.
+				b, err := os.ReadFile(filepath.Join(v.root, filepath.FromSlash(e.rel)))
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return nil, false, err
+				}
+				h = hashBytes(b) // what we read, not what we hashed a moment ago
+				seen[e.rel] = cached{e.size, e.mod, h}
+				if h != f.Version {
+					if err := v.snapshot(groups[gi], b, nil, false); err != nil {
+						return nil, false, err
+					}
+				}
+			}
 			if h != f.Version {
 				f.Version = h
-				if changed[groupOf[e.rel]] == "" {
-					changed[groupOf[e.rel]] = Modified
+				if changed[gi] == "" {
+					changed[gi] = Modified
 				}
 			}
 		} else {
@@ -197,6 +215,17 @@ func (v *Vault) Rescan() (changes []Change, pending bool, err error) {
 		g := Group{ID: newID(), Files: []File{}}
 		f := File{c.rel, candHash[c.rel]}
 		if isMD(c.rel) {
+			b, err := os.ReadFile(filepath.Join(v.root, filepath.FromSlash(c.rel)))
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, false, err
+			}
+			f.Version = hashBytes(b)
+			if err := v.snapshot(g, b, nil, false); err != nil {
+				return nil, false, err
+			}
 			g.Note = &f
 		} else {
 			g.Files = append(g.Files, f)

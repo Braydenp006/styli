@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -53,6 +54,10 @@ type Group struct {
 	ID    string `json:"-"`
 	Note  *File  `json:"note,omitempty"`
 	Files []File `json:"files"`
+
+	// History overrides the vault's default for this note: nil follows the
+	// default, otherwise true or false. See history.go.
+	History *bool `json:"history,omitempty"`
 }
 
 // Vault is a folder of notes. Safe for concurrent use inside one process.
@@ -63,6 +68,11 @@ type Vault struct {
 	// Used only by Rescan (see scan.go).
 	seen    map[string]cached // size, modified time and hash from the last scan
 	missing map[string]bool   // group IDs already reported missing
+
+	// Version history settings (see history.go). The hub's settings feed these.
+	historyOn     bool
+	historyWindow time.Duration
+	now           func() time.Time // replaced in tests
 }
 
 // Open opens (and if needed creates) a vault. Call Rescan afterwards to pick up
@@ -71,7 +81,10 @@ func Open(root string) (*Vault, error) {
 	if err := os.MkdirAll(filepath.Join(root, idsDir), 0o755); err != nil {
 		return nil, err
 	}
-	return &Vault{root: root, seen: map[string]cached{}, missing: map[string]bool{}}, nil
+	return &Vault{
+		root: root, seen: map[string]cached{}, missing: map[string]bool{},
+		historyOn: true, historyWindow: 30 * time.Minute, now: time.Now,
+	}, nil
 }
 
 // CreateNote makes a new group from a Markdown note. p must end in .md.
@@ -79,7 +92,7 @@ func (v *Vault) CreateNote(p string, content []byte) (Group, error) {
 	if !isMD(p) {
 		return Group{}, ErrBadPath
 	}
-	return v.create(p, bytes.NewReader(content), true)
+	return v.create(p, bytes.NewReader(content), content, true)
 }
 
 // ImportFile makes a new group from a source file (for example a PDF). The
@@ -88,23 +101,34 @@ func (v *Vault) ImportFile(p string, r io.Reader) (Group, error) {
 	if isMD(p) {
 		return Group{}, ErrBadPath
 	}
-	return v.create(p, r, false)
+	return v.create(p, r, nil, false)
 }
 
-func (v *Vault) create(p string, r io.Reader, isNote bool) (Group, error) {
+func (v *Vault) create(p string, r io.Reader, content []byte, isNote bool) (Group, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	abs, err := v.abs(p)
 	if err != nil {
 		return Group{}, err
 	}
+	g := Group{ID: newID(), Files: []File{}}
+	if isNote {
+		if _, err := os.Lstat(abs); err == nil {
+			return Group{}, ErrExists
+		}
+		if err := v.snapshot(g, content, nil, false); err != nil {
+			return Group{}, err
+		}
+	}
 	// File first, record second: a crash in between leaves an unrecorded file
 	// (the later watcher can adopt it), never a record pointing at nothing.
 	ver, err := writeAtomic(abs, r, false)
 	if err != nil {
+		if isNote {
+			v.dropHistory(g.ID)
+		}
 		return Group{}, err
 	}
-	g := Group{ID: newID(), Files: []File{}}
 	if isNote {
 		g.Note = &File{p, ver}
 	} else {
@@ -153,6 +177,9 @@ func (v *Vault) SetNote(id, name string, content []byte) (Group, error) {
 	}
 	abs, err := v.abs(p)
 	if err != nil {
+		return Group{}, err
+	}
+	if err := v.snapshot(g, content, nil, false); err != nil {
 		return Group{}, err
 	}
 	ver, err := writeAtomic(abs, bytes.NewReader(content), false)
@@ -221,7 +248,13 @@ func (v *Vault) readNote(id string) ([]byte, string, error) {
 func (v *Vault) WriteNote(id string, content []byte, base string) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	_, cur, err := v.readNote(id)
+	return v.writeNote(id, content, base, false)
+}
+
+// writeNote is WriteNote with the lock held. newVersion forces a new history
+// version instead of folding into the newest one (used by restores).
+func (v *Vault) writeNote(id string, content []byte, base string, newVersion bool) (string, error) {
+	old, cur, err := v.readNote(id)
 	if err != nil {
 		return "", err
 	}
@@ -231,6 +264,15 @@ func (v *Vault) WriteNote(id string, content []byte, base string) (string, error
 	g, _ := v.load(id)
 	abs, err := v.abs(g.Note.Path)
 	if err != nil {
+		return "", err
+	}
+	// The version is saved before the note, so if it cannot be saved the
+	// write is refused and nothing changes.
+	var seed *historySeed
+	if fi, err := os.Stat(abs); err == nil {
+		seed = &historySeed{old, fi.ModTime()}
+	}
+	if err := v.snapshot(g, content, seed, newVersion); err != nil {
 		return "", err
 	}
 	ver, err := writeAtomic(abs, bytes.NewReader(content), true)

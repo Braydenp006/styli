@@ -272,6 +272,10 @@ func (v *Vault) Purge(before time.Time) (int, error) {
 			errs = append(errs, err)
 			continue
 		}
+		if err := os.RemoveAll(v.historyPath(id)); err != nil {
+			errs = append(errs, err)
+			continue
+		}
 		if err := os.Remove(filepath.Join(tdir, "record.json")); err != nil {
 			errs = append(errs, err)
 			continue
