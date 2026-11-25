@@ -2,7 +2,10 @@ module styli/core
 
 go 1.27
 
-require modernc.org/sqlite v1.63.0
+require (
+	github.com/fsnotify/fsnotify v1.10.1
+	modernc.org/sqlite v1.63.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect

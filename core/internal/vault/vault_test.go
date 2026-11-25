@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+// Tests write and scan files straight away, so do not skip "fresh" files.
+func init() { Settle = 0 }
+
 func open(t *testing.T) (*Vault, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -168,7 +171,7 @@ func TestIDsRecoverFromFolderAlone(t *testing.T) {
 	}
 }
 
-func TestOpenRepairsSplitGroup(t *testing.T) {
+func TestRescanRepairsSplitGroup(t *testing.T) {
 	v, root := open(t)
 	g := must(v.CreateNote("a/n.md", []byte("note")))
 	must(v.AddFile(g.ID, "src.pdf", strings.NewReader("pdf")))
@@ -181,6 +184,9 @@ func TestOpenRepairsSplitGroup(t *testing.T) {
 	}
 	v2, err := Open(root)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := v2.Rescan(); err != nil {
 		t.Fatal(err)
 	}
 	got := must(v2.Get(g.ID))

@@ -124,23 +124,7 @@ func (s *Store) Reindex(v *vault.Vault) error {
 	keep := map[string]bool{}
 	for _, g := range groups {
 		keep[g.ID] = true
-		var content []byte
-		var mod time.Time
-		if g.Note != nil {
-			b, ver, err := v.ReadNote(g.ID)
-			switch {
-			case err == nil:
-				content = b
-				g.Note.Version = ver // the real file, not the record
-				if fi, err := os.Stat(filepath.Join(v.Root(), filepath.FromSlash(g.Note.Path))); err == nil {
-					mod = fi.ModTime()
-				}
-			case errors.Is(err, fs.ErrNotExist): // note file missing: index it without text
-			default:
-				return err
-			}
-		}
-		if err := s.Upsert(g, content, mod); err != nil {
+		if err := s.refresh(v, g); err != nil {
 			return err
 		}
 	}
@@ -170,6 +154,35 @@ func (s *Store) Reindex(v *vault.Vault) error {
 		}
 	}
 	return nil
+}
+
+// Refresh re-reads one group from the vault and updates its index entry.
+func (s *Store) Refresh(v *vault.Vault, id string) error {
+	g, err := v.Get(id)
+	if err != nil {
+		return err
+	}
+	return s.refresh(v, g)
+}
+
+func (s *Store) refresh(v *vault.Vault, g vault.Group) error {
+	var content []byte
+	var mod time.Time
+	if g.Note != nil {
+		b, ver, err := v.ReadNote(g.ID)
+		switch {
+		case err == nil:
+			content = b
+			g.Note.Version = ver // the real file, not the record
+			if fi, err := os.Stat(filepath.Join(v.Root(), filepath.FromSlash(g.Note.Path))); err == nil {
+				mod = fi.ModTime()
+			}
+		case errors.Is(err, fs.ErrNotExist): // note file missing: index it without text
+		default:
+			return err
+		}
+	}
+	return s.Upsert(g, content, mod)
 }
 
 // titleOf is the note's first "# " heading, else its file name without .md,

@@ -59,19 +59,19 @@ type Group struct {
 type Vault struct {
 	root string
 	mu   sync.Mutex
+
+	// Used only by Rescan (see scan.go).
+	seen    map[string]cached // size, modified time and hash from the last scan
+	missing map[string]bool   // group IDs already reported missing
 }
 
-// Open opens (and if needed creates) a vault, and repairs any group that a
-// crash or an outside move has split from its record.
+// Open opens (and if needed creates) a vault. Call Rescan afterwards to pick up
+// anything that changed while the app was not running.
 func Open(root string) (*Vault, error) {
 	if err := os.MkdirAll(filepath.Join(root, idsDir), 0o755); err != nil {
 		return nil, err
 	}
-	v := &Vault{root: root}
-	if err := v.repair(); err != nil {
-		return nil, err
-	}
-	return v, nil
+	return &Vault{root: root, seen: map[string]cached{}, missing: map[string]bool{}}, nil
 }
 
 // CreateNote makes a new group from a Markdown note. p must end in .md.
@@ -356,80 +356,6 @@ func (v *Vault) list() ([]Group, error) {
 		gs = append(gs, g)
 	}
 	return gs, nil
-}
-
-// repair re-finds files that moved without their record being updated (a
-// crash mid-move, or an edit outside the app) by matching content hashes.
-// shortcut: hashes the whole vault, only when a file is missing; the file
-// watcher replaces this for live changes.
-func (v *Vault) repair() error {
-	gs, err := v.list()
-	if err != nil {
-		return err
-	}
-	claimed := map[string]bool{}
-	missing := false
-	for i := range gs {
-		for _, f := range gs[i].all() {
-			claimed[f.Path] = true
-			abs, err := v.abs(f.Path)
-			if err != nil {
-				return err
-			}
-			if _, err := os.Lstat(abs); errors.Is(err, fs.ErrNotExist) {
-				missing = true
-			}
-		}
-	}
-	if !missing {
-		return nil
-	}
-	byHash := map[string]string{}
-	err = filepath.WalkDir(v.root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && d.Name() == idsDir && p != v.root {
-			return fs.SkipDir
-		}
-		if !d.Type().IsRegular() || strings.HasPrefix(d.Name(), tmpPrefix) {
-			return nil
-		}
-		rel, _ := filepath.Rel(v.root, p)
-		rel = filepath.ToSlash(rel)
-		if claimed[rel] {
-			return nil
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		byHash[hashBytes(b)] = rel
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	for _, g := range gs {
-		dirty := false
-		for _, f := range g.all() {
-			abs, _ := v.abs(f.Path)
-			if _, err := os.Lstat(abs); !errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			if p, ok := byHash[f.Version]; ok {
-				f.Path = p
-				delete(byHash, f.Version)
-				dirty = true
-			}
-		}
-		if dirty {
-			if err := v.save(g); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // abs turns a vault-relative path ("." is the root) into a disk path, and
