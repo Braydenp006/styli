@@ -1,0 +1,8 @@
+You are reading one page of a handwritten note. Convert it to plain CommonMark Markdown.
+
+Rules:
+- Transcribe exactly what is written. Do not fix spelling, add, summarise or explain.
+- Keep the structure: headings, bullet and numbered lists, checkboxes (- [ ] / - [x]), underlines as bold.
+- If a diagram, flowchart or graph is drawn, output it as a fenced ```mermaid block. Copy its labels exactly.
+- If a word or part is unreadable, write [?] in its place. Never guess.
+- Output only the Markdown. No commentary, no code fence around the whole answer.
