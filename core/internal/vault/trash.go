@@ -273,21 +273,45 @@ func (v *Vault) Purge(before time.Time, dryRun bool) (purged []string, total int
 			purged = append(purged, id)
 			continue
 		}
-		tdir := v.trashPath(id)
-		if err := os.RemoveAll(filepath.Join(tdir, "files")); err != nil {
+		if err := v.removeTrashEntry(id); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if err := os.RemoveAll(v.historyPath(id)); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if err := os.Remove(filepath.Join(tdir, "record.json")); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		os.Remove(tdir)
 		purged = append(purged, id)
 	}
 	return purged, total, errors.Join(errs...)
+}
+
+// DeleteForever permanently deletes one trash entry (the user's "delete
+// forever"), with the same narrow rules as Purge: it deletes only inside
+// .ids/trash/<id>/ and that note's history, and refuses an entry whose note is
+// also live (an interrupted Trash), which should be restored instead.
+func (v *Vault) DeleteForever(id string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, err := v.readTrash(id); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(v.root, idsDir, id)); err == nil {
+		return ErrExists
+	}
+	return v.removeTrashEntry(id)
+}
+
+// removeTrashEntry deletes a trash entry's files and history, then its record
+// last, so an interruption just leaves an entry the next delete finishes. The
+// caller has checked id with readTrash.
+func (v *Vault) removeTrashEntry(id string) error {
+	tdir := v.trashPath(id)
+	if err := os.RemoveAll(filepath.Join(tdir, "files")); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(v.historyPath(id)); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(tdir, "record.json")); err != nil {
+		return err
+	}
+	os.Remove(tdir)
+	return nil
 }

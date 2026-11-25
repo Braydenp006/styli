@@ -224,3 +224,32 @@ func TestBadIDs(t *testing.T) {
 		t.Errorf("AddFile bad id: %v", err)
 	}
 }
+
+func TestOpenFileServesOnlyTheGroupsFiles(t *testing.T) {
+	v, root := open(t)
+	g := must(v.CreateNote("a/n.md", []byte("note")))
+	must(v.AddFile(g.ID, "one.pdf", strings.NewReader("%PDF-one")))
+	must(v.AddFile(g.ID, "two.png", strings.NewReader("png")))
+	f, p, err := v.OpenFile(g.ID, 1)
+	if err != nil || p != "a/two.png" {
+		t.Fatalf("%q %v", p, err)
+	}
+	b := make([]byte, 10)
+	n, _ := f.Read(b)
+	f.Close()
+	if string(b[:n]) != "png" {
+		t.Fatalf("read %q", b[:n])
+	}
+	for _, i := range []int{-1, 2, 99} { // the note itself is not a file entry
+		if _, _, err := v.OpenFile(g.ID, i); !errors.Is(err, ErrNotFound) {
+			t.Errorf("index %d: %v", i, err)
+		}
+	}
+	if _, _, err := v.OpenFile("../x", 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("bad id: %v", err)
+	}
+	os.Remove(filepath.Join(root, "a/one.pdf"))
+	if _, _, err := v.OpenFile(g.ID, 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing file: %v", err)
+	}
+}

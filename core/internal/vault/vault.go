@@ -454,5 +454,37 @@ func newID() string {
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
 }
 
+// OpenFile opens the group's index-th attached file (not the note) for
+// reading and returns it with its vault path. The caller closes it. The path
+// comes only from the group's record and goes through the vault's path rules,
+// so a caller can never reach a file outside the group.
+func (v *Vault) OpenFile(id string, index int) (*os.File, string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	g, err := v.load(id)
+	if err != nil {
+		return nil, "", err
+	}
+	if index < 0 || index >= len(g.Files) {
+		return nil, "", ErrNotFound
+	}
+	abs, err := v.abs(g.Files[index].Path)
+	if err != nil {
+		return nil, "", err
+	}
+	f, err := os.Open(abs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, "", ErrNotFound
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, "", ErrNotFound
+	}
+	return f, g.Files[index].Path, nil
+}
+
 // Root returns the vault's folder on disk.
 func (v *Vault) Root() string { return v.root }

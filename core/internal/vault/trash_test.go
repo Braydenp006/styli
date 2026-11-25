@@ -279,3 +279,49 @@ func TestPurgeDryRunAndTotals(t *testing.T) {
 		t.Fatalf("left: %+v", tr)
 	}
 }
+
+func TestDeleteForeverRemovesOneEntryAndItsHistory(t *testing.T) {
+	v, root := open(t)
+	a := group(t, v)
+	b := must(v.CreateNote("b.md", []byte("keep in trash")))
+	live := must(v.CreateNote("live.md", []byte("live")))
+	v.Trash(a.ID)
+	v.Trash(b.ID)
+	if err := v.DeleteForever(a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(v.trashPath(a.ID)); !os.IsNotExist(err) {
+		t.Fatal("entry still on disk")
+	}
+	if _, err := os.Stat(v.historyPath(a.ID)); !os.IsNotExist(err) {
+		t.Fatal("history still on disk")
+	}
+	if tr := must(v.ListTrash()); len(tr) != 1 || tr[0].Group.ID != b.ID {
+		t.Fatalf("other entry affected: %+v", tr)
+	}
+	if _, _, err := v.ReadNote(live.ID); err != nil || !exists(root, "live.md") {
+		t.Fatal("live note affected")
+	}
+	if err := v.DeleteForever(a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: %v", err)
+	}
+	for _, id := range []string{"", "../x", "trash"} {
+		if err := v.DeleteForever(id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%q: %v", id, err)
+		}
+	}
+}
+
+func TestDeleteForeverRefusesAnEntryThatIsAlsoLive(t *testing.T) {
+	v, root := open(t)
+	g := group(t, v)
+	v.Trash(g.ID)
+	rec, _ := v.readTrash(g.ID)
+	v.save(rec.Group) // interrupted Trash: live record plus trash entry
+	if err := v.DeleteForever(g.ID); !errors.Is(err, ErrExists) {
+		t.Fatalf("got %v", err)
+	}
+	if err := v.Restore(g.ID, ""); err != nil || !exists(root, "a/n.md") {
+		t.Fatalf("data was lost: %v", err)
+	}
+}
