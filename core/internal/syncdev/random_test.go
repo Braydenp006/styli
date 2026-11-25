@@ -14,7 +14,9 @@ import (
 // (go test -run 'TestRandomised/seed_7'). Afterwards everyone comes online and
 // syncs, and:
 //
-//  1. every machine holds the same notes (settle checks it);
+//  1. every machine holds the same notes, except notes cleared from a device
+//     (deleted from that device only), which the atrium must hold (settle
+//     checks it);
 //  2. every line a user saved is still in a note, live or in a trash, or in
 //     some machine's history (conflict markers keep both sides inside the note);
 //  3. no deleted note comes back unflagged: a note trashed and never restored
@@ -109,6 +111,19 @@ func randomRun(t *testing.T, seed uint64, steps int) {
 		case op == 6: // a device goes offline or comes back
 			if m < 3 {
 				devs[m].net.down = !devs[m].net.down
+			}
+		case op == 7 && m < 3 && rng.IntN(2) == 0: // delete from this device only, sometimes with a fault
+			if gs := notes(v); len(gs) > 0 {
+				d := devs[m]
+				switch rng.IntN(4) {
+				case 0:
+					d.net.dropReply = 1
+				case 1:
+					d.writes(1 + rng.IntN(4))
+				}
+				cid := gs[rng.IntN(len(gs))].ID
+				d.tryClear(cid) // refused unless in step with the atrium
+				d.net.reset()
 			}
 		default: // a device syncs, sometimes with a fault
 			if m == 3 {

@@ -19,7 +19,7 @@ const AUTOSAVE_MS = 1500;
 //   host.listHref()              where "← Notes" goes
 //   host.noteChanged(id, patch)  a title or time changed
 //   host.noteMoved(id)           moved: refresh the list and sidebar
-//   host.noteTrashed(id, note)   moved to the trash
+//   host.noteTrashed({ id, title, local })   moved to the trash (local: from this device only)
 export function createNotePane(host) {
   const backLink = () => h("a", { class: "back-link", href: host.listHref() }, "← Notes");
   const pane = h("article", { class: "vault-note" });
@@ -397,22 +397,54 @@ export function createNotePane(host) {
 
   async function trashDialog(c) {
     let days = null;
-    try { days = (await api.get("/api/settings")).trash_retention_days; } catch { /* the wording below copes */ }
+    let device = false; // only a device can delete from itself alone; the atrium holds the full copy
+    await Promise.all([
+      api.get("/api/settings").then((st) => { days = st.trash_retention_days; }).catch(() => {}), // the wording below copes
+      api.get("/api/sync").then(() => { device = true; }).catch(() => {}),
+    ]);
     const keep = days === 0 ? "It stays in the trash until you delete it for good."
       : days ? `It stays in the trash for ${days} ${days === 1 ? "day" : "days"}, then it is deleted for good.`
         : "You can bring it back from the trash.";
     const files = c.note.files.length;
+    const together = files ? `The note and its ${files === 1 ? "attached file" : files + " attached files"} move together. ` : "";
+    const trashed = () => {
+      const t = { id: c.id, title: c.title };
+      if (cur === c) cur = null;
+      return t;
+    };
+    if (!device) {
+      return openDialog({
+        title: "Move this note to the trash everywhere?",
+        description: `It goes to the trash on every device. ${together}${keep}`,
+        submitLabel: "Move to trash everywhere",
+        danger: true,
+        onSubmit: async () => {
+          await saveFirst(c);
+          await api.post(`/api/notes/${encodeURIComponent(c.id)}/trash`);
+          host.noteTrashed(trashed());
+        },
+      });
+    }
+    const labels = { device: "Delete from this device", everywhere: "Move to trash everywhere" };
+    const choice = (value, label, help, checked) => h("label", { class: "choice" },
+      h("input", { type: "radio", name: "where", value, checked, onchange: (e) => {
+        e.target.form.querySelector("[type=submit]").textContent = labels[value];
+      } }),
+      h("span", {}, h("strong", {}, label), h("span", { class: "sty-help" }, help)));
     return openDialog({
-      title: "Move this note to the trash everywhere?",
-      description: `It goes to the trash on every device. ${files ? `The note and its ${files === 1 ? "attached file" : files + " attached files"} move together. ` : ""}${keep}`,
-      submitLabel: "Move to trash everywhere",
+      title: "Delete this note?",
+      description: `${together}${keep}`,
+      fields: [h("fieldset", { class: "choices" },
+        h("legend", { class: "sr-only" }, "Where to delete it"),
+        choice("device", "This device only", "It moves to this device's trash and stays on the atrium and your other devices.", true),
+        choice("everywhere", "Everywhere", "It goes to the trash on every device.", false))],
+      submitLabel: labels.device,
       danger: true,
-      onSubmit: async () => {
+      onSubmit: async (form) => {
         await saveFirst(c);
-        await api.post(`/api/notes/${encodeURIComponent(c.id)}/trash`);
-        const trashed = { id: c.id, title: c.title };
-        if (cur === c) cur = null;
-        host.noteTrashed(trashed);
+        const local = form.get("where") === "device";
+        await api.post(`/api/notes/${encodeURIComponent(c.id)}/${local ? "clear" : "trash"}`);
+        host.noteTrashed({ ...trashed(), local });
       },
     });
   }

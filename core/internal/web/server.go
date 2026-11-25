@@ -83,6 +83,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/notes/{id}", s.saveNote)
 	mux.HandleFunc("POST /api/notes/{id}/move", s.moveNote)
 	mux.HandleFunc("POST /api/notes/{id}/trash", s.trashNote)
+	mux.HandleFunc("POST /api/notes/{id}/clear", s.clearNote)
 	mux.HandleFunc("GET /api/notes/{id}/files/{n}", s.getFile)
 	mux.HandleFunc("GET /api/notes/{id}/history", s.listVersions)
 	mux.HandleFunc("GET /api/notes/{id}/history/{vid}", s.getVersion)

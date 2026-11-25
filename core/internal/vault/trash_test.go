@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"styli/core/internal/atomicfile"
 )
 
 func exists(root, rel string) bool {
@@ -323,5 +325,72 @@ func TestDeleteForeverRefusesAnEntryThatIsAlsoLive(t *testing.T) {
 	}
 	if err := v.Restore(g.ID, ""); err != nil || !exists(root, "a/n.md") {
 		t.Fatalf("data was lost: %v", err)
+	}
+}
+
+// A crash at any write of a restore is finished on open: the note comes back
+// once, under its own ID, and the scan never takes its files for a new note.
+func TestInterruptedRestoreIsFinishedOnOpen(t *testing.T) {
+	for _, folder := range []string{"", "b"} {
+		for crashAt := 1; ; crashAt++ {
+			v, root := open(t)
+			g := group(t, v)
+			must(0, v.Trash(g.ID))
+			n := 0
+			atomicfile.SetBeforeWrite(func(string) {
+				if n++; n == crashAt {
+					panic("crash")
+				}
+			})
+			crashed := func() (c bool) {
+				defer func() { c = recover() != nil }()
+				v.Restore(g.ID, folder)
+				return false
+			}()
+			atomicfile.SetBeforeWrite(nil)
+			v2 := must(Open(root))
+			if _, _, err := v2.Rescan(); err != nil {
+				t.Fatal(err)
+			}
+			if !crashed {
+				break
+			}
+			gs := must(v2.List())
+			dir := "a"
+			if folder != "" {
+				dir = folder
+			}
+			if tr := must(v2.ListTrash()); len(tr) == 1 && len(gs) == 0 {
+				if exists(root, dir+"/n.md") || exists(root, dir+"/src.pdf") {
+					t.Fatalf("folder %q, crash at write %d: half restored", folder, crashAt)
+				}
+				continue // crashed before anything moved: still in the trash
+			}
+			if len(gs) != 1 || gs[0].ID != g.ID || gs[0].Note.Path != dir+"/n.md" || len(must(v2.ListTrash())) != 0 {
+				t.Fatalf("folder %q, crash at write %d: %+v", folder, crashAt, gs)
+			}
+			if !exists(root, dir+"/n.md") || !exists(root, dir+"/src.pdf") {
+				t.Fatalf("folder %q, crash at write %d: files missing", folder, crashAt)
+			}
+		}
+	}
+}
+
+// A file already gone when its note was trashed is not restored onto a name
+// another note now uses: two records never claim one file.
+func TestRestoreRefusesATakenNameForAMissingFile(t *testing.T) {
+	v, root := open(t)
+	g := must(v.CreateNote("n.md", []byte("one")))
+	os.Remove(filepath.Join(root, "n.md"))
+	must(0, v.Trash(g.ID))
+	other := must(v.CreateNote("n.md", []byte("other")))
+	if err := v.Restore(g.ID, ""); !errors.Is(err, ErrExists) {
+		t.Fatalf("restore over another note: %v", err)
+	}
+	if gs := must(v.List()); len(gs) != 1 || gs[0].ID != other.ID {
+		t.Fatalf("%+v", gs)
+	}
+	if tr := must(v.Trashed(g.ID)); tr.Group.ID != g.ID {
+		t.Fatal("trash entry lost")
 	}
 }

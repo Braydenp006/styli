@@ -635,6 +635,36 @@ func TestSyncStatusOnlyOnADevice(t *testing.T) {
 	}
 }
 
+// Delete from this device only: refused on the atrium; on a device, the
+// engine's refusals come back as plain words and nothing is removed. (The
+// clearing itself is tested in syncdev, against a real atrium.)
+func TestClearNote(t *testing.T) {
+	e := newEnv(t)
+	id := e.create(t, "n.md", "n")
+	if m := e.call(t, "POST", "/api/notes/"+id+"/clear", nil, 404); m["code"] != "not_device" {
+		t.Fatalf("%v", m)
+	}
+	eng := syncdev.New(e.v, nil, &tls.Config{}, "127.0.0.1:1", t.Logf)
+	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: maid.New(e.v, e.set, t.Logf), Logf: t.Logf, Addr: e.host, Sync: eng})
+	if m := e.call(t, "POST", "/api/notes/"+id+"/clear", nil, 409); m["code"] != "unsynced" {
+		t.Fatalf("never synced: %v", m)
+	}
+	if _, err := e.v.Get(id); err != nil {
+		t.Fatal("refused, but removed")
+	}
+	if resp, _ := e.req(t, "POST", "/api/notes/"+id+"/clear", nil, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != 403 {
+		t.Fatalf("cross-site clear: %d", resp.StatusCode)
+	}
+
+	// The trash shows which entries are on the atrium still.
+	g := must(e.v.Get(id))
+	must(0, e.v.TrashIfVerified(id, g.Rev))
+	tr := e.call(t, "GET", "/api/trash", nil, 200)["trash"].([]any)
+	if len(tr) != 1 || tr[0].(map[string]any)["local_only"] != true {
+		t.Fatalf("%v", tr)
+	}
+}
+
 func TestRecoveryCandidates(t *testing.T) {
 	e := newEnv(t)
 	id := e.create(t, "n.md", "deleted version")

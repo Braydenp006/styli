@@ -17,6 +17,7 @@ type trashDTO struct {
 	Folder    string    `json:"folder"`
 	Files     []string  `json:"files"`
 	DeletedAt time.Time `json:"deleted_at"`
+	LocalOnly bool      `json:"local_only"` // removed from this device only; still on the atrium
 }
 
 func (s *server) listTrash(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +31,7 @@ func (s *server) listTrash(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]trashDTO, 0, len(tr))
 	for _, t := range tr {
-		d := trashDTO{ID: t.Group.ID, Folder: t.Folder, DeletedAt: t.DeletedAt, Files: []string{}}
+		d := trashDTO{ID: t.Group.ID, Folder: t.Folder, DeletedAt: t.DeletedAt, Files: []string{}, LocalOnly: t.LocalOnly}
 		if t.Group.Note != nil {
 			d.NotePath = t.Group.Note.Path
 		}

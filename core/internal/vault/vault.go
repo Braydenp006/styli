@@ -132,6 +132,9 @@ func Open(root string) (*Vault, error) {
 	if err := v.openApply(); err != nil {
 		return nil, err
 	}
+	if err := v.openRestores(); err != nil {
+		return nil, err
+	}
 	if err := v.openRecovery(); err != nil {
 		return nil, err
 	}

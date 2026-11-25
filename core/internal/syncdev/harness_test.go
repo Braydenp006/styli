@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -132,6 +133,7 @@ type faultNet struct {
 	down      bool // the device is offline: every request fails
 	rate      float64
 	rng       *rand.Rand // used with rate: each request faults with this chance
+	onRequest func()     // if set, runs before each request is sent
 }
 
 // reset forgets counts and planned faults; down and rate stay.
@@ -159,8 +161,11 @@ func (f *faultNet) RoundTrip(r *http.Request) (*http.Response, error) {
 	case f.rate > 0 && f.rng.Float64() < f.rate:
 		fault = []string{"request", "reply"}[f.rng.IntN(2)]
 	}
-	next := f.next
+	next, hook := f.next, f.onRequest
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if fault == "request" {
 		if r.Body != nil {
 			r.Body.Close()
@@ -211,6 +216,34 @@ func (d *device) trySync() (crashedNow bool, err error) {
 	return false, d.e.Sync(context.Background())
 }
 
+// tryClear clears group id from the device only, like trySync: it may fail
+// or crash, and after a crash the device restarts.
+func (d *device) tryClear(id string) (crashedNow bool, err error) {
+	defer func() {
+		atomicfile.SetBeforeWrite(nil)
+		if r := recover(); r != nil {
+			if _, ok := r.(crashed); !ok {
+				panic(r)
+			}
+			d.build()
+			crashedNow = true
+		}
+	}()
+	return false, d.e.Clear(context.Background(), id)
+}
+
+// clearedHere lists the groups cleared from d (its base says so, and no copy
+// is live there).
+func (d *device) clearedHere(t *testing.T) map[string]bool {
+	out := map[string]bool{}
+	for _, id := range must(d.e.rec.baseIDs()) {
+		if b := must(d.e.rec.base(id)); b.Cleared && !live(d.v, id) {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 // ---- looking at the result ----
 
 // tree is every file in the vault folder (outside .ids) by path, with its text.
@@ -250,7 +283,8 @@ func fingerprint(t *testing.T, a *atrium, devs []*device) string {
 
 // settle syncs every device, with no faults and everyone online, until a
 // whole round changes nothing, and fails if that takes too long or any note is
-// still waiting. Then every machine must hold the same files.
+// still waiting. Then every machine must hold the same files, except groups
+// cleared from a device, which the atrium must still hold (live or trashed).
 func settle(t *testing.T, a *atrium, devs ...*device) {
 	t.Helper()
 	for _, d := range devs {
@@ -278,8 +312,22 @@ func settle(t *testing.T, a *atrium, devs ...*device) {
 	}
 	want := tree(t, a.v.Root())
 	for i, d := range devs {
-		if got := tree(t, d.root); !equal(got, want) {
-			t.Fatalf("device %d differs from the atrium:\n device: %v\n atrium: %v", i+1, got, want)
+		// A group cleared from a device is on the atrium only.
+		dwant := maps.Clone(want)
+		for id := range d.clearedHere(t) {
+			g, err := a.v.Get(id)
+			if err != nil {
+				if _, terr := a.v.Trashed(id); terr != nil {
+					t.Fatalf("device %d cleared %s, which the atrium does not hold", i+1, id)
+				}
+				continue
+			}
+			for _, f := range allFiles(g) {
+				delete(dwant, f.Path)
+			}
+		}
+		if got := tree(t, d.root); !equal(got, dwant) {
+			t.Fatalf("device %d differs from the atrium:\n device: %v\n atrium: %v", i+1, got, dwant)
 		}
 	}
 	for p := range want {

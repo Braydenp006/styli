@@ -616,3 +616,45 @@ func TestForgottenSavedBeforePurge(t *testing.T) {
 		t.Fatalf("forgotten %d, want %d", f, tg.DeletedRev)
 	}
 }
+
+// Verify and TrashIfVerified trust a record only while the files on disk
+// still match it: an edit not scanned yet, or a missing file, is a conflict.
+func TestVerifyRefusesAnUnscannedEdit(t *testing.T) {
+	v, root := open(t)
+	g := must(v.CreateNote("a.md", []byte("one")))
+	must(v.AddFile(g.ID, "pic.png", strings.NewReader("png")))
+	g = must(v.Get(g.ID))
+	if _, err := v.Verify(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "a.md"), []byte("edited outside"), 0o644)
+	if _, err := v.Verify(g.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unscanned edit: %v", err)
+	}
+	if err := v.TrashIfVerified(g.ID, g.Rev); !errors.Is(err, ErrConflict) {
+		t.Fatalf("trash of an unscanned edit: %v", err)
+	}
+	if _, err := v.Get(g.ID); err != nil {
+		t.Fatal("the note was trashed anyway")
+	}
+	os.WriteFile(filepath.Join(root, "a.md"), []byte("one"), 0o644)
+	os.Remove(filepath.Join(root, "pic.png"))
+	if _, err := v.Verify(g.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("missing file: %v", err)
+	}
+	os.WriteFile(filepath.Join(root, "pic.png"), []byte("png"), 0o644)
+	if err := v.TrashIfVerified(g.ID, g.Rev+1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale rev: %v", err)
+	}
+	if err := v.TrashIfVerified(g.ID, g.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if tg, err := v.Trashed(g.ID); err != nil || !tg.LocalOnly {
+		t.Fatalf("%+v %v", tg, err)
+	}
+	must(0, v.Restore(g.ID, ""))
+	v.Trash(g.ID)
+	if tg := must(v.Trashed(g.ID)); tg.LocalOnly {
+		t.Fatal("an ordinary delete is marked local only")
+	}
+}

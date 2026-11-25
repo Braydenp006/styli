@@ -97,7 +97,8 @@ function item(t) {
           h("time", { datetime: t.deleted_at, title: fullDate(t.deleted_at) }, relativeTime(t.deleted_at)),
           dueText ? ` · ${dueText}` : ""),
         attached ? h("span", { class: "sty-chip" }, `${attached} attached ${attached === 1 ? "file" : "files"}`) : null,
-        t.note_path ? null : h("span", { class: "sty-chip" }, "File only"))),
+        t.note_path ? null : h("span", { class: "sty-chip" }, "File only"),
+        t.local_only ? h("span", { class: "sty-chip" }, "Still on the atrium") : null)),
     h("div", { class: "trash-actions" },
       h("button", { class: "sty-btn sty-btn--secondary", type: "button", "aria-label": `Restore ${title}`, onclick: () => restore(t, title) }, "Restore"),
       h("button", { class: "sty-btn sty-btn--danger", type: "button", "aria-label": `Delete ${title} for good`, onclick: () => deleteDialog(t, title) }, "Delete forever")));

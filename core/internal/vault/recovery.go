@@ -164,7 +164,7 @@ func (v *Vault) TrashKeeping(id string, base uint64, device string) error {
 			return err
 		}
 	}
-	return v.trash(g)
+	return v.trash(g, false)
 }
 
 // ListCandidates returns the candidates, oldest first.

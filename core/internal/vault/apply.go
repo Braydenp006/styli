@@ -545,7 +545,7 @@ func (v *Vault) pendingIDs() ([]string, error) {
 	return ids, nil
 }
 
-// pendingPaths returns every path a commit in progress will write, so Rescan
+// pendingPaths returns every path a commit or restore in progress will write, so Rescan
 // does not adopt a half-committed file as a new note.
 func (v *Vault) pendingPaths() map[string]bool {
 	ids, _ := v.pendingIDs()
@@ -562,6 +562,7 @@ func (v *Vault) pendingPaths() map[string]bool {
 			}
 		}
 	}
+	v.restoringPaths(out)
 	return out
 }
 

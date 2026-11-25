@@ -45,12 +45,12 @@ const note = createNotePane({
     loadList(false);
     app.refreshFolders();
   },
-  noteTrashed({ id, title }) {
+  noteTrashed({ id, title, local }) {
     location.hash = state.folder ? href.folder(state.folder) : href.home();
     loadList(false);
     app.refreshFolders();
     document.dispatchEvent(new CustomEvent("trash-changed"));
-    showToast(`Moved “${title}” to the trash everywhere.`, {
+    showToast(local ? `Deleted “${title}” from this device. It's still on the atrium.` : `Moved “${title}” to the trash everywhere.`, {
       actionLabel: "Undo",
       onAction: async () => {
         try {

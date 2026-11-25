@@ -313,3 +313,10 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
 .clash-side { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
 .clash-side pre { margin: var(--space-1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 13px/20px var(--font-mono); }
 .conflict-item a.sty-btn { text-decoration: none; }
+
+/* ---- delete: this device only or everywhere ---- */
+.choices { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; border: 0; }
+.choice { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--honey); background: var(--honey-tint); }
+.choice input { margin-top: 3px; accent-color: var(--honey); }
+.choice > span { display: flex; flex-direction: column; gap: var(--space-1); }

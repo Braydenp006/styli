@@ -133,6 +133,14 @@ func (c *client) download(ctx context.Context, id string, index int, version str
 	return res.Body, nil
 }
 
+// group asks the atrium what it holds of group id right now (see
+// syncsrv.getGroup): its state, or its deletion.
+func (c *client) group(ctx context.Context, id string) (syncsrv.Group, error) {
+	var g syncsrv.Group
+	_, err := c.getJSON(ctx, "/sync/v1/groups/"+url.PathEscape(id), &g)
+	return g, err
+}
+
 func (c *client) putBlob(ctx context.Context, hash string, r io.Reader, size int64) error {
 	res, err := c.do(ctx, http.MethodPut, "/sync/v1/blobs/"+url.PathEscape(hash), r, size)
 	if err != nil {

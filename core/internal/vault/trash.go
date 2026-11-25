@@ -27,6 +27,7 @@ type TrashedGroup struct {
 	Folder     string // the folder the group lived in
 	DeletedAt  time.Time
 	DeletedRev uint64 // the delete's own number (see rev.go)
+	LocalOnly  bool   // removed from this device only (sync's safe clearing); still on the atrium
 }
 
 type trashRecord struct {
@@ -34,6 +35,11 @@ type trashRecord struct {
 	Folder     string    `json:"folder"`
 	DeletedAt  time.Time `json:"deleted_at"`
 	DeletedRev uint64    `json:"deleted_rev,omitempty"`
+	LocalOnly  bool      `json:"local_only,omitempty"`
+	// Restoring is set, to the restore's folder ("" for where it was), before
+	// a restore moves any file, so one a crash interrupted is finished on open
+	// rather than its moved files being scanned in as a new note.
+	Restoring *string `json:"restoring,omitempty"`
 }
 
 func (v *Vault) trashPath(id string) string {
@@ -84,10 +90,60 @@ func (v *Vault) TrashIf(id string, base uint64) (Group, error) {
 	if base != 0 && g.Rev != base {
 		return g, ErrConflict
 	}
-	return Group{}, v.trash(g)
+	return Group{}, v.trash(g, false)
 }
 
-func (v *Vault) trash(g Group) error {
+// Verify returns group id after checking that every one of its files on disk
+// still has the content its record says. An edit not scanned yet (or a file
+// gone missing) is ErrConflict: the record can't be trusted for this group yet.
+func (v *Vault) Verify(id string) (Group, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	g, err := v.load(id)
+	if err != nil {
+		return Group{}, err
+	}
+	return g, v.verify(g)
+}
+
+func (v *Vault) verify(g Group) error {
+	for _, f := range g.all() {
+		src, err := v.abs(f.Path)
+		if err != nil {
+			return err
+		}
+		h, err := hashFile(src)
+		if errors.Is(err, fs.ErrNotExist) || (err == nil && h != f.Version) {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TrashIfVerified is TrashIf that also refuses (ErrConflict) when a file on
+// disk differs from the record, all under one lock: what goes to the trash is
+// exactly the version the caller checked. The entry is marked LocalOnly: sync
+// cleared it from this device only, and the note stays on the atrium.
+func (v *Vault) TrashIfVerified(id string, base uint64) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	g, err := v.load(id)
+	if err != nil {
+		return err
+	}
+	if g.Rev != base {
+		return ErrConflict
+	}
+	if err := v.verify(g); err != nil {
+		return err
+	}
+	return v.trash(g, true)
+}
+
+func (v *Vault) trash(g Group, localOnly bool) error {
 	id := g.ID
 	files := g.all()
 	tdir := v.trashPath(id)
@@ -120,7 +176,7 @@ func (v *Vault) trash(g Group) error {
 	if err != nil {
 		return err
 	}
-	b, err := json.Marshal(trashRecord{Group: g, Folder: path.Dir(files[0].Path), DeletedAt: time.Now().UTC(), DeletedRev: rev})
+	b, err := json.Marshal(trashRecord{Group: g, Folder: path.Dir(files[0].Path), DeletedAt: time.Now().UTC(), DeletedRev: rev, LocalOnly: localOnly})
 	if err != nil {
 		return err
 	}
@@ -173,7 +229,7 @@ func (v *Vault) ListTrash() ([]TrashedGroup, error) {
 			errs = append(errs, err)
 			continue
 		}
-		out = append(out, TrashedGroup{r.Group, r.Folder, r.DeletedAt, r.DeletedRev})
+		out = append(out, TrashedGroup{r.Group, r.Folder, r.DeletedAt, r.DeletedRev, r.LocalOnly})
 	}
 	return out, errors.Join(errs...)
 }
@@ -195,6 +251,55 @@ func (v *Vault) trashIDs() ([]string, error) {
 	return ids, nil
 }
 
+func (v *Vault) writeTrashRecord(id string, r trashRecord) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	_, err = writeAtomic(filepath.Join(v.trashPath(id), "record.json"), bytes.NewReader(b), true)
+	return err
+}
+
+// openRestores finishes restores a crash interrupted. One that can't be
+// finished stays in the trash, and its paths stay out of Rescan
+// (restoringPaths); restoring it again from the trash finishes it.
+func (v *Vault) openRestores() error {
+	ids, err := v.trashIDs()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		r, err := v.readTrash(id)
+		if err != nil || r.Restoring == nil {
+			continue
+		}
+		if _, err := v.load(id); err == nil {
+			v.dropTrash(id) // the live record was saved; only the entry was left
+			continue
+		}
+		v.restore(id, "")
+	}
+	return nil
+}
+
+// restoringPaths returns where interrupted restores put their files.
+func (v *Vault) restoringPaths(out map[string]bool) {
+	ids, _ := v.trashIDs()
+	for _, id := range ids {
+		r, err := v.readTrash(id)
+		if err != nil || r.Restoring == nil {
+			continue
+		}
+		for _, f := range r.Group.all() {
+			if *r.Restoring != "" {
+				out[path.Join(*r.Restoring, path.Base(f.Path))] = true
+			} else {
+				out[f.Path] = true
+			}
+		}
+	}
+}
+
 // Restore moves a trashed group back, keeping its ID. folder is where to put
 // it; "" means where each file was. If any destination name is taken, nothing
 // moves.
@@ -212,13 +317,17 @@ func (v *Vault) Trashed(id string) (TrashedGroup, error) {
 	if err != nil {
 		return TrashedGroup{}, err
 	}
-	return TrashedGroup{r.Group, r.Folder, r.DeletedAt, r.DeletedRev}, nil
+	return TrashedGroup{r.Group, r.Folder, r.DeletedAt, r.DeletedRev, r.LocalOnly}, nil
 }
 
 func (v *Vault) restore(id, folder string) error {
 	rec, err := v.readTrash(id)
 	if err != nil {
 		return err
+	}
+	resuming := rec.Restoring != nil
+	if resuming {
+		folder = *rec.Restoring // some files may be there already
 	}
 	g := rec.Group
 	fdir := filepath.Join(v.trashPath(id), "files")
@@ -245,15 +354,34 @@ func (v *Vault) restore(id, folder string) error {
 		}
 		taken[to] = true
 		src := filepath.Join(fdir, base)
-		if _, err := os.Lstat(src); errors.Is(err, fs.ErrNotExist) {
-			continue // was already missing when it was trashed
-		} else if err != nil {
+		_, serr := os.Lstat(src)
+		if serr != nil && !errors.Is(serr, fs.ErrNotExist) {
+			return serr
+		}
+		_, derr := os.Lstat(dst)
+		if derr != nil && !errors.Is(derr, fs.ErrNotExist) {
+			return derr
+		}
+		switch {
+		case serr == nil && derr == nil:
+			return ErrExists
+		case serr == nil:
+			mvs = append(mvs, mv{f, to, src, dst})
+		case derr == nil:
+			// Gone from the trash and a file is at its name: moved there by
+			// the interrupted restore, or another note's file (never claim it).
+			if h, err := hashFile(dst); err != nil || !resuming || h != f.Version {
+				return errors.Join(ErrExists, err)
+			}
+		}
+		// Neither: it was already missing when it was trashed.
+	}
+	if !resuming {
+		nr := rec
+		nr.Restoring = &folder
+		if err := v.writeTrashRecord(id, nr); err != nil {
 			return err
 		}
-		if _, err := os.Lstat(dst); err == nil {
-			return ErrExists
-		}
-		mvs = append(mvs, mv{f, to, src, dst})
 	}
 	for i, m := range mvs {
 		err := v.mkdirs(filepath.Dir(m.dst))
@@ -263,6 +391,9 @@ func (v *Vault) restore(id, folder string) error {
 		if err != nil {
 			for _, d := range mvs[:i] {
 				os.Rename(d.dst, d.src)
+			}
+			if !resuming { // all back in the trash: not a restore to finish on open
+				v.writeTrashRecord(id, rec)
 			}
 			return err
 		}
@@ -276,11 +407,16 @@ func (v *Vault) restore(id, folder string) error {
 		return err
 	}
 	delete(v.dels, id) // the record's new rev tells devices it is back
-	// Live again. Drop the trash entry, record first so it stops being listed.
-	os.Remove(filepath.Join(v.trashPath(id), "record.json"))
-	os.Remove(fdir)
-	os.Remove(v.trashPath(id))
+	v.dropTrash(id)
 	return nil
+}
+
+// dropTrash removes the entry of a group that is live again, record first so
+// it stops being listed.
+func (v *Vault) dropTrash(id string) {
+	os.Remove(filepath.Join(v.trashPath(id), "record.json"))
+	os.Remove(filepath.Join(v.trashPath(id), "files"))
+	os.Remove(v.trashPath(id))
 }
 
 // Purge permanently deletes trash entries deleted before the given time. It

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"styli/core/internal/store"
+	"styli/core/internal/syncdev"
 	"styli/core/internal/vault"
 )
 
@@ -208,6 +209,30 @@ func (s *server) trashNote(w http.ResponseWriter, r *http.Request) {
 		s.Logf("web: index remove %s: %v", id, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// clearNote is "Delete from this device only": the note goes to this
+// device's trash and stays on the atrium. Only a device can do it, and only
+// once its atrium confirms it holds this exact version (syncdev.Clear).
+func (s *server) clearNote(w http.ResponseWriter, r *http.Request) {
+	if s.Sync == nil {
+		fail(w, http.StatusNotFound, "not_device", "This is the atrium: it holds the full copy, so a note here can only be deleted everywhere.")
+		return
+	}
+	err := s.Sync.Clear(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, syncdev.ErrUnsynced):
+		fail(w, http.StatusConflict, "unsynced", "This note has changes the atrium doesn't have yet. Nothing was removed; try again once it has synced.")
+	case errors.Is(err, syncdev.ErrAtriumDiffers):
+		fail(w, http.StatusConflict, "atrium_differs", "The atrium has a different version of this note. Nothing was removed; it syncs here first, then try again.")
+	case errors.Is(err, syncdev.ErrUnreachable):
+		s.Logf("web: clear %s: %v", r.PathValue("id"), err)
+		fail(w, http.StatusServiceUnavailable, "atrium_unreachable", "Can't reach the atrium to confirm it has this version. Nothing was removed.")
+	default:
+		s.failErr(w, err)
+	}
 }
 
 // inlineTypes may be shown in the browser. Everything else is a download:

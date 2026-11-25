@@ -48,6 +48,13 @@ type Base struct {
 	// when the delete was agreed. A different entry means someone restored
 	// it here and trashed it again since.
 	TrashRev uint64 `json:"trash_rev,omitempty"`
+
+	// Cleared means the local copy was removed from this device only (to its
+	// trash) after the atrium confirmed it holds exactly this state. Written
+	// before the copy moves, so a missing copy is never read as a delete to
+	// send. While no copy is here, nothing about the group syncs; a copy that
+	// comes back is checked against the atrium again (Engine.cleared).
+	Cleared bool `json:"cleared,omitempty"`
 }
 
 // Parked is where the engine moved a group's files.

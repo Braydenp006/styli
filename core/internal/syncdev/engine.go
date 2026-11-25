@@ -51,6 +51,8 @@ type Engine struct {
 
 	mu     sync.Mutex
 	status Status
+
+	passMu sync.Mutex // one sync pass or Clear at a time
 }
 
 // Status is what the device's screens show about sync.
@@ -118,15 +120,18 @@ func groupErr(err error, reason string) error {
 
 // pass is the state of one sync pass.
 type pass struct {
-	waiting map[string]string // group ID -> why it is waiting
-	paths   map[string]string // local path -> group ID; built when a name clash needs it
-	merges  map[string]int    // group ID -> merge rounds this pass (see maxMerges)
+	waiting  map[string]string // group ID -> why it is waiting
+	paths    map[string]string // local path -> group ID; built when a name clash needs it
+	merges   map[string]int    // group ID -> merge rounds this pass (see maxMerges)
+	restored bool              // the atrium was restored from a backup (a new epoch)
 }
 
 // Sync runs one pass. It returns an error only when the pass could not reach
 // the end (the atrium is unreachable, a disk error); groups that cannot sync
 // yet are in the status instead.
 func (e *Engine) Sync(ctx context.Context) error {
+	e.passMu.Lock()
+	defer e.passMu.Unlock()
 	p := &pass{waiting: map[string]string{}}
 	err := e.sync(ctx, p)
 	e.mu.Lock()
@@ -168,6 +173,7 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 	// forgotten number may have missed deletes. Read every group from the start.
 	restored := cur.Epoch != h.Epoch || cur.Since > h.Seq
 	full := restored || cur.Since < h.Forgotten
+	p.restored = restored
 	since := cur.Since
 	if full {
 		since = 0
@@ -235,7 +241,7 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 		if err != nil {
 			return err
 		}
-		if b != nil && b.Deleted == 0 && vault.SameState(l, b.Group(l.ID)) {
+		if b != nil && b.Deleted == 0 && !b.Cleared && vault.SameState(l, b.Group(l.ID)) {
 			continue // a base marked deleted with a live copy: restored here
 		}
 		if err := e.group(ctx, p, l.ID, nil); err != nil {
@@ -295,8 +301,8 @@ func (e *Engine) gone(p *pass, locals []vault.Group, seen map[string]bool, resto
 		if err != nil {
 			return err
 		}
-		if b == nil {
-			continue
+		if b == nil || b.Cleared {
+			continue // a cleared copy that came back is checked in step 2
 		}
 		switch {
 		case restored:
@@ -342,6 +348,24 @@ func (e *Engine) group(ctx context.Context, p *pass, id string, remote *syncsrv.
 		return err
 	}
 
+	if base != nil && base.Cleared {
+		if hasLocal {
+			return e.cleared(ctx, p, id, base, local)
+		}
+		if t, err := e.v.Trashed(id); err == nil && !t.LocalOnly {
+			// Trashed by a person after a crash in the middle of clearing it:
+			// a delete everywhere, which must still reach the atrium.
+			nb := *base
+			nb.Cleared = false
+			return e.decide(ctx, p, id, &nb, local, false, remote)
+		}
+		return nil // cleared from this device: it stays on the atrium only
+	}
+	return e.decide(ctx, p, id, base, local, hasLocal, remote)
+}
+
+// decide is the decision table for one group (see group).
+func (e *Engine) decide(ctx context.Context, p *pass, id string, base *Base, local vault.Group, hasLocal bool, remote *syncsrv.Group) error {
 	var r vault.Group
 	switch {
 	case remote != nil:

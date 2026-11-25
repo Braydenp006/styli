@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -321,5 +323,34 @@ func TestRecoveryCandidateFromDevice(t *testing.T) {
 	missing := fmt.Sprintf(`{"note":{"path":"a.md","version":%q},"files":[]}`, hash("never uploaded"))
 	if res := e.do(t, "POST", path, missing, nil); res.StatusCode != 422 {
 		t.Fatalf("missing upload: %d", res.StatusCode)
+	}
+}
+
+// GET /sync/v1/groups/<id> confirms what the atrium holds, checked against
+// the disk: live, an unscanned edit ("changed"), deleted, or gone.
+func TestGetGroupConfirmsTheDisk(t *testing.T) {
+	e := setup(t)
+	g, _ := e.v.CreateNote("a.md", []byte("a"))
+	path := "/sync/v1/groups/" + g.ID
+	var got Group
+	if res := e.do(t, "GET", path, "", &got); res.StatusCode != 200 || got.Deleted || got.Rev != g.Rev || got.Note.Version != hash("a") {
+		t.Fatalf("%d %+v", res.StatusCode, got)
+	}
+	if err := os.WriteFile(filepath.Join(e.v.Root(), "a.md"), []byte("edited outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var ae struct{ Code string }
+	if res := e.do(t, "GET", path, "", &ae); res.StatusCode != 409 || ae.Code != "changed" {
+		t.Fatalf("unscanned edit: %d %+v", res.StatusCode, ae)
+	}
+	os.WriteFile(filepath.Join(e.v.Root(), "a.md"), []byte("a"), 0o644)
+	e.v.Trash(g.ID)
+	got = Group{}
+	if res := e.do(t, "GET", path, "", &got); res.StatusCode != 200 || !got.Deleted || got.Note.Path != "a.md" {
+		t.Fatalf("trashed: %d %+v", res.StatusCode, got)
+	}
+	e.v.DeleteForever(g.ID)
+	if res := e.do(t, "GET", path, "", &ae); res.StatusCode != 404 || ae.Code != "not_found" {
+		t.Fatalf("emptied: %d %+v", res.StatusCode, ae)
 	}
 }

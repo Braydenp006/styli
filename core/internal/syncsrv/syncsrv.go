@@ -50,6 +50,7 @@ func newHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /sync/v1/hello", s.hello)
 	mux.HandleFunc("GET /sync/v1/changes", s.changes)
+	mux.HandleFunc("GET /sync/v1/groups/{id}", s.getGroup)
 	mux.HandleFunc("GET /sync/v1/groups/{id}/note", s.getNote)
 	mux.HandleFunc("GET /sync/v1/groups/{id}/files/{n}", s.getFile)
 	mux.HandleFunc("PUT /sync/v1/blobs/{hash}", s.putBlob)
@@ -140,6 +141,30 @@ func (s *server) changes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t.Stop()
+	}
+}
+
+// getGroup confirms what the atrium holds of one group right now, checked
+// against the files on disk: its state, its deletion if it is in the trash,
+// or not_found. A device clears its local copy only if this equals it. An
+// edit here not scanned yet is "changed": nothing can be confirmed until then.
+func (s *server) getGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	g, err := s.Vault.Verify(id)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, wire(g))
+	case errors.Is(err, vault.ErrConflict):
+		fail(w, http.StatusConflict, "changed", "the group is being changed on the atrium; try again")
+	case errors.Is(err, vault.ErrNotFound):
+		t, terr := s.Vault.Trashed(id)
+		if terr != nil {
+			s.failErr(w, terr) // not found: emptied from the trash, or never here
+			return
+		}
+		writeJSON(w, http.StatusOK, deletion(t))
+	default:
+		s.failErr(w, err)
 	}
 }
 
