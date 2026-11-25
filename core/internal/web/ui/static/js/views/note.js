@@ -402,9 +402,9 @@ export function createNotePane(host) {
         : "You can bring it back from the trash.";
     const files = c.note.files.length;
     return openDialog({
-      title: "Move this note to the trash?",
-      description: `${files ? `The note and its ${files === 1 ? "attached file" : files + " attached files"} move together. ` : ""}${keep}`,
-      submitLabel: "Move to trash",
+      title: "Move this note to the trash everywhere?",
+      description: `It goes to the trash on every device. ${files ? `The note and its ${files === 1 ? "attached file" : files + " attached files"} move together. ` : ""}${keep}`,
+      submitLabel: "Move to trash everywhere",
       danger: true,
       onSubmit: async () => {
         await saveFirst(c);

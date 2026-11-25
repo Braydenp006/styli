@@ -98,6 +98,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/trash", s.listTrash)
 	mux.HandleFunc("POST /api/trash/{id}/restore", s.restoreTrash)
 	mux.HandleFunc("POST /api/trash/{id}/delete-forever", s.deleteForever)
+	mux.HandleFunc("GET /api/recovery", s.listCandidates)
+	mux.HandleFunc("POST /api/recovery/{key}/restore", s.restoreCandidate)
+	mux.HandleFunc("POST /api/recovery/{key}/delete-forever", s.deleteCandidate)
 
 	mux.HandleFunc("GET /api/missing", s.listMissing)
 	mux.HandleFunc("GET /api/status", s.status)

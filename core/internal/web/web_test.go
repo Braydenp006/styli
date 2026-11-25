@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -611,4 +613,36 @@ func TestSyncStatusOnlyOnADevice(t *testing.T) {
 	if m := e.call(t, "GET", "/api/sync", nil, 200); m["atrium"] != "atrium.example:7879" || m["waiting"] == nil {
 		t.Fatalf("%v", m)
 	}
+}
+
+func TestRecoveryCandidates(t *testing.T) {
+	e := newEnv(t)
+	id := e.create(t, "n.md", "deleted version")
+	if err := e.v.Trash(id); err != nil {
+		t.Fatal(err)
+	}
+	text := "edited offline"
+	h := sha256.Sum256([]byte(text))
+	hash := hex.EncodeToString(h[:])
+	if err := e.v.StageBlob(hash, strings.NewReader(text), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	must(e.v.AddCandidate(id, vault.Group{Note: &vault.File{Path: "n.md", Version: hash}, Files: []vault.File{}}, "unknown-device", vault.EditedAfterDelete))
+
+	cs := e.call(t, "GET", "/api/recovery", nil, 200)["candidates"].([]any)
+	c := cs[0].(map[string]any)
+	if len(cs) != 1 || c["id"] != id || c["note_path"] != "n.md" || c["from"] != "a device" || c["why"] != vault.EditedAfterDelete {
+		t.Fatalf("%v", cs)
+	}
+	if st := e.call(t, "GET", "/api/status", nil, 200)["recovery"].([]any); len(st) != 1 {
+		t.Fatalf("status: %v", st)
+	}
+	key := c["key"].(string)
+	if got := e.call(t, "POST", "/api/recovery/"+key+"/restore", map[string]any{}, 200); got["id"] != id {
+		t.Fatalf("%v", got)
+	}
+	if e.call(t, "GET", "/api/notes/"+id, nil, 200)["text"] != text {
+		t.Fatal("not restored")
+	}
+	e.call(t, "POST", "/api/recovery/"+key+"/delete-forever", map[string]any{}, 404)
 }

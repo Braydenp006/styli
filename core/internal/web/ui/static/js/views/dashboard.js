@@ -7,7 +7,7 @@ import { href } from "../router.js";
 import { relativeTime, fullDate } from "../time.js";
 import { openDialog, UserError } from "../dialogs.js";
 import { showToast } from "../toast.js";
-import { attentionItems, describeJob, describeTimeCheck, describeOffset, baseName } from "../attention.js";
+import { attentionItems, describeJob, describeTimeCheck, describeOffset, baseName, recoveryWhy } from "../attention.js";
 
 const POLL_MS = 20000;
 let app = { refreshFolders() {} };
@@ -55,7 +55,7 @@ function draw() {
   const { status } = data;
   const hub = status.hub;
   const run = status.last_maid_run;
-  const items = attentionItems({ run, missing: data.missing, failed: status.failed_commits });
+  const items = attentionItems({ run, missing: data.missing, failed: status.failed_commits, recovery: status.recovery });
   document.dispatchEvent(new CustomEvent("attention-count", { detail: items.length })); // keeps the sidebar badge in step
 
   setChildren(element,
@@ -103,6 +103,17 @@ function itemBody(item) {
           h("p", { class: "hint" }, "Nothing was lost. The old text is in the note's saved versions, and the device still has its copy and will send it again.")),
         h("div", { class: "attention-actions" },
           h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: (e) => dismissFailed(item, e.currentTarget) }, "Dismiss")),
+      ];
+    }
+    case "recovery": {
+      const name = item.notePath ? `“${baseName(item.notePath).replace(/\.[^.]+$/, "")}”` : "a note";
+      return [
+        h("div", { class: "attention-text" },
+          h("strong", {}, `A version of ${name} is kept for you to review`),
+          h("p", {}, recoveryWhy(item)),
+          h("p", { class: "hint" }, "The delete stands. This version stays until you restore it or delete it for good; nothing removes it on its own.")),
+        h("div", { class: "attention-actions" },
+          h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: () => { location.hash = href.trash(); } }, "Review in trash")),
       ];
     }
     case "held": {
@@ -153,16 +164,16 @@ async function dismissFailed(item, button) {
 
 function trashMissing(item, name) {
   return openDialog({
-    title: `Move “${name}” to the trash?`,
-    description: "Its file is already gone from your vault folder. This takes it off your notes list. You can bring it back from the trash.",
-    submitLabel: "Move to trash",
+    title: `Move “${name}” to the trash everywhere?`,
+    description: "Its file is already gone from your vault folder. This takes it off your notes list on every device. You can bring it back from the trash.",
+    submitLabel: "Move to trash everywhere",
     onSubmit: async () => {
       try {
         await api.post(`/api/notes/${encodeURIComponent(item.id)}/trash`);
       } catch (err) {
         if (!(err instanceof ApiError && err.code === "not_found")) throw err; // already gone is fine
       }
-      showToast(`Moved “${name}” to the trash.`, { actionLabel: "See trash", onAction: () => { location.hash = href.trash(); } });
+      showToast(`Moved “${name}” to the trash everywhere.`, { actionLabel: "See trash", onAction: () => { location.hash = href.trash(); } });
       app.refreshFolders();
       document.dispatchEvent(new CustomEvent("trash-changed"));
       changed();

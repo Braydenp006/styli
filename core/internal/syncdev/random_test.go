@@ -15,10 +15,10 @@ import (
 // syncs, and:
 //
 //  1. every machine holds the same notes (settle checks it);
-//  2. every line a user saved is still in a note or in some machine's history
-//     (conflict markers keep both sides inside the note);
-//
-// A third rule, no deleted note comes back unflagged, is added with deletes.
+//  2. every line a user saved is still in a note, live or in a trash, or in
+//     some machine's history (conflict markers keep both sides inside the note);
+//  3. no deleted note comes back unflagged: a note trashed and never restored
+//     is live nowhere, unless a recovery candidate for it was restored.
 func TestRandomised(t *testing.T) {
 	seeds := 30
 	if testing.Short() {
@@ -43,7 +43,8 @@ func randomRun(t *testing.T, seed uint64, steps int) {
 		return devs[m].v
 	}
 	folders := []string{"", "A", "B"}
-	var saved []string // every line a user saved, anywhere
+	deleted := map[string]bool{} // trashed by a user and not restored since
+	var saved []string           // every line a user saved, anywhere
 	n := 0
 	line := func() string {
 		n++
@@ -64,7 +65,7 @@ func randomRun(t *testing.T, seed uint64, steps int) {
 	for step := 0; step < steps; step++ {
 		m := rng.IntN(4)
 		v := vaultOf(m)
-		switch op := rng.IntN(9); {
+		switch op := rng.IntN(11); {
 		case op < 2: // create
 			p := fmt.Sprintf("n%d.md", step) // names are unique, so no clashes here
 			if f := folders[rng.IntN(len(folders))]; f != "" {
@@ -81,6 +82,28 @@ func randomRun(t *testing.T, seed uint64, steps int) {
 				g := gs[rng.IntN(len(gs))]
 				if err := v.Move(g.ID, folders[rng.IntN(len(folders))]); err != nil {
 					t.Fatalf("step %d: move: %v", step, err)
+				}
+			}
+		case op == 9: // delete
+			if gs := notes(v); len(gs) > 0 {
+				g := gs[rng.IntN(len(gs))]
+				if err := v.Trash(g.ID); err != nil {
+					t.Fatalf("step %d: trash: %v", step, err)
+				}
+				deleted[g.ID] = true
+			}
+		case op == 10 && m == 3 && rng.IntN(2) == 0: // restore a recovery candidate
+			if cs := must(a.v.ListCandidates()); len(cs) > 0 {
+				c := cs[rng.IntN(len(cs))]
+				if _, err := a.v.RestoreCandidate(c.Key, ""); err == nil {
+					delete(deleted, c.Group.ID)
+				}
+			}
+		case op == 10: // restore
+			if ts := must(v.ListTrash()); len(ts) > 0 {
+				id := ts[rng.IntN(len(ts))].Group.ID
+				if v.Restore(id, "") == nil {
+					delete(deleted, id)
 				}
 			}
 		case op == 6: // a device goes offline or comes back
@@ -116,5 +139,12 @@ func randomRun(t *testing.T, seed uint64, steps int) {
 			t.Fatalf("a line a user saved is gone from every note and every history: %s", tok)
 		}
 	}
-	t.Logf("%d lines saved in %d steps; %d files on the atrium", len(saved), steps, len(tree(t, a.v.Root())))
+	for id := range deleted {
+		for _, v := range vs {
+			if _, err := v.Get(id); err == nil {
+				t.Fatalf("deleted note %s came back in %s", id, v.Root())
+			}
+		}
+	}
+	t.Logf("%d deleted; %d lines saved in %d steps; %d files on the atrium", len(deleted), len(saved), steps, len(tree(t, a.v.Root())))
 }

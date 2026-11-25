@@ -61,19 +61,27 @@ func (v *Vault) Changed() <-chan struct{} {
 	return v.changed
 }
 
-// Changes returns up to limit live groups whose Rev is above since, lowest Rev
+// Changes returns up to limit groups whose Rev is above since, lowest Rev
 // first, and whether more are waiting. A group appears once, at its newest Rev.
+// A group in the trash is listed as a deletion (Deleted set, Rev the delete's
+// number) until it is emptied from the trash.
 func (v *Vault) Changes(since uint64, limit int) ([]Group, bool, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	type entry struct {
-		id  string
-		rev uint64
+		id      string
+		rev     uint64
+		deleted bool
 	}
 	var es []entry
 	for id, rev := range v.revs {
 		if rev > since {
-			es = append(es, entry{id, rev})
+			es = append(es, entry{id, rev, false})
+		}
+	}
+	for id, rev := range v.dels {
+		if _, live := v.revs[id]; rev > since && !live { // live: a Trash cut short, finished later
+			es = append(es, entry{id, rev, true})
 		}
 	}
 	sort.Slice(es, func(i, j int) bool { return es[i].rev < es[j].rev })
@@ -83,6 +91,16 @@ func (v *Vault) Changes(since uint64, limit int) ([]Group, bool, error) {
 	}
 	gs := make([]Group, 0, len(es))
 	for _, e := range es {
+		if e.deleted {
+			r, err := v.readTrash(e.id)
+			if err != nil {
+				return nil, false, err
+			}
+			g := r.Group
+			g.Rev, g.Deleted = r.DeletedRev, true
+			gs = append(gs, g)
+			continue
+		}
 		g, err := v.load(e.id)
 		if err != nil {
 			return nil, false, err
@@ -157,6 +175,10 @@ type pendingApply struct {
 func (v *Vault) Apply(id string, base uint64, want Group) (Group, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.apply(id, base, want)
+}
+
+func (v *Vault) apply(id string, base uint64, want Group) (Group, error) {
 	if !idRe.MatchString(id) {
 		return Group{}, ErrBadGroup
 	}
@@ -171,10 +193,23 @@ func (v *Vault) Apply(id string, base uint64, want Group) (Group, error) {
 		return Group{}, err
 	}
 	if !exists {
-		if _, err := v.readTrash(id); err == nil {
-			return Group{}, ErrTrashed
-		}
-		if base != 0 {
+		if rec, err := v.readTrash(id); err == nil {
+			if base == 0 || base != rec.DeletedRev {
+				return Group{}, ErrTrashed
+			}
+			// The device saw this delete (its base is the delete's number) and
+			// restored the note there: restore it here, then apply its push.
+			if err := v.restore(id, ""); err != nil {
+				return Group{}, err
+			}
+			if cur, err = v.load(id); err != nil {
+				return Group{}, err
+			}
+			exists, base = true, cur.Rev
+			if SameState(cur, want) {
+				return cur, nil
+			}
+		} else if base != 0 {
 			return Group{}, ErrNotFound
 		}
 	} else {

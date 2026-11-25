@@ -6,14 +6,18 @@ package syncdev
 // random_test.go use it.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -298,17 +302,38 @@ func equal(a, b map[string]string) bool {
 }
 
 // everything is all the text a user could still find: the notes on every
-// machine, and every history version on every machine.
+// machine, live or in the trash, and every history version on every machine.
 func everything(t *testing.T, vs ...*vault.Vault) string {
 	t.Helper()
 	var b strings.Builder
 	for _, v := range vs {
+		var ids []string
 		for _, g := range must(v.List()) {
 			if g.Note != nil {
 				b.Write(must(os.ReadFile(filepath.Join(v.Root(), g.Note.Path))))
 			}
-			for _, ver := range must(v.History(g.ID)) {
-				b.Write(must(v.ReadVersion(g.ID, ver.ID)))
+			ids = append(ids, g.ID)
+		}
+		for _, tg := range must(v.ListTrash()) {
+			if tg.Group.Note != nil {
+				b.Write(must(os.ReadFile(filepath.Join(v.Root(), ".ids", "trash", tg.Group.ID, "files", path.Base(tg.Group.Note.Path)))))
+			}
+			ids = append(ids, tg.Group.ID)
+		}
+		cs, err := v.ListCandidates()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cs {
+			if c.Group.Note != nil {
+				b.Write(must(os.ReadFile(filepath.Join(v.Root(), ".ids", "recovery", c.Key, "files", c.Group.Note.Version))))
+			}
+		}
+		for _, id := range ids { // read from disk: the vault shows only live notes' history
+			vers, _ := filepath.Glob(filepath.Join(v.Root(), ".ids", "history", id, "*.gz"))
+			for _, ver := range vers {
+				zr := must(gzip.NewReader(bytes.NewReader(must(os.ReadFile(ver)))))
+				b.Write(must(io.ReadAll(zr)))
 			}
 		}
 	}

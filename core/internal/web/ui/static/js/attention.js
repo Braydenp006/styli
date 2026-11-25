@@ -1,14 +1,16 @@
 // What needs the person's attention on the atrium, and how to say it. Pure
 // functions, so they are tested without a browser.
 
-// Turn the maid's last run, the list of missing notes and the device changes
-// that could not be finished into the things to show: { kind, ... } where kind
-// is "missing", "failed", "clock", "held" or "error".
+// Turn the maid's last run, the list of missing notes, the device changes
+// that could not be finished and the recovery candidates into the things to
+// show: { kind, ... } where kind is "missing", "failed", "recovery", "clock",
+// "held" or "error".
 // A held-back cleanup is one item however many jobs were held, because one
 // approval covers them all.
-export function attentionItems({ run, missing = [], failed = [] }) {
+export function attentionItems({ run, missing = [], failed = [], recovery = [] }) {
   const items = missing.map((m) => ({ kind: "missing", id: m.id, paths: m.paths }));
   for (const f of failed) items.push({ kind: "failed", name: f.name, notePath: f.note_path || "", at: f.at, reason: f.reason });
+  for (const c of recovery) items.push({ kind: "recovery", key: c.key, notePath: c.note_path || c.files[0] || "", why: c.why, from: c.from });
   if (!run) return items;
   if (run.time_check === "wrong") items.push({ kind: "clock", offsetSeconds: run.clock_offset_seconds });
   const held = [];
@@ -19,6 +21,13 @@ export function attentionItems({ run, missing = [], failed = [] }) {
   }
   if (held.length) items.push({ kind: "held", jobs: held });
   return items;
+}
+
+// Why a recovery candidate exists, in one sentence.
+export function recoveryWhy({ why, from }) {
+  return why === "deleted_while_changed"
+    ? `Deleted everywhere from ${from}, which hadn't seen this newer version.`
+    : `Changed on ${from} after it was deleted everywhere.`;
 }
 
 // "about 3 hours behind": how far this computer's clock is from the time

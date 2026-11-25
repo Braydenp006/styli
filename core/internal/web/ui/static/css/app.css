@@ -203,6 +203,9 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
 .trash-item-text { display: flex; flex-direction: column; gap: var(--space-1); flex: 1 1 280px; min-width: 0; }
 .trash-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .trash-list .empty { margin: var(--space-6) 0; }
+.recovery-section { margin: var(--space-4) 0 var(--space-6); }
+.recovery-section h2 { font: 400 22px/28px var(--font-display); }
+.recovery-section .view-sub { margin: var(--space-1) 0 var(--space-3); }
 
 /* ---- version history ---- */
 .vault[data-view="history"] .vault-note, .vault[data-view="history"] .vault-details { display: none; }

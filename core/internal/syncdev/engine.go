@@ -164,8 +164,10 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 		return err
 	}
 	// Full check: a new epoch (restored atrium) or a cursor ahead of the atrium
-	// means the cursor can't be trusted, so read every group from the start.
-	full := cur.Epoch != h.Epoch || cur.Since > h.Seq
+	// means the cursor can't be trusted, and a cursor below the atrium's
+	// forgotten number may have missed deletes. Read every group from the start.
+	restored := cur.Epoch != h.Epoch || cur.Since > h.Seq
+	full := restored || cur.Since < h.Forgotten
 	since := cur.Since
 	if full {
 		since = 0
@@ -216,7 +218,12 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 		return err
 	}
 	if full {
-		e.reportGone(locals, seen)
+		if err := e.gone(p, locals, seen, restored); err != nil {
+			return err
+		}
+		if locals, err = e.v.List(); err != nil {
+			return err
+		}
 	}
 
 	// 2. What changed here and wasn't handled above.
@@ -228,8 +235,8 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 		if err != nil {
 			return err
 		}
-		if b != nil && vault.SameState(l, b.Group(l.ID)) {
-			continue
+		if b != nil && b.Deleted == 0 && vault.SameState(l, b.Group(l.ID)) {
+			continue // a base marked deleted with a live copy: restored here
 		}
 		if err := e.group(ctx, p, l.ID, nil); err != nil {
 			var sk *skip
@@ -239,21 +246,87 @@ func (e *Engine) sync(ctx context.Context, p *pass) error {
 			p.waiting[l.ID] = sk.reason
 		}
 	}
+
+	// 3. Groups gone from this vault since they synced (trashed here, or
+	// emptied from the trash): deletes to send.
+	live := map[string]bool{}
+	for _, l := range locals {
+		live[l.ID] = true
+	}
+	ids, err := e.rec.baseIDs()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if seen[id] || live[id] {
+			continue
+		}
+		b, err := e.rec.base(id)
+		if err != nil {
+			return err
+		}
+		if b == nil || b.Deleted != 0 {
+			continue
+		}
+		if err := e.group(ctx, p, id, nil); err != nil {
+			var sk *skip
+			if !errors.As(err, &sk) {
+				return err
+			}
+			p.waiting[id] = sk.reason
+		}
+	}
 	return nil
 }
 
-// reportGone logs groups this device has synced that the atrium's complete
-// list no longer has. Deletes are not built yet, so they are left as they are.
-func (e *Engine) reportGone(locals []vault.Group, seen map[string]bool) {
+// gone handles, in a full check, live groups this device has synced that the
+// atrium's complete list does not have at all. After a restored atrium (a new
+// epoch) they may be newer than its backup, so their bases are dropped and
+// they are pushed again as new. Otherwise they were deleted while this device
+// was away and the delete was forgotten: an unchanged one goes to the trash
+// here; a changed one is left for step 2, whose push finds it gone and keeps
+// it on the atrium as a recovery candidate.
+func (e *Engine) gone(p *pass, locals []vault.Group, seen map[string]bool, restored bool) error {
 	for _, l := range locals {
 		if seen[l.ID] {
 			continue
 		}
-		if b, err := e.rec.base(l.ID); err == nil && b != nil {
-			e.logf("sync: %s (%s) is no longer on the atrium; left as it is here", l.ID, firstPath(l))
+		b, err := e.rec.base(l.ID)
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			continue
+		}
+		switch {
+		case restored:
+			e.logf("sync: %s is not on the restored atrium; sending it again", firstPath(l))
+			if err := e.rec.removeBase(l.ID); err != nil {
+				return err
+			}
+		case b.Deleted == 0 && (vault.SameState(l, b.Group(l.ID)) || b.isParked(l)):
+			if _, err := e.v.TrashIf(l.ID, l.Rev); err != nil {
+				p.waiting[l.ID] = groupErr(err, "moving a note deleted everywhere to the trash failed").Error()
+				continue
+			}
+			e.logf("sync: %s was deleted everywhere while this device was away; moved to the trash here", firstPath(l))
+			e.unindex(l.ID)
+			b.Deleted, b.Parked, b.TrashRev = forgottenDelete, nil, e.trashRev(l.ID)
+			if err := e.rec.saveBase(l.ID, *b); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
+
+// forgottenDelete marks a base whose delete the atrium has emptied from its
+// trash: no rev to restore against, so a restore here is sent as new.
+const forgottenDelete = ^uint64(0)
+
+// unknownRev is the base sent with a delete when this device doesn't know
+// which version it deleted: the atrium then keeps its own as a candidate.
+const unknownRev = ^uint64(0)
 
 // group decides and carries out what one group needs. remote is the atrium's
 // state from the change feed, or nil if the feed did not list it (then the
@@ -278,14 +351,39 @@ func (e *Engine) group(ctx context.Context, p *pass, id string, remote *syncsrv.
 	}
 
 	switch {
+	case remote != nil && remote.Deleted:
+		return e.deletedThere(ctx, p, id, base, local, hasLocal, r)
+	case !hasLocal && base != nil && base.Deleted == 0:
+		// Synced, then trashed (or emptied from the trash) here.
+		return e.pushDelete(ctx, p, id, base, base.Rev)
+	case !hasLocal && base != nil && remote != nil:
+		// Restored on the atrium after a delete this device had applied,
+		// unless someone here restored and trashed it again since: then this
+		// is a new delete, of a version changed there (which the atrium keeps
+		// as a candidate).
+		if t := e.trashRev(id); t != 0 && t != base.TrashRev {
+			return e.pushDelete(ctx, p, id, base, base.Rev)
+		}
+		return e.pullRestored(ctx, p, id, r)
 	case !hasLocal && remote == nil:
 		return nil
-	case !hasLocal && base != nil:
-		// Synced before, gone from this vault now (trashed here): deletes are
-		// not built yet, so the atrium keeps it and so does this device's trash.
-		return &skip{reason: "deleted on this device; deletes don't sync yet", hold: false}
 	case !hasLocal:
+		if t, err := e.v.Trashed(id); err == nil {
+			// In this device's trash with no base: synced, its base lost (a
+			// crash, a lost reply), then trashed: a delete to send. If its
+			// version differs from the atrium's, which one is newer is unknown,
+			// so the atrium keeps its own as a candidate.
+			rev := r.Rev
+			if !vault.SameFiles(t.Group, r) {
+				rev = unknownRev
+			}
+			return e.pushDelete(ctx, p, id, &Base{Rev: r.Rev, Note: r.Note, Files: r.Files, History: r.History, Conflict: r.Conflict}, rev)
+		}
 		return e.pull(ctx, p, id, nil, r)
+	case base != nil && base.Deleted != 0 && remote == nil:
+		// Restored here after a delete both agreed on: restore it everywhere.
+		// Everything is uploaded, since the atrium's trash may hold another version.
+		return e.push(ctx, p, id, local, base, vault.Group{Rev: base.Deleted})
 	case base == nil && remote == nil:
 		return e.push(ctx, p, id, local, nil, vault.Group{})
 	case base == nil:
@@ -307,9 +405,10 @@ func (e *Engine) group(ctx context.Context, p *pass, id string, remote *syncsrv.
 		return e.unpark(p, local, base)
 	case !lChanged && !rChanged:
 		// A restored atrium renumbered it, or a park was written down but the
-		// move never happened (a crash in between): tidy the base.
-		if r.Rev != base.Rev || base.Parked != nil {
-			base.Rev, base.Parked = r.Rev, nil
+		// move never happened (a crash in between), or both sides restored it
+		// after a delete: tidy the base.
+		if r.Rev != base.Rev || base.Parked != nil || base.Deleted != 0 {
+			base.Rev, base.Parked, base.Deleted = r.Rev, nil, 0
 			return e.rec.saveBase(id, *base)
 		}
 		return nil
@@ -321,6 +420,144 @@ func (e *Engine) group(ctx context.Context, p *pass, id string, remote *syncsrv.
 		return e.recordBase(id, r)
 	default:
 		return e.merge(ctx, p, id, base, local, r)
+	}
+}
+
+// deletedThere handles a deletion from the atrium's feed (r: the group as it
+// was when deleted, r.Rev the delete's number). A copy here that is what both
+// last agreed on goes to the trash; a changed copy is first kept on the atrium
+// as a recovery candidate.
+func (e *Engine) deletedThere(ctx context.Context, p *pass, id string, base *Base, local vault.Group, hasLocal bool, r vault.Group) error {
+	if !hasLocal {
+		// Trashed here too, or never here.
+		if base == nil || base.Deleted == r.Rev {
+			return nil
+		}
+		// Deleted here too, before this device knew of the delete there.
+		// TrashRev 0 marks the trash entry as this person's own delete, which
+		// no one restoring elsewhere has seen: such a restore waits here.
+		base.Deleted, base.Parked, base.TrashRev = r.Rev, nil, 0
+		return e.rec.saveBase(id, *base)
+	}
+	if base != nil && base.Deleted == r.Rev {
+		// Restored here after this very delete: restore it everywhere.
+		return e.push(ctx, p, id, local, base, vault.Group{Rev: r.Rev})
+	}
+	unchanged := vault.SameState(local, r) || (base != nil && (vault.SameState(local, base.Group(id)) || base.isParked(local)))
+	if !unchanged {
+		return e.keepAsCandidate(ctx, p, id, local, base)
+	}
+	if _, err := e.v.TrashIf(id, local.Rev); err != nil {
+		return groupErr(err, "moving a note deleted everywhere to the trash failed")
+	}
+	e.logf("sync: %s was deleted everywhere; moved to the trash here", firstPath(local))
+	e.unindex(id)
+	if p.paths != nil {
+		for _, f := range allFiles(local) {
+			delete(p.paths, f.Path)
+		}
+	}
+	nb := Base{Rev: r.Rev, Note: r.Note, Files: r.Files, History: r.History, Conflict: r.Conflict}
+	if base != nil {
+		nb = *base
+		nb.Parked = nil
+	}
+	nb.Deleted, nb.TrashRev = r.Rev, e.trashRev(id)
+	return e.rec.saveBase(id, nb)
+}
+
+// pushDelete sends a delete made here, of the version the atrium numbered
+// rev. The delete stands; if the atrium has a newer version, it keeps that as
+// a recovery candidate first.
+func (e *Engine) pushDelete(ctx context.Context, p *pass, id string, base *Base, rev uint64) error {
+	got, err := e.c.deleteGroup(ctx, id, rev)
+	if err == nil {
+		base.Deleted, base.Parked, base.TrashRev = got.Rev, nil, e.trashRev(id)
+		return e.rec.saveBase(id, *base)
+	}
+	var ae *apiError
+	if !errors.As(err, &ae) || ae.Status >= 500 {
+		return err
+	}
+	switch ae.Code {
+	case "not_found":
+		// Already emptied from the atrium's trash.
+		base.Deleted, base.Parked, base.TrashRev = forgottenDelete, nil, e.trashRev(id)
+		return e.rec.saveBase(id, *base)
+	case "changed":
+		return held("the atrium is catching up on an edit made there; trying again soon")
+	default:
+		return groupErr(err, "the atrium refused the delete")
+	}
+}
+
+// keepAsCandidate handles a copy changed here of a group deleted everywhere:
+// the delete stands, and the atrium keeps this copy as a recovery candidate
+// for someone to restore or delete. Only once the atrium has confirmed it does
+// this device let the delete stand too (its copy goes to the trash here).
+func (e *Engine) keepAsCandidate(ctx context.Context, p *pass, id string, local vault.Group, base *Base) error {
+	if _, err := e.upload(ctx, id, local, vault.Group{}); err != nil {
+		return err
+	}
+	deletedRev, err := e.c.recovery(ctx, id, local)
+	if err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Code == "conflict" {
+			return held("restored on the atrium meanwhile; it syncs on the next pass")
+		}
+		return groupErr(err, "sending the copy changed after the delete failed")
+	}
+	if _, err := e.v.TrashIf(id, local.Rev); err != nil {
+		// Changed again here meanwhile: the next pass sends that version too.
+		return groupErr(err, "moving a note deleted everywhere to the trash failed")
+	}
+	e.logf("sync: %s was deleted everywhere; the copy changed here is kept on the atrium for review", firstPath(local))
+	e.unindex(id)
+	if p.paths != nil {
+		for _, f := range allFiles(local) {
+			delete(p.paths, f.Path)
+		}
+	}
+	nb := Base{Note: local.Note, Files: local.Files, History: local.History, Conflict: local.Conflict}
+	if base != nil {
+		nb = *base
+		nb.Parked = nil
+	}
+	nb.Deleted, nb.TrashRev = deletedRev, e.trashRev(id)
+	if deletedRev == 0 {
+		nb.Deleted = forgottenDelete
+	}
+	return e.rec.saveBase(id, nb)
+}
+
+// pullRestored pulls a group the atrium restored after a delete this device
+// applied. If it is still in this device's trash, the vault restores it there
+// first (Apply with the trash's delete number), so nothing is downloaded twice.
+func (e *Engine) pullRestored(ctx context.Context, p *pass, id string, r vault.Group) error {
+	t, err := e.v.Trashed(id)
+	if err != nil {
+		return e.pull(ctx, p, id, nil, r) // emptied from the trash here: a fresh pull
+	}
+	have := t.Group
+	have.Rev = t.DeletedRev
+	return e.pull(ctx, p, id, &have, r)
+}
+
+// trashRev is this device's number for its trash entry of id, or 0.
+func (e *Engine) trashRev(id string) uint64 {
+	t, err := e.v.Trashed(id)
+	if err != nil {
+		return 0
+	}
+	return t.DeletedRev
+}
+
+func (e *Engine) unindex(id string) {
+	if e.st == nil {
+		return
+	}
+	if err := e.st.Remove(id); err != nil {
+		e.logf("sync: index %s: %v", id, err) // a restart reindexes
 	}
 }
 
@@ -374,6 +611,16 @@ func (e *Engine) push(ctx context.Context, p *pass, id string, local vault.Group
 				continue
 			}
 			return e.merge(ctx, p, id, base, local, cur)
+		case ae.Code == "deleted":
+			return e.keepAsCandidate(ctx, p, id, local, base)
+		case ae.Code == "not_found" && base != nil && base.Deleted != 0 && remote.Rev == base.Deleted:
+			// A restore of a delete the atrium has since emptied from its
+			// trash: send it as new (everything is uploaded already).
+			remote = vault.Group{}
+			continue
+		case ae.Code == "not_found" && base != nil:
+			// Deleted while this device was away and emptied since, but changed here.
+			return e.keepAsCandidate(ctx, p, id, local, base)
 		case ae.Code == "path_taken" && remote.Rev == 0:
 			taken, err := e.atriumPaths()
 			if err != nil {
@@ -606,11 +853,7 @@ func (e *Engine) adopt(p *pass, g vault.Group, id string, remote vault.Group) er
 		return groupErr(err, "taking the atrium's ID for the same note here failed")
 	}
 	e.logf("sync: %s is already here, so it took the atrium's ID %s (was %s)", firstPath(saved), id, g.ID)
-	if e.st != nil {
-		if err := e.st.Remove(g.ID); err != nil {
-			e.logf("sync: index %s: %v", g.ID, err) // a restart reindexes
-		}
-	}
+	e.unindex(g.ID)
 	e.moved(p, g, saved)
 	return e.recordBase(id, remote)
 }
@@ -762,7 +1005,7 @@ func fromWire(g syncsrv.Group) vault.Group {
 	if files == nil {
 		files = []vault.File{}
 	}
-	return vault.Group{ID: g.ID, Rev: g.Rev, Note: g.Note, Files: files, History: g.History, Conflict: g.Conflict}
+	return vault.Group{ID: g.ID, Rev: g.Rev, Note: g.Note, Files: files, History: g.History, Conflict: g.Conflict, Deleted: g.Deleted}
 }
 
 // allFiles returns pointers to the group's files, note first.

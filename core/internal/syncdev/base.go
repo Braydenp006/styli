@@ -37,6 +37,17 @@ type Base struct {
 	// written before the move, so a local copy at these paths is the engine's
 	// doing, not a rename to push. The pull that follows writes a new base.
 	Parked *Parked `json:"parked,omitempty"`
+
+	// Deleted is the atrium's number for a delete both sides agreed on: the
+	// group is in this device's trash (or emptied from it). A push based on
+	// it is a restore made here after seeing the delete, which the atrium
+	// restores everywhere. The rest of the base is the last live state.
+	Deleted uint64 `json:"deleted,omitempty"`
+
+	// TrashRev is this device's own number for its trash entry of the group
+	// when the delete was agreed. A different entry means someone restored
+	// it here and trashed it again since.
+	TrashRev uint64 `json:"trash_rev,omitempty"`
 }
 
 // Parked is where the engine moved a group's files.
@@ -106,6 +117,13 @@ func (r records) saveBase(id string, b Base) error {
 	}
 	_, err := atomicfile.Write(r.basePath(id), &buf, true)
 	return err
+}
+
+func (r records) removeBase(id string) error {
+	if err := os.Remove(r.basePath(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // baseIDs lists every group that has a base.

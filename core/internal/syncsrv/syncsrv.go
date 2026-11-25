@@ -54,6 +54,8 @@ func newHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /sync/v1/groups/{id}/files/{n}", s.getFile)
 	mux.HandleFunc("PUT /sync/v1/blobs/{hash}", s.putBlob)
 	mux.HandleFunc("PUT /sync/v1/groups/{id}", s.commit)
+	mux.HandleFunc("DELETE /sync/v1/groups/{id}", s.deleteGroup)
+	mux.HandleFunc("POST /sync/v1/groups/{id}/recovery", s.recovery)
 	if d.Pairing != nil {
 		s.pairRoutes(mux)
 	}
@@ -73,18 +75,28 @@ type Group struct {
 	Files    []vault.File `json:"files"`
 	History  *bool        `json:"history,omitempty"`
 	Conflict bool         `json:"conflict,omitempty"`
+	// Deleted marks a deletion: the group as it was when trashed, and Rev is
+	// the delete's number.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 func wire(g vault.Group) Group {
 	if g.Files == nil {
 		g.Files = []vault.File{}
 	}
-	return Group{g.ID, g.Rev, g.Note, g.Files, g.History, g.Conflict}
+	return Group{g.ID, g.Rev, g.Note, g.Files, g.History, g.Conflict, g.Deleted}
+}
+
+func deletion(t vault.TrashedGroup) Group {
+	g := t.Group
+	g.Rev, g.Deleted = t.DeletedRev, true
+	return wire(g)
 }
 
 func (s *server) hello(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"protocol": Protocol, "version": s.Version, "epoch": s.Vault.Epoch(), "seq": s.Vault.Seq(),
+		"forgotten": s.Vault.Forgotten(), // a device whose cursor is below this does a full check
 	})
 }
 
@@ -235,6 +247,77 @@ func (s *server) commit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, wire(g))
+}
+
+// deleteGroup trashes the group: a delete everywhere from a device, which last
+// saw it at rev ?base. The delete always stands; if the group changed here
+// since, this version is first kept as a recovery candidate. A group already
+// in the trash is answered as deleted, so a retry whose reply was lost is
+// harmless. An edit here not scanned yet is refused for now ("changed").
+func (s *server) deleteGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	base, err := uintParam(r.URL.Query().Get("base"), 0)
+	if err != nil || base == 0 {
+		fail(w, http.StatusBadRequest, "bad_request", "base must be the rev the device last saw")
+		return
+	}
+	err = s.Vault.TrashKeeping(id, base, DeviceID(r.Context()))
+	switch {
+	case errors.Is(err, vault.ErrConflict):
+		fail(w, http.StatusConflict, "changed", "the group is being changed on the atrium; try again")
+		return
+	case err != nil && !errors.Is(err, vault.ErrNotFound):
+		s.failErr(w, err)
+		return
+	}
+	t, err := s.Vault.Trashed(id)
+	if err != nil {
+		s.failErr(w, err) // not found: emptied from the trash already, or never here
+		return
+	}
+	if s.Store != nil {
+		if err := s.Store.Remove(id); err != nil {
+			s.Logf("sync: index %s: %v", id, err) // a restart reindexes
+		}
+	}
+	writeJSON(w, http.StatusOK, deletion(t))
+}
+
+// recovery keeps a device's copy of a group deleted everywhere, edited there
+// after the delete, as a recovery candidate. Its content is uploaded first.
+// A group that is live here again is refused with its current state, so the
+// device syncs it normally. Sending the same copy again is harmless.
+func (s *server) recovery(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Note     *vault.File  `json:"note"`
+		Files    []vault.File `json:"files"`
+		History  *bool        `json:"history"`
+		Conflict bool         `json:"conflict"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || dec.More() {
+		fail(w, http.StatusBadRequest, "bad_request", "the candidate is not valid JSON")
+		return
+	}
+	if req.Files == nil {
+		req.Files = []vault.File{}
+	}
+	id := r.PathValue("id")
+	c, err := s.Vault.AddCandidate(id, vault.Group{Note: req.Note, Files: req.Files, History: req.History, Conflict: req.Conflict}, DeviceID(r.Context()), vault.EditedAfterDelete)
+	if errors.Is(err, vault.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "conflict", "error": "the group is live on the atrium", "current": wire(c.Group)})
+		return
+	}
+	if err != nil {
+		s.failErr(w, err)
+		return
+	}
+	var deletedRev uint64 // 0: the delete is no longer in the trash here
+	if t, err := s.Vault.Trashed(id); err == nil {
+		deletedRev = t.DeletedRev
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"key": c.Key, "deleted_rev": deletedRev})
 }
 
 func uintParam(s string, def uint64) (uint64, error) {

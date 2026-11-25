@@ -50,7 +50,7 @@ const note = createNotePane({
     loadList(false);
     app.refreshFolders();
     document.dispatchEvent(new CustomEvent("trash-changed"));
-    showToast(`Moved “${title}” to the trash.`, {
+    showToast(`Moved “${title}” to the trash everywhere.`, {
       actionLabel: "Undo",
       onAction: async () => {
         try {

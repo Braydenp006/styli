@@ -89,6 +89,8 @@ type hello struct {
 	Version  string `json:"version"`
 	Epoch    string `json:"epoch"`
 	Seq      uint64 `json:"seq"`
+	// Forgotten: deletes up to this rev are no longer in the change feed.
+	Forgotten uint64 `json:"forgotten"`
 }
 
 func (c *client) hello(ctx context.Context) (hello, error) {
@@ -138,6 +140,48 @@ func (c *client) putBlob(ctx context.Context, hash string, r io.Reader, size int
 	}
 	res.Body.Close()
 	return nil
+}
+
+// deleteGroup asks the atrium to trash group id, if its rev is still base. It
+// returns the deletion (Rev is the delete's number).
+func (c *client) deleteGroup(ctx context.Context, id string, base uint64) (syncsrv.Group, error) {
+	res, err := c.do(ctx, http.MethodDelete, "/sync/v1/groups/"+url.PathEscape(id)+"?base="+strconv.FormatUint(base, 10), nil, 0)
+	if err != nil {
+		return syncsrv.Group{}, err
+	}
+	defer res.Body.Close()
+	var out syncsrv.Group
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return syncsrv.Group{}, fmt.Errorf("sync: bad answer from the atrium: %w", err)
+	}
+	return out, nil
+}
+
+// recovery hands the atrium this device's copy of group id, deleted
+// everywhere, to keep as a recovery candidate (its content uploaded first). It
+// returns the delete's number on the atrium, or 0 if it has been emptied from
+// the trash there.
+func (c *client) recovery(ctx context.Context, id string, g vault.Group) (uint64, error) {
+	files := g.Files
+	if files == nil {
+		files = []vault.File{}
+	}
+	b, err := json.Marshal(map[string]any{"note": g.Note, "files": files, "history": g.History, "conflict": g.Conflict})
+	if err != nil {
+		return 0, err
+	}
+	res, err := c.do(ctx, http.MethodPost, "/sync/v1/groups/"+url.PathEscape(id)+"/recovery", bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return 0, err
+	}
+	defer res.Body.Close()
+	var out struct {
+		DeletedRev uint64 `json:"deleted_rev"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("sync: bad answer from the atrium: %w", err)
+	}
+	return out.DeletedRev, nil
 }
 
 // commit asks the atrium to make group id equal g, if its rev is still base.

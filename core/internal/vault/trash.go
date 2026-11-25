@@ -23,15 +23,17 @@ const trashDir = "trash"
 
 // TrashedGroup is one entry in the trash.
 type TrashedGroup struct {
-	Group     Group
-	Folder    string // the folder the group lived in
-	DeletedAt time.Time
+	Group      Group  // as it was when deleted; Group.Rev is its last rev while live
+	Folder     string // the folder the group lived in
+	DeletedAt  time.Time
+	DeletedRev uint64 // the delete's own number (see rev.go)
 }
 
 type trashRecord struct {
 	Group
-	Folder    string    `json:"folder"`
-	DeletedAt time.Time `json:"deleted_at"`
+	Folder     string    `json:"folder"`
+	DeletedAt  time.Time `json:"deleted_at"`
+	DeletedRev uint64    `json:"deleted_rev,omitempty"`
 }
 
 func (v *Vault) trashPath(id string) string {
@@ -61,13 +63,32 @@ func (v *Vault) readTrash(id string) (trashRecord, error) {
 // are already gone (a "missing" note the user chose to remove): it moves what
 // exists and remembers everything. If it is interrupted, calling it again
 // finishes the job, and Restore works at every step.
+//
+// The delete takes the next number, like any change, so the change feed
+// lists it and devices delete their copies too (see rev.go).
 func (v *Vault) Trash(id string) error {
+	_, err := v.TrashIf(id, 0)
+	return err
+}
+
+// TrashIf trashes the group only if its Rev is still base (0: whatever it
+// is). Otherwise it returns the current group and ErrConflict: a device
+// deleting a version that has since changed here.
+func (v *Vault) TrashIf(id string, base uint64) (Group, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	g, err := v.load(id)
 	if err != nil {
-		return err
+		return Group{}, err
 	}
+	if base != 0 && g.Rev != base {
+		return g, ErrConflict
+	}
+	return Group{}, v.trash(g)
+}
+
+func (v *Vault) trash(g Group) error {
+	id := g.ID
 	files := g.all()
 	tdir := v.trashPath(id)
 	fdir := filepath.Join(tdir, "files")
@@ -95,7 +116,11 @@ func (v *Vault) Trash(id string) error {
 	if err := os.MkdirAll(fdir, 0o700); err != nil { // inside .ids, which is private anyway
 		return err
 	}
-	b, err := json.Marshal(trashRecord{Group: g, Folder: path.Dir(files[0].Path), DeletedAt: time.Now().UTC()})
+	rev, err := v.nextRev()
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(trashRecord{Group: g, Folder: path.Dir(files[0].Path), DeletedAt: time.Now().UTC(), DeletedRev: rev})
 	if err != nil {
 		return err
 	}
@@ -123,6 +148,7 @@ func (v *Vault) Trash(id string) error {
 	}
 	delete(v.missing, id)
 	delete(v.revs, id)
+	v.dels[id] = rev
 	v.signal()
 	return nil
 }
@@ -147,7 +173,7 @@ func (v *Vault) ListTrash() ([]TrashedGroup, error) {
 			errs = append(errs, err)
 			continue
 		}
-		out = append(out, TrashedGroup{r.Group, r.Folder, r.DeletedAt})
+		out = append(out, TrashedGroup{r.Group, r.Folder, r.DeletedAt, r.DeletedRev})
 	}
 	return out, errors.Join(errs...)
 }
@@ -175,6 +201,21 @@ func (v *Vault) trashIDs() ([]string, error) {
 func (v *Vault) Restore(id, folder string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.restore(id, folder)
+}
+
+// Trashed returns the trash entry of group id, or ErrNotFound.
+func (v *Vault) Trashed(id string) (TrashedGroup, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	r, err := v.readTrash(id)
+	if err != nil {
+		return TrashedGroup{}, err
+	}
+	return TrashedGroup{r.Group, r.Folder, r.DeletedAt, r.DeletedRev}, nil
+}
+
+func (v *Vault) restore(id, folder string) error {
 	rec, err := v.readTrash(id)
 	if err != nil {
 		return err
@@ -234,6 +275,7 @@ func (v *Vault) Restore(id, folder string) error {
 	if err := v.save(&g); err != nil {
 		return err
 	}
+	delete(v.dels, id) // the record's new rev tells devices it is back
 	// Live again. Drop the trash entry, record first so it stops being listed.
 	os.Remove(filepath.Join(v.trashPath(id), "record.json"))
 	os.Remove(fdir)
@@ -275,7 +317,7 @@ func (v *Vault) Purge(before time.Time, dryRun bool) (purged []string, total int
 			purged = append(purged, id)
 			continue
 		}
-		if err := v.removeTrashEntry(id); err != nil {
+		if err := v.removeTrashEntry(id, r); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -291,19 +333,31 @@ func (v *Vault) Purge(before time.Time, dryRun bool) (purged []string, total int
 func (v *Vault) DeleteForever(id string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if _, err := v.readTrash(id); err != nil {
+	r, err := v.readTrash(id)
+	if err != nil {
 		return err
 	}
 	if _, err := os.Lstat(filepath.Join(v.root, idsDir, id)); err == nil {
 		return ErrExists
 	}
-	return v.removeTrashEntry(id)
+	return v.removeTrashEntry(id, r)
 }
 
 // removeTrashEntry deletes a trash entry's files and history, then its record
 // last, so an interruption just leaves an entry the next delete finishes. The
-// caller has checked id with readTrash.
-func (v *Vault) removeTrashEntry(id string) error {
+// caller has read r with readTrash.
+//
+// The entry is also the delete's marker in the change feed, so first the
+// vault notes that the feed forgets deletes up to its number: a device that
+// has not read that far must do a full check (see Forgotten).
+func (v *Vault) removeTrashEntry(id string, r trashRecord) error {
+	if r.DeletedRev > v.forgotten {
+		if err := writeSeq(filepath.Join(v.root, idsDir, syncDir, forgottenFile), r.DeletedRev); err != nil {
+			return err
+		}
+		v.forgotten = r.DeletedRev
+	}
+	delete(v.dels, id)
 	tdir := v.trashPath(id)
 	if err := os.RemoveAll(filepath.Join(tdir, "files")); err != nil {
 		return err

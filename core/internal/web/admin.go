@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"path"
 	"runtime"
 	"time"
 
@@ -60,6 +61,81 @@ func (s *server) restoreTrash(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) deleteForever(w http.ResponseWriter, r *http.Request) {
 	if err := s.Vault.DeleteForever(r.PathValue("id")); err != nil {
+		s.failErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// candidateDTO is a recovery candidate as the trash screen and the dashboard
+// show it.
+type candidateDTO struct {
+	Key       string    `json:"key"`
+	ID        string    `json:"id"`
+	NotePath  string    `json:"note_path"`
+	Folder    string    `json:"folder"`
+	Files     []string  `json:"files"`
+	From      string    `json:"from"` // the device's name
+	Why       string    `json:"why"`  // vault.EditedAfterDelete or vault.DeletedWhileChanged
+	DeletedAt time.Time `json:"deleted_at,omitzero"`
+	AddedAt   time.Time `json:"added_at"`
+}
+
+func (s *server) candidates() []candidateDTO {
+	cs, err := s.Vault.ListCandidates()
+	if err != nil { // some were unreadable: show the rest, log the problem
+		s.Logf("web: recovery candidates: %v", err)
+	}
+	names := map[string]string{}
+	if s.Devices != nil {
+		for _, d := range s.Devices.List() {
+			names[d.ID] = d.Name
+		}
+	}
+	out := make([]candidateDTO, 0, len(cs))
+	for _, c := range cs {
+		d := candidateDTO{Key: c.Key, ID: c.Group.ID, Files: []string{}, From: names[c.Device], Why: c.Why, DeletedAt: c.DeletedAt, AddedAt: c.AddedAt}
+		if d.From == "" {
+			d.From = "a device"
+		}
+		if c.Group.Note != nil {
+			d.NotePath = c.Group.Note.Path
+			d.Folder = path.Dir(c.Group.Note.Path)
+		}
+		for _, f := range c.Group.Files {
+			d.Files = append(d.Files, f.Path)
+			if d.Folder == "" {
+				d.Folder = path.Dir(f.Path)
+			}
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func (s *server) listCandidates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": s.candidates()})
+}
+
+func (s *server) restoreCandidate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Folder string `json:"folder"` // "" restores it where its files were
+	}
+	if err := readJSON(w, r, &req); err != nil {
+		s.failErr(w, err)
+		return
+	}
+	g, err := s.Vault.RestoreCandidate(r.PathValue("key"), req.Folder)
+	if err != nil {
+		s.failErr(w, err)
+		return
+	}
+	s.reindex(g.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"id": g.ID})
+}
+
+func (s *server) deleteCandidate(w http.ResponseWriter, r *http.Request) {
+	if err := s.Vault.DeleteCandidate(r.PathValue("key")); err != nil {
 		s.failErr(w, err)
 		return
 	}
@@ -151,7 +227,7 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 		s.Logf("web: failed sync commits: %v", err)
 		failed = []vault.FailedCommit{}
 	}
-	out := map[string]any{"maid_running": st.Running, "last_maid_run": nil, "hub": hub, "failed_commits": failed}
+	out := map[string]any{"maid_running": st.Running, "last_maid_run": nil, "hub": hub, "failed_commits": failed, "recovery": s.candidates()}
 	if st.Last != nil {
 		out["last_maid_run"] = toRunDTO(*st.Last)
 	}

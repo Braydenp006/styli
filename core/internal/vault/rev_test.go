@@ -110,13 +110,14 @@ func TestCounterRepairsFromRecords(t *testing.T) {
 				os.WriteFile(seqPath, []byte("1\n"), 0o600)
 			}
 			v2 := must(Open(root))
-			if v2.Seq() != trashed.Rev {
-				t.Fatalf("seq %d, want %d", v2.Seq(), trashed.Rev)
+			del := trashed.Rev + 1 // the delete's own number
+			if v2.Seq() != del {
+				t.Fatalf("seq %d, want %d", v2.Seq(), del)
 			}
 			_, ver, _ := v2.ReadNote(g.ID)
 			must(v2.WriteNote(g.ID, []byte("x"), ver))
-			if r := rev(t, v2, g.ID); r != trashed.Rev+1 {
-				t.Fatalf("rev %d reused or skipped, want %d", r, trashed.Rev+1)
+			if r := rev(t, v2, g.ID); r != del+1 {
+				t.Fatalf("rev %d reused or skipped, want %d", r, del+1)
 			}
 		})
 	}

@@ -1,5 +1,7 @@
 // The trash: what was moved there, when it will be deleted for good, and the
 // two things you can do with each item: bring it back, or delete it for good.
+// Above it, recovery candidates: versions a delete everywhere would otherwise
+// have thrown away, kept until someone decides.
 import { api, ApiError } from "../api.js";
 import { h, setChildren } from "../dom.js";
 import { href } from "../router.js";
@@ -7,9 +9,11 @@ import { relativeTime, relativeFuture, fullDate } from "../time.js";
 import { openDialog, textField, UserError } from "../dialogs.js";
 import { folderPath } from "../names.js";
 import { showToast } from "../toast.js";
+import { recoveryWhy } from "../attention.js";
 
 let app = { refreshFolders() {}, folders: () => [] };
 let items = [];
+let candidates = [];
 let retentionDays = null; // null: unknown; 0: kept until deleted by hand
 let loadSeq = 0;
 
@@ -17,8 +21,9 @@ const status = h("p", { class: "list-status", role: "status", "aria-live": "poli
 const list = h("ul", { class: "trash-list" });
 const emptyBtn = h("button", { class: "sty-btn sty-btn--danger", type: "button", onclick: () => emptyDialog() }, "Empty trash");
 const intro = h("p", { class: "view-sub" });
+const recovery = h("section", { class: "recovery-section", "aria-labelledby": "recovery-title" });
 export const element = h("section", { class: "trash-view" },
-  h("h1", { class: "view-title" }, "Trash"), intro,
+  h("h1", { class: "view-title" }, "Trash"), recovery, intro,
   h("div", { class: "trash-bar" }, status, emptyBtn), list);
 
 // callbacks: refreshFolders() reloads the sidebar; folders() returns the names.
@@ -38,12 +43,14 @@ async function load() {
   const seq = ++loadSeq;
   status.textContent = "Loading…";
   try {
-    const [trash, settings] = await Promise.all([
+    const [trash, settings, rec] = await Promise.all([
       api.get("/api/trash"),
       api.get("/api/settings").catch(() => null), // the wording below copes without it
+      api.get("/api/recovery"),
     ]);
     if (seq !== loadSeq) return;
     items = trash.trash.sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
+    candidates = rec.candidates;
     retentionDays = settings ? settings.trash_retention_days : null;
     draw();
   } catch (err) {
@@ -55,6 +62,7 @@ async function load() {
 }
 
 function draw() {
+  drawRecovery();
   setChildren(intro, retentionText());
   emptyBtn.hidden = items.length === 0;
   status.textContent = items.length ? `${items.length} ${items.length === 1 ? "item" : "items"}` : "";
@@ -93,6 +101,75 @@ function item(t) {
     h("div", { class: "trash-actions" },
       h("button", { class: "sty-btn sty-btn--secondary", type: "button", "aria-label": `Restore ${title}`, onclick: () => restore(t, title) }, "Restore"),
       h("button", { class: "sty-btn sty-btn--danger", type: "button", "aria-label": `Delete ${title} for good`, onclick: () => deleteDialog(t, title) }, "Delete forever")));
+}
+
+// ---- recovery candidates ----
+
+function drawRecovery() {
+  recovery.hidden = candidates.length === 0;
+  setChildren(recovery,
+    h("h2", { id: "recovery-title" }, "Recovery candidates"),
+    h("p", { class: "view-sub" }, "These versions would have been lost to a delete everywhere. The delete stands; each one stays here until you restore it or delete it for good."),
+    h("ul", { class: "trash-list" }, candidates.map(candidateItem)));
+}
+
+function candidateItem(c) {
+  const title = titleOf(c);
+  return h("li", { class: "trash-item" },
+    h("div", { class: "trash-item-text" },
+      h("span", { class: "note-item-title" }, title),
+      h("span", { class: "note-item-meta" }, recoveryWhy(c)),
+      h("span", { class: "note-item-meta" },
+        h("span", {}, c.folder && c.folder !== "." ? c.folder : "Top level",
+          c.deleted_at ? [" · Deleted ", h("time", { datetime: c.deleted_at, title: fullDate(c.deleted_at) }, relativeTime(c.deleted_at))] : "",
+          " · Kept ", h("time", { datetime: c.added_at, title: fullDate(c.added_at) }, relativeTime(c.added_at))))),
+    h("div", { class: "trash-actions" },
+      h("button", { class: "sty-btn sty-btn--secondary", type: "button", "aria-label": `Restore this version of ${title}`, onclick: () => restoreCandidate(c, title) }, "Restore"),
+      h("button", { class: "sty-btn sty-btn--danger", type: "button", "aria-label": `Delete this version of ${title} for good`, onclick: () => deleteCandidateDialog(c, title) }, "Delete forever")));
+}
+
+async function restoreCandidate(c, title) {
+  try {
+    await api.post(`/api/recovery/${encodeURIComponent(c.key)}/restore`, {});
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "exists") return restoreCandidateElsewhere(c, title);
+    if (err instanceof ApiError && err.code === "not_found") { showToast("That version is already gone."); return load(); }
+    return showToast(err instanceof ApiError ? err.message : "Couldn't restore it.");
+  }
+  restored(c, title);
+}
+
+async function restoreCandidateElsewhere(c, title) {
+  const ok = await openDialog({
+    title: `Restore “${title}” to another folder`,
+    description: `Something with the same name is already in ${c.folder && c.folder !== "." ? "“" + c.folder + "”" : "the top level"}. Choose where to put it instead.`,
+    fields: [textField({ label: "Folder", name: "folder", value: "", suggestions: app.folders(), help: "Leave it empty for the top level. Type a new name to make a new folder." })],
+    submitLabel: "Restore",
+    onSubmit: async (data) => {
+      const folder = folderPath(String(data.get("folder")));
+      if (folder === null) throw new UserError("Folder names can't start with a dot or contain a colon.");
+      await api.post(`/api/recovery/${encodeURIComponent(c.key)}/restore`, { folder });
+    },
+  });
+  if (ok) restored(c, title);
+}
+
+function deleteCandidateDialog(c, title) {
+  return openDialog({
+    title: `Delete this version of “${title}” for good?`,
+    description: "This can't be undone. This version and its attached files are deleted from your vault. The note itself stays deleted.",
+    submitLabel: "Delete for good",
+    danger: true,
+    onSubmit: async () => {
+      try {
+        await api.post(`/api/recovery/${encodeURIComponent(c.key)}/delete-forever`);
+      } catch (err) {
+        if (!(err instanceof ApiError && err.code === "not_found")) throw err; // already gone is fine
+      }
+      changed();
+      load();
+    },
+  });
 }
 
 // ---- actions ----

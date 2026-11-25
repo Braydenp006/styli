@@ -3,6 +3,7 @@ package syncdev
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,7 +189,8 @@ func TestWaitingGroupHoldsCursor(t *testing.T) {
 }
 
 // A restored atrium (new epoch) makes the device read everything again. Revs
-// are refreshed where the state matches, and nothing is deleted or pushed.
+// are refreshed where the state matches, and a note the restored atrium
+// doesn't have at all (newer than its backup) is sent to it again.
 func TestNewEpochFullCheck(t *testing.T) {
 	a := newAtrium(t)
 	d := a.device(t)
@@ -196,7 +198,8 @@ func TestNewEpochFullCheck(t *testing.T) {
 	gone := must(d.v.CreateNote("gone.md", []byte("g")))
 	d.sync(t)
 
-	// Pretend the cursor came from another epoch and the base's numbering is off.
+	// Pretend the cursor came from another epoch and the base's numbering is off,
+	// and that the atrium's backup never had gone.md.
 	d.e.rec.saveCursor(Cursor{Epoch: "old", Since: 999})
 	b := must(d.e.rec.base(keep.ID))
 	b.Rev += 1000
@@ -204,17 +207,16 @@ func TestNewEpochFullCheck(t *testing.T) {
 	if err := a.v.Trash(gone.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.v.DeleteForever(gone.ID); err != nil {
+		t.Fatal(err)
+	}
 
-	aSeq := a.v.Seq()
 	noWaiting(t, d.sync(t))
 	if b := must(d.e.rec.base(keep.ID)); b.Rev != must(a.v.Get(keep.ID)).Rev {
 		t.Fatalf("rev not refreshed: %d", b.Rev)
 	}
-	if text(t, d.v, gone.ID) != "g" {
-		t.Fatal("a group gone from the atrium was touched here")
-	}
-	if a.v.Seq() != aSeq {
-		t.Fatal("the full check changed the atrium")
+	if text(t, d.v, gone.ID) != "g" || text(t, a.v, gone.ID) != "g" {
+		t.Fatal("the note missing from the restored atrium was not sent again")
 	}
 	if c := must(d.e.rec.cursor()); c.Epoch != a.v.Epoch() {
 		t.Fatalf("cursor epoch %q", c.Epoch)
@@ -225,6 +227,203 @@ func TestNewEpochFullCheck(t *testing.T) {
 	noWaiting(t, d.sync(t))
 	if text(t, a.v, keep.ID) != "k2" {
 		t.Fatal("push after the full check failed")
+	}
+}
+
+// ---- deletes ----
+
+func inTrash(t *testing.T, v *vault.Vault, id string) bool {
+	t.Helper()
+	_, err := v.Trashed(id)
+	return err == nil
+}
+
+func live(v *vault.Vault, id string) bool {
+	_, err := v.Get(id)
+	return err == nil
+}
+
+// A delete on one device reaches the atrium and the other device; both keep
+// it in their trash.
+func TestDeleteEverywhere(t *testing.T) {
+	a := newAtrium(t)
+	d1, d2 := a.device(t), a.device(t)
+	g := must(d1.v.CreateNote("n.md", []byte("n")))
+	d1.sync(t)
+	d2.sync(t)
+
+	if err := d1.v.Trash(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	noWaiting(t, d1.sync(t))
+	if live(a.v, g.ID) || !inTrash(t, a.v, g.ID) {
+		t.Fatal("not deleted on the atrium")
+	}
+	noWaiting(t, d2.sync(t))
+	if live(d2.v, g.ID) || !inTrash(t, d2.v, g.ID) {
+		t.Fatal("not deleted on the other device")
+	}
+	noWaiting(t, d1.sync(t)) // its own delete in the feed changes nothing
+	if must(d1.e.rec.base(g.ID)).Deleted == 0 {
+		t.Fatal("the delete is not recorded in the base")
+	}
+}
+
+// candidate returns the atrium's only recovery candidate's note text and why.
+func candidate(t *testing.T, a *atrium) (string, string) {
+	t.Helper()
+	cs := must(a.v.ListCandidates())
+	if len(cs) != 1 {
+		t.Fatalf("%d candidates, want 1: %+v", len(cs), cs)
+	}
+	c := cs[0]
+	b := must(os.ReadFile(filepath.Join(a.v.Root(), ".ids", "recovery", c.Key, "files", c.Group.Note.Version)))
+	return string(b), c.Why
+}
+
+// A copy changed on a device after the delete: the delete stands everywhere,
+// and the copy is kept on the atrium as a recovery candidate.
+func TestChangedAfterDeleteBecomesCandidate(t *testing.T) {
+	for _, path := range []string{"delete in the feed", "refused push"} {
+		t.Run(path, func(t *testing.T) {
+			a := newAtrium(t)
+			d := a.device(t)
+			g := must(d.v.CreateNote("n.md", []byte("n")))
+			d.sync(t)
+			if path == "refused push" { // the device has read past the delete already
+				a.v.Trash(g.ID)
+				d.sync(t)
+				d.v.Restore(g.ID, "")
+				d.e.rec.saveBase(g.ID, Base{Rev: 1, Note: must(d.v.Get(g.ID)).Note, Files: []vault.File{}})
+			}
+			write(t, d.v, g.ID, "edited offline")
+			if path == "delete in the feed" {
+				a.v.Trash(g.ID)
+			}
+			noWaiting(t, d.sync(t))
+			if txt, why := candidate(t, a); txt != "edited offline" || why != vault.EditedAfterDelete {
+				t.Fatalf("%q %s", txt, why)
+			}
+			if live(d.v, g.ID) || live(a.v, g.ID) {
+				t.Fatal("the delete did not stand")
+			}
+			noWaiting(t, d.sync(t))
+			if len(must(a.v.ListCandidates())) != 1 {
+				t.Fatal("sent twice")
+			}
+		})
+	}
+}
+
+// Restoring the candidate on the atrium brings the edited copy back everywhere.
+func TestRestoredCandidateSyncs(t *testing.T) {
+	a := newAtrium(t)
+	d1, d2 := a.device(t), a.device(t)
+	g := must(d1.v.CreateNote("n.md", []byte("n")))
+	d1.sync(t)
+	d2.sync(t)
+	write(t, d1.v, g.ID, "edited offline")
+	a.v.Trash(g.ID)
+	d1.sync(t)
+	d2.sync(t)
+	c := must(a.v.ListCandidates())[0]
+	must(a.v.RestoreCandidate(c.Key, ""))
+	settle(t, a, d1, d2)
+	if text(t, d1.v, g.ID) != "edited offline" || text(t, d2.v, g.ID) != "edited offline" {
+		t.Fatal("not restored on the devices")
+	}
+}
+
+// A delete of a version that changed on the atrium since: the delete stands,
+// and the atrium's newer version is kept as a candidate.
+func TestDeleteOfChangedNoteKeepsCandidate(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	g := must(d.v.CreateNote("n.md", []byte("n")))
+	d.sync(t)
+	_, ver, _ := a.v.ReadNote(g.ID)
+	must(a.v.WriteNote(g.ID, []byte("changed on the atrium"), ver))
+	d.v.Trash(g.ID)
+
+	noWaiting(t, d.sync(t))
+	if txt, why := candidate(t, a); txt != "changed on the atrium" || why != vault.DeletedWhileChanged {
+		t.Fatalf("%q %s", txt, why)
+	}
+	if live(a.v, g.ID) {
+		t.Fatal("the delete did not stand")
+	}
+	noWaiting(t, d.sync(t))
+}
+
+// Restored on the atrium after the delete synced: the device restores it too.
+func TestRestoredOnAtrium(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	g := must(d.v.CreateNote("n.md", []byte("n")))
+	d.sync(t)
+	a.v.Trash(g.ID)
+	d.sync(t)
+	if err := a.v.Restore(g.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	noWaiting(t, d.sync(t))
+	if text(t, d.v, g.ID) != "n" || inTrash(t, d.v, g.ID) {
+		t.Fatal("not restored on the device")
+	}
+	if b := must(d.e.rec.base(g.ID)); b.Deleted != 0 {
+		t.Fatal("base still says deleted")
+	}
+}
+
+// Restored on a device after the delete synced: restored everywhere.
+func TestRestoredOnDevice(t *testing.T) {
+	for _, purged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("atrium trash emptied %v", purged), func(t *testing.T) {
+			a := newAtrium(t)
+			d1, d2 := a.device(t), a.device(t)
+			g := must(d1.v.CreateNote("n.md", []byte("n")))
+			d1.sync(t)
+			d2.sync(t)
+			d1.v.Trash(g.ID)
+			d1.sync(t)
+			d2.sync(t)
+			if purged {
+				a.v.DeleteForever(g.ID)
+			}
+			if err := d2.v.Restore(g.ID, ""); err != nil {
+				t.Fatal(err)
+			}
+			noWaiting(t, d2.sync(t))
+			if text(t, a.v, g.ID) != "n" {
+				t.Fatal("not restored on the atrium")
+			}
+			noWaiting(t, d1.sync(t))
+			if text(t, d1.v, g.ID) != "n" {
+				t.Fatal("not restored on the other device")
+			}
+		})
+	}
+}
+
+// A device away longer than the atrium kept the delete does a full check: an
+// unchanged copy goes to its trash, a changed one waits.
+func TestForgottenDeleteFullCheck(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	same := must(d.v.CreateNote("same.md", []byte("s")))
+	edited := must(d.v.CreateNote("edited.md", []byte("e")))
+	d.sync(t)
+	write(t, d.v, edited.ID, "edited while away")
+	for _, id := range []string{same.ID, edited.ID} {
+		a.v.Trash(id)
+		a.v.DeleteForever(id)
+	}
+	noWaiting(t, d.sync(t))
+	if live(d.v, same.ID) || !inTrash(t, d.v, same.ID) {
+		t.Fatal("the unchanged copy was not trashed")
+	}
+	if txt, _ := candidate(t, a); txt != "edited while away" || live(d.v, edited.ID) {
+		t.Fatal("the edited copy is not a candidate")
 	}
 }
 
@@ -454,5 +653,70 @@ func TestEditedNoteInTheWayIsNotParked(t *testing.T) {
 	}
 	if text(t, d.v, x.ID) != "A" || text(t, a.v, y.ID) != "B" {
 		t.Fatal("a side lost its text")
+	}
+}
+
+// Restored here and trashed again before syncing, while the atrium restored
+// and changed it: this person's delete stands, the atrium's version is kept.
+func TestRetrashedHereWhileRestoredThere(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	g := must(d.v.CreateNote("n.md", []byte("n")))
+	d.sync(t)
+	a.v.Trash(g.ID)
+	d.sync(t) // applies the delete
+	if err := a.v.Restore(g.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, a.v, g.ID, " changed there")
+	if err := d.v.Restore(g.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.v.Trash(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	noWaiting(t, d.sync(t))
+	if txt, _ := candidate(t, a); txt != "n changed there" || live(a.v, g.ID) || live(d.v, g.ID) {
+		t.Fatalf("%q", txt)
+	}
+}
+
+// Deleted here and on the atrium independently, then restored on another
+// device that saw only the atrium's delete. The restore replaced the delete in
+// the feed before this device synced, so its own delete is sent and applies on
+// top: the later sync wins, and the note is in the atrium's trash, not lost.
+// (Had this device seen the atrium's delete first, it would wait, flagged.)
+func TestOwnDeleteMeetsRestoreElsewhere(t *testing.T) {
+	a := newAtrium(t)
+	d1, d2 := a.device(t), a.device(t)
+	g := must(d1.v.CreateNote("n.md", []byte("n")))
+	d1.sync(t)
+	d2.sync(t)
+	a.v.Trash(g.ID)
+	d1.v.Trash(g.ID) // offline, not knowing of the atrium's delete
+	d2.sync(t)
+	if err := d2.v.Restore(g.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	noWaiting(t, d2.sync(t))
+	noWaiting(t, d1.sync(t))
+	if live(a.v, g.ID) || !inTrash(t, a.v, g.ID) {
+		t.Fatal("want the note in the atrium's trash")
+	}
+	settle(t, a, d1, d2)
+}
+
+// Pulled, its base lost (a crash), then trashed here: the delete is sent.
+func TestTrashedWithLostBaseSendsDelete(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	g := must(a.v.CreateNote("n.md", []byte("n")))
+	d.sync(t)
+	d.e.rec.removeBase(g.ID)
+	d.e.rec.saveCursor(Cursor{}) // and the cursor, so the feed lists it again
+	d.v.Trash(g.ID)
+	noWaiting(t, d.sync(t))
+	if live(a.v, g.ID) {
+		t.Fatal("not deleted on the atrium")
 	}
 }

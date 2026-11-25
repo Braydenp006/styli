@@ -237,3 +237,89 @@ func TestRetriedCommitIsHarmless(t *testing.T) {
 		t.Fatalf("%d groups", len(gs))
 	}
 }
+
+func TestDeleteFromDevice(t *testing.T) {
+	e := setup(t)
+	g, _ := e.v.CreateNote("a.md", []byte("a"))
+	path := fmt.Sprintf("/sync/v1/groups/%s?base=%d", g.ID, g.Rev)
+
+	var got Group
+	if res := e.do(t, "DELETE", path, "", &got); res.StatusCode != 200 || !got.Deleted || got.Rev != e.v.Seq() || got.Note.Path != "a.md" {
+		t.Fatalf("%d %+v", res.StatusCode, got)
+	}
+	// The same delete again (its reply was lost) gets the same answer.
+	var again Group
+	if res := e.do(t, "DELETE", path, "", &again); res.StatusCode != 200 || again.Rev != got.Rev || !again.Deleted {
+		t.Fatalf("retry: %d %+v", res.StatusCode, again)
+	}
+	// The feed lists it as a deletion.
+	var f feed
+	e.do(t, "GET", "/sync/v1/changes?since=0", "", &f)
+	if len(f.Groups) != 1 || !f.Groups[0].Deleted {
+		t.Fatalf("%+v", f)
+	}
+	// Emptied from the trash: gone, and hello says the feed forgot it.
+	if err := e.v.DeleteForever(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if res := e.do(t, "DELETE", path, "", nil); res.StatusCode != 404 {
+		t.Fatalf("after delete forever: %d", res.StatusCode)
+	}
+	var h struct{ Forgotten uint64 }
+	e.do(t, "GET", "/sync/v1/hello", "", &h)
+	if h.Forgotten != got.Rev {
+		t.Fatalf("forgotten %d, want %d", h.Forgotten, got.Rev)
+	}
+}
+
+// A delete of a version that has since changed on the atrium still stands,
+// and the newer version is kept as a recovery candidate.
+func TestStaleDeleteKeepsCandidate(t *testing.T) {
+	e := setup(t)
+	g, _ := e.v.CreateNote("a.md", []byte("a"))
+	_, ver, _ := e.v.ReadNote(g.ID)
+	e.v.WriteNote(g.ID, []byte("a2"), ver)
+	var got Group
+	if res := e.do(t, "DELETE", fmt.Sprintf("/sync/v1/groups/%s?base=%d", g.ID, g.Rev), "", &got); res.StatusCode != 200 || !got.Deleted {
+		t.Fatalf("%d %+v", res.StatusCode, got)
+	}
+	cs, _ := e.v.ListCandidates()
+	if len(cs) != 1 || cs[0].Why != vault.DeletedWhileChanged || cs[0].Group.Note.Version != hash("a2") {
+		t.Fatalf("%+v", cs)
+	}
+	if res := e.do(t, "DELETE", "/sync/v1/groups/"+g.ID, "", nil); res.StatusCode != 400 {
+		t.Fatalf("no base: %d", res.StatusCode)
+	}
+}
+
+func TestRecoveryCandidateFromDevice(t *testing.T) {
+	e := setup(t)
+	g, _ := e.v.CreateNote("a.md", []byte("a"))
+	body := fmt.Sprintf(`{"note":{"path":"a.md","version":%q},"files":[]}`, e.upload(t, "edited offline"))
+	path := "/sync/v1/groups/" + g.ID + "/recovery"
+
+	var ae struct {
+		Code    string
+		Current Group
+	}
+	if res := e.do(t, "POST", path, body, &ae); res.StatusCode != 409 || ae.Code != "conflict" || ae.Current.ID != g.ID {
+		t.Fatalf("live: %d %+v", res.StatusCode, ae)
+	}
+	e.v.Trash(g.ID)
+	tg, _ := e.v.Trashed(g.ID)
+	var out struct {
+		Key        string
+		DeletedRev uint64 `json:"deleted_rev"`
+	}
+	if res := e.do(t, "POST", path, body, &out); res.StatusCode != 200 || out.DeletedRev != tg.DeletedRev || out.Key == "" {
+		t.Fatalf("%d %+v", res.StatusCode, out)
+	}
+	var again struct{ Key string }
+	if e.do(t, "POST", path, body, &again); again.Key != out.Key {
+		t.Fatal("sent again made a second candidate")
+	}
+	missing := fmt.Sprintf(`{"note":{"path":"a.md","version":%q},"files":[]}`, hash("never uploaded"))
+	if res := e.do(t, "POST", path, missing, nil); res.StatusCode != 422 {
+		t.Fatalf("missing upload: %d", res.StatusCode)
+	}
+}

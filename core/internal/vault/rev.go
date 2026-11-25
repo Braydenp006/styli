@@ -1,6 +1,8 @@
 package vault
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,14 +19,20 @@ import (
 //
 //	<root>/.ids/sync/seq     the highest number handed out
 //	<root>/.ids/sync/epoch   random; a new one means old numbers cannot be trusted
+//	<root>/.ids/sync/forgotten  deletes up to this number are no longer listed
+//
+// A delete takes a number too: the trash entry keeps it (DeletedRev), and the
+// change feed lists the entry as a deletion until it is emptied from the
+// trash. Then the forgotten number moves up to it.
 //
 // A copy of the counter is kept outside the vault (SetSeqMirror). If the copy
 // is ahead of the vault, the vault was restored from a backup and its numbers
 // went backwards, so a new epoch is picked and devices do a full check.
 const (
-	syncDir   = "sync"
-	seqFile   = "seq"
-	epochFile = "epoch"
+	syncDir       = "sync"
+	seqFile       = "seq"
+	epochFile     = "epoch"
+	forgottenFile = "forgotten"
 )
 
 // openRevs loads the counter and epoch, and gives a number to every record
@@ -40,11 +48,14 @@ func (v *Vault) openRevs() error {
 	}
 	// The counter is written before each record, so it should never be behind
 	// one; if the file was lost or is old, the records repair it.
-	top, unnumbered, err := v.highestRev()
+	top, unnumbered, unnumberedTrash, err := v.highestRev()
 	if err != nil {
 		return err
 	}
 	v.seq = max(seq, top)
+	if v.forgotten, err = readSeq(filepath.Join(dir, forgottenFile)); err != nil {
+		return err
+	}
 
 	b, err := os.ReadFile(filepath.Join(dir, epochFile))
 	switch {
@@ -70,15 +81,35 @@ func (v *Vault) openRevs() error {
 			return err
 		}
 	}
+	// Entries trashed before deletes synced become deletions now, so devices
+	// that still hold them delete them too.
+	for _, id := range unnumberedTrash {
+		r, err := v.readTrash(id)
+		if err != nil {
+			return err
+		}
+		if r.DeletedRev, err = v.nextRev(); err != nil {
+			return err
+		}
+		b, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		if _, err := writeAtomic(filepath.Join(v.trashPath(id), "record.json"), bytes.NewReader(b), true); err != nil {
+			return err
+		}
+		v.dels[id] = r.DeletedRev
+	}
 	return nil
 }
 
-// highestRev returns the highest Rev in the live and trashed records, and the
-// IDs of live records with no Rev yet.
-func (v *Vault) highestRev() (uint64, []string, error) {
+// highestRev returns the highest number in the live and trashed records, the
+// IDs of live records with no Rev yet, and of trash entries with no
+// DeletedRev yet. It fills v.revs and v.dels.
+func (v *Vault) highestRev() (uint64, []string, []string, error) {
 	groups, err := v.list()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	var top uint64
 	var unnumbered []string
@@ -91,19 +122,33 @@ func (v *Vault) highestRev() (uint64, []string, error) {
 	}
 	ids, err := v.trashIDs()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
+	var unnumberedTrash []string
 	for _, id := range ids {
 		r, err := v.readTrash(id)
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
-		top = max(top, r.Rev)
+		top = max(top, r.Rev, r.DeletedRev)
+		if r.DeletedRev == 0 {
+			unnumberedTrash = append(unnumberedTrash, id)
+		} else {
+			v.dels[id] = r.DeletedRev
+		}
 	}
-	return top, unnumbered, nil
+	return top, unnumbered, unnumberedTrash, nil
+}
+
+// Forgotten returns the number up to which deletes are no longer in the
+// change feed. A device whose cursor is below it must do a full check.
+func (v *Vault) Forgotten() uint64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.forgotten
 }
 
 // nextRev hands out the next number. The counter (and its copy, if set) is

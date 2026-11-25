@@ -44,6 +44,7 @@ type scenario struct {
 	setup func(w *world) // runs, then everyone syncs, with no faults
 	act   func(w *world) // the changes made while apart
 	want  func(t *testing.T, files map[string]string)
+	kept  string // text that must survive in a recovery candidate on the atrium
 }
 
 func has(t *testing.T, files map[string]string, p, want string) {
@@ -130,6 +131,61 @@ var scenarios = []scenario{
 		},
 	},
 	{
+		name:  "deleted on one device",
+		setup: plan,
+		act:   func(w *world) { trashOrFail(w.t, w.d1.v, w.id) },
+		want:  gonePlan,
+	},
+	{
+		name:  "deleted on the atrium",
+		setup: plan,
+		act:   func(w *world) { trashOrFail(w.t, w.a.v, w.id) },
+		want:  gonePlan,
+	},
+	{
+		name:  "deleted on both devices",
+		setup: plan,
+		act: func(w *world) {
+			trashOrFail(w.t, w.d1.v, w.id)
+			trashOrFail(w.t, w.d2.v, w.id)
+		},
+		want: gonePlan,
+	},
+	{
+		name:  "edited on a device after the delete",
+		setup: plan,
+		act: func(w *world) {
+			trashOrFail(w.t, w.d1.v, w.id)
+			appendTo(w.t, w.d2.v, w.id, "edited offline\n")
+		},
+		want: gonePlan,
+		kept: "edited offline",
+	},
+	{
+		name:  "deleted on a device while edited on the atrium",
+		setup: plan,
+		act: func(w *world) {
+			appendTo(w.t, w.a.v, w.id, "edited there\n")
+			trashOrFail(w.t, w.d1.v, w.id)
+		},
+		want: gonePlan,
+		kept: "edited there",
+	},
+	{
+		name: "restored on a device after the delete",
+		setup: func(w *world) {
+			plan(w)
+			w.syncAll()
+			trashOrFail(w.t, w.d1.v, w.id)
+		},
+		act: func(w *world) {
+			if err := w.d2.v.Restore(w.id, ""); err != nil {
+				w.t.Fatal(err)
+			}
+		},
+		want: func(t *testing.T, f map[string]string) { has(t, f, "Plan.md", "line one\n") },
+	},
+	{
 		name: "names swapped on the atrium",
 		setup: func(w *world) {
 			w.id = must(w.d1.v.CreateNote("a.md", []byte("A"))).ID
@@ -151,6 +207,19 @@ var scenarios = []scenario{
 			has(t, f, "b.md", "A")
 		},
 	},
+}
+
+func trashOrFail(t *testing.T, v *vault.Vault, id string) {
+	t.Helper()
+	if err := v.Trash(id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func gonePlan(t *testing.T, f map[string]string) {
+	if _, ok := f["Plan.md"]; ok {
+		t.Fatalf("a deleted note is still there: %v", f)
+	}
 }
 
 type faultKind string
@@ -198,6 +267,11 @@ func (sc scenario) run(t *testing.T, target int, kind faultKind, k int) int {
 	}
 	settle(t, w.a, w.devices()...)
 	sc.want(t, tree(t, w.a.v.Root()))
+	if sc.kept != "" {
+		if txt, _ := candidate(t, w.a); !strings.Contains(txt, sc.kept) {
+			t.Fatalf("candidate %q lacks %q", txt, sc.kept)
+		}
+	}
 	return count
 }
 

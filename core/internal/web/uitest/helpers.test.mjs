@@ -221,7 +221,7 @@ test("parseRoute reads the history route", () => {
   assert.deepEqual(parseRoute(href.history(id)), { name: "history", id });
 });
 
-import { attentionItems, describeOffset, describeJob, describeTimeCheck, baseName } from "../ui/static/js/attention.js";
+import { attentionItems, describeOffset, describeJob, describeTimeCheck, baseName, recoveryWhy } from "../ui/static/js/attention.js";
 
 const job = (o = {}) => ({ deleted: 0, would_delete: 0, total: 0, held_back: false, ...o });
 const run = (o = {}) => ({ time_check: "off", clock_offset_seconds: 0, history: job(), trash: job(), needs_attention: false, ...o });
@@ -422,4 +422,16 @@ test("describePairing says where pairing stands, in plain words", () => {
   assert.equal(failed.headline, "The words did not match. Start again for new words.");
   assert.equal(failed.detail, "Nothing was saved.");
   assert.equal(describePairing({ phase: "expired" }).headline, "The pairing ended.");
+});
+
+test("attentionItems lists recovery candidates", () => {
+  const recovery = [{ key: "k", note_path: "Work/Plan.md", files: [], why: "edited_after_delete", from: "Tablet" }];
+  assert.deepEqual(attentionItems({ run: null, recovery }), [{ kind: "recovery", key: "k", notePath: "Work/Plan.md", why: "edited_after_delete", from: "Tablet" }]);
+  const fileOnly = [{ key: "k", note_path: "", files: ["a.pdf"], why: "edited_after_delete", from: "Tablet" }];
+  assert.equal(attentionItems({ run: null, recovery: fileOnly })[0].notePath, "a.pdf");
+});
+
+test("recoveryWhy says what happened, by device", () => {
+  assert.equal(recoveryWhy({ why: "edited_after_delete", from: "Tablet" }), "Changed on Tablet after it was deleted everywhere.");
+  assert.equal(recoveryWhy({ why: "deleted_while_changed", from: "Laptop" }), "Deleted everywhere from Laptop, which hadn't seen this newer version.");
 });

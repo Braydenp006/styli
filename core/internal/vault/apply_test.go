@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"styli/core/internal/atomicfile"
 	"testing"
 	"time"
 )
@@ -280,13 +281,88 @@ func TestChangesFeed(t *testing.T) {
 	if gs, _, _ = v.Changes(v.Seq(), 10); len(gs) != 0 {
 		t.Fatalf("nothing new: %v", gs)
 	}
-	// A trashed group leaves the feed (deletion markers come later).
+	// A trashed group is listed as a deletion, at the delete's own number, as
+	// it was when deleted.
+	seq := v.Seq()
 	v.Trash(b.ID)
-	gs, _, _ = v.Changes(0, 10)
-	for _, g := range gs {
-		if g.ID == b.ID {
-			t.Fatal("trashed group still in the feed")
-		}
+	gs, _, _ = v.Changes(seq, 10)
+	if len(gs) != 1 || gs[0].ID != b.ID || !gs[0].Deleted || gs[0].Rev != seq+1 || gs[0].Note.Path != "b.md" {
+		t.Fatalf("deletion: %+v", gs)
+	}
+	// Restored, it is a live change again.
+	if err := v.Restore(b.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	gs, _, _ = v.Changes(seq+1, 10)
+	if len(gs) != 1 || gs[0].ID != b.ID || gs[0].Deleted {
+		t.Fatalf("restored: %+v", gs)
+	}
+	// Emptied from the trash, it leaves the feed and the forgotten number moves.
+	v.Trash(b.ID)
+	del := v.Seq()
+	if err := v.DeleteForever(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if gs, _, _ = v.Changes(0, 10); len(gs) != 2 {
+		t.Fatalf("after delete forever: %+v", gs)
+	}
+	if v.Forgotten() != del || must(Open(v.Root())).Forgotten() != del {
+		t.Fatalf("forgotten %d, want %d", v.Forgotten(), del)
+	}
+}
+
+// Trash entries from before deletes synced get a number when the vault opens,
+// so they are listed as deletions.
+func TestOldTrashEntriesBecomeDeletions(t *testing.T) {
+	v, root := open(t)
+	g := must(v.CreateNote("a.md", []byte("a")))
+	v.Trash(g.ID)
+	r := must(v.readTrash(g.ID))
+	r.DeletedRev = 0
+	writeJSONFile(t, filepath.Join(v.trashPath(g.ID), "record.json"), r)
+
+	v2 := must(Open(root))
+	gs, _, _ := v2.Changes(0, 10)
+	if len(gs) != 1 || !gs[0].Deleted || gs[0].Rev != v2.Seq() || gs[0].Rev <= r.Rev {
+		t.Fatalf("%+v seq %d", gs, v2.Seq())
+	}
+}
+
+func TestTrashIfNeedsCurrentRev(t *testing.T) {
+	v, _ := open(t)
+	g := must(v.CreateNote("a.md", []byte("a")))
+	_, ver, _ := v.ReadNote(g.ID)
+	must(v.WriteNote(g.ID, []byte("a2"), ver))
+	cur, err := v.TrashIf(g.ID, g.Rev)
+	if !errors.Is(err, ErrConflict) || cur.Rev == g.Rev {
+		t.Fatalf("stale delete: %v %+v", err, cur)
+	}
+	if _, err := v.TrashIf(g.ID, cur.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if tg := must(v.Trashed(g.ID)); tg.Group.Rev != cur.Rev || tg.DeletedRev != v.Seq() {
+		t.Fatalf("%+v", tg)
+	}
+}
+
+// A push based on the delete's number is a device restoring the note: it is
+// restored here and the push applied. Any other base is refused.
+func TestApplyRestoresWhenBaseIsTheDelete(t *testing.T) {
+	v, root := open(t)
+	g := must(v.CreateNote("a.md", []byte("one")))
+	v.Trash(g.ID)
+	tg := must(v.Trashed(g.ID))
+	two := stage(t, v, "two")
+	want := Group{Note: &File{"a.md", two}, Files: []File{}}
+	if _, err := v.Apply(g.ID, g.Rev, want); !errors.Is(err, ErrTrashed) {
+		t.Fatalf("push from before the delete: %v", err)
+	}
+	got, err := v.Apply(g.ID, tg.DeletedRev, want)
+	if err != nil || !SameState(got, want) || read(t, root, "a.md") != "two" {
+		t.Fatalf("%v %+v", err, got)
+	}
+	if _, err := v.Trashed(g.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("still in the trash")
 	}
 }
 
@@ -511,5 +587,32 @@ func TestInterruptedAdoptIsFinishedOnOpen(t *testing.T) {
 			}
 			checkAdopted(t, must(Open(root)), g, want)
 		})
+	}
+}
+
+// The forgotten number is saved before an entry is emptied: when it is
+// written the entry is still whole, so a crash leaves it listed and the number
+// at least as high.
+func TestForgottenSavedBeforePurge(t *testing.T) {
+	v, root := open(t)
+	g := must(v.CreateNote("a.md", []byte("a")))
+	v.Trash(g.ID)
+	tg := must(v.Trashed(g.ID))
+	whole := false
+	atomicfile.SetBeforeWrite(func(dst string) {
+		if filepath.Base(dst) == forgottenFile {
+			_, err := os.Stat(filepath.Join(v.trashPath(g.ID), "files", "a.md"))
+			whole = err == nil
+		}
+	})
+	defer atomicfile.SetBeforeWrite(nil)
+	if err := v.DeleteForever(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !whole {
+		t.Fatal("the entry was touched before the forgotten number was saved")
+	}
+	if f := must(Open(root)).Forgotten(); f != tg.DeletedRev {
+		t.Fatalf("forgotten %d, want %d", f, tg.DeletedRev)
 	}
 }

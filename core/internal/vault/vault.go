@@ -68,6 +68,10 @@ type Group struct {
 
 	// Rev is the number this vault gave the group's latest change (see rev.go).
 	Rev uint64 `json:"rev,omitempty"`
+
+	// Deleted is set only on a deletion listed by Changes: the group as it was
+	// when trashed, with the delete's number as Rev. Never stored.
+	Deleted bool `json:"-"`
 }
 
 // Vault is a folder of notes. Safe for concurrent use inside one process.
@@ -96,6 +100,9 @@ type Vault struct {
 	// closed (then replaced) whenever a record is saved.
 	revs    map[string]uint64
 	changed chan struct{}
+
+	dels      map[string]uint64 // trashed group ID -> the delete's number
+	forgotten uint64            // see Forgotten
 }
 
 // Open opens (and if needed creates) a vault. Call Rescan afterwards to pick up
@@ -117,12 +124,15 @@ func Open(root string) (*Vault, error) {
 	v := &Vault{
 		root: root, dirMode: fi.Mode().Perm(), seen: map[string]cached{}, missing: map[string]bool{},
 		historyOn: true, historyWindow: 30 * time.Minute, loc: time.Local, now: time.Now,
-		revs: map[string]uint64{}, changed: make(chan struct{}),
+		revs: map[string]uint64{}, changed: make(chan struct{}), dels: map[string]uint64{},
 	}
 	if err := v.openRevs(); err != nil {
 		return nil, err
 	}
 	if err := v.openApply(); err != nil {
+		return nil, err
+	}
+	if err := v.openRecovery(); err != nil {
 		return nil, err
 	}
 	return v, nil
