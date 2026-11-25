@@ -517,3 +517,6 @@ func newID() string {
 	}
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
 }
+
+// Root returns the vault's folder on disk.
+func (v *Vault) Root() string { return v.root }
