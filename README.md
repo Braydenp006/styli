@@ -44,7 +44,7 @@ The hub also has a rebuilding protocol, let's say the hub dies, the PC running i
 
 A programmable script that cleans your trash and version history based on parameters you set, its basically just like 4 settings
 
-### The Graph
+### The Nexus
 
 Very similar to obsidian graph with their link system or whatever it is, but now this graph is automated, with the linked being generated automatically by the reader, also I may not present this in a graph like layout I have some ideas flowing
 
