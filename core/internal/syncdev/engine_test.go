@@ -2,113 +2,13 @@ package syncdev
 
 import (
 	"context"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"styli/core/internal/devicekey"
-	"styli/core/internal/devices"
-	"styli/core/internal/syncsrv"
 	"styli/core/internal/vault"
 )
-
-// atrium is a real atrium serving sync over TLS on loopback.
-type atrium struct {
-	v    *vault.Vault
-	devs *devices.List
-	key  *devicekey.Key
-	addr string
-}
-
-func newAtrium(t *testing.T) *atrium {
-	t.Helper()
-	root := t.TempDir()
-	v := must(vault.Open(root))
-	devs := must(devices.Open(root))
-	key := must(devicekey.Load(t.TempDir()))
-	ln := must(net.Listen("tcp", "127.0.0.1:0"))
-	s := syncsrv.NewServer(syncsrv.Deps{Vault: v, Logf: t.Logf, Version: "test"}, key, devs)
-	go s.Serve(ln)
-	t.Cleanup(func() { s.Shutdown(context.Background()) })
-	return &atrium{v, devs, key, ln.Addr().String()}
-}
-
-// device is a paired device with its own vault and engine.
-type device struct {
-	v *vault.Vault
-	e *Engine
-	k *devicekey.Key
-}
-
-func (a *atrium) device(t *testing.T) *device {
-	t.Helper()
-	v := must(vault.Open(t.TempDir()))
-	k := must(devicekey.Load(t.TempDir()))
-	if err := a.devs.Add(k.ID, "Test device"); err != nil {
-		t.Fatal(err)
-	}
-	e := New(v, nil, syncsrv.ClientTLS(k, a.key.ID), a.addr, t.Logf)
-	e.Merge = func(context.Context, string, *Base, vault.Group, vault.Group) error {
-		t.Error("merge called")
-		return nil
-	}
-	return &device{v, e, k}
-}
-
-func (d *device) sync(t *testing.T) Status {
-	t.Helper()
-	if err := d.e.Sync(context.Background()); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	return d.e.Status()
-}
-
-// must is for setup steps that never fail in a working test.
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-func text(t *testing.T, v *vault.Vault, id string) string {
-	t.Helper()
-	b, _, err := v.ReadNote(id)
-	if err != nil {
-		t.Fatalf("read %s: %v", id, err)
-	}
-	return string(b)
-}
-
-func write(t *testing.T, v *vault.Vault, id, s string) {
-	t.Helper()
-	_, ver, err := v.ReadNote(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := v.WriteNote(id, []byte(s), ver); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// onDisk writes a note's file behind the vault's back: an edit no scan has
-// seen yet.
-func onDisk(t *testing.T, v *vault.Vault, id, s string) {
-	t.Helper()
-	g := must(v.Get(id))
-	if err := os.WriteFile(filepath.Join(v.Root(), g.Note.Path), []byte(s), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func noWaiting(t *testing.T, s Status) {
-	t.Helper()
-	if len(s.Waiting) != 0 {
-		t.Fatalf("waiting: %+v", s.Waiting)
-	}
-}
 
 func TestPushPullAndMove(t *testing.T) {
 	a := newAtrium(t)
@@ -378,5 +278,134 @@ func TestRevokedDeviceCannotSync(t *testing.T) {
 	}
 	if d.e.Status().Error == "" {
 		t.Fatal("status has no error")
+	}
+}
+
+// renameOnAtrium renames a note on the atrium, as another device's push would.
+func renameOnAtrium(t *testing.T, v *vault.Vault, id, name string) {
+	t.Helper()
+	g := must(v.Get(id))
+	n := *g.Note
+	n.Path = name
+	g.Note = &n
+	if _, err := v.Apply(id, g.Rev, g); err != nil {
+		t.Fatalf("rename %s to %s: %v", id, name, err)
+	}
+}
+
+// swapped makes notes a.md and b.md on a synced device, then swaps their
+// names on the atrium (through a third name, since nothing overwrites).
+func swapped(t *testing.T) (*atrium, *device, vault.Group, vault.Group) {
+	a := newAtrium(t)
+	d := a.device(t)
+	x := must(d.v.CreateNote("a.md", []byte("A")))
+	y := must(d.v.CreateNote("b.md", []byte("B")))
+	d.sync(t)
+	renameOnAtrium(t, a.v, x.ID, "spare.md")
+	renameOnAtrium(t, a.v, y.ID, "a.md")
+	renameOnAtrium(t, a.v, x.ID, "b.md")
+	return a, d, x, y
+}
+
+func checkSwapped(t *testing.T, a *atrium, d *device, x, y vault.Group) {
+	t.Helper()
+	for _, c := range []struct {
+		id, path, text string
+	}{{x.ID, "b.md", "A"}, {y.ID, "a.md", "B"}} {
+		if p := must(d.v.Get(c.id)).Note.Path; p != c.path || text(t, d.v, c.id) != c.text {
+			t.Fatalf("%s at %s with %q", c.id, p, text(t, d.v, c.id))
+		}
+		if b := must(d.e.rec.base(c.id)); b.Parked != nil || b.Note.Path != c.path {
+			t.Fatalf("base %+v", b)
+		}
+	}
+	ents := must(os.ReadDir(d.v.Root()))
+	for _, e := range ents {
+		if strings.Contains(e.Name(), "moving") {
+			t.Fatalf("left behind: %s", e.Name())
+		}
+	}
+	if p := must(a.v.Get(x.ID)).Note.Path; p != "b.md" {
+		t.Fatalf("the atrium's copy moved: %s", p)
+	}
+}
+
+func TestSwappedNamesSync(t *testing.T) {
+	a, d, x, y := swapped(t)
+	aSeq := a.v.Seq()
+	noWaiting(t, d.sync(t))
+	checkSwapped(t, a, d, x, y)
+	if a.v.Seq() != aSeq {
+		t.Fatal("the swap pushed something to the atrium")
+	}
+}
+
+// A crash right after parking (or right after writing the park down, before
+// the move) is finished by the next pass, and the spare name never reaches
+// the atrium.
+func TestCrashWhileParked(t *testing.T) {
+	for _, moved := range []bool{true, false} {
+		a, d, x, y := swapped(t)
+		g := must(d.v.Get(y.ID))
+		b := must(d.e.rec.base(y.ID))
+		p := &pass{waiting: map[string]string{}}
+		if moved {
+			if err := d.e.park(p, g, b, nil); err != nil {
+				t.Fatal(err)
+			}
+			if must(d.v.Get(y.ID)).Note.Path != "b (moving).md" {
+				t.Fatal("not parked")
+			}
+		} else {
+			b.Parked = &Parked{Note: &vault.File{Path: "b (moving).md", Version: g.Note.Version}, Files: []vault.File{}}
+			d.e.rec.saveBase(y.ID, *b)
+		}
+		aSeq := a.v.Seq()
+		noWaiting(t, d.sync(t))
+		checkSwapped(t, a, d, x, y)
+		if a.v.Seq() != aSeq {
+			t.Fatalf("moved=%v: the spare name was pushed", moved)
+		}
+	}
+}
+
+// A parked note whose pull never comes (the atrium has it where it was) is
+// moved back, not pushed under its spare name.
+func TestParkedWithoutRemoteChangeGoesBack(t *testing.T) {
+	a := newAtrium(t)
+	d := a.device(t)
+	g := must(d.v.CreateNote("a.md", []byte("A")))
+	d.sync(t)
+	if err := d.e.park(&pass{}, must(d.v.Get(g.ID)), must(d.e.rec.base(g.ID)), nil); err != nil {
+		t.Fatal(err)
+	}
+	aSeq := a.v.Seq()
+	noWaiting(t, d.sync(t))
+	if p := must(d.v.Get(g.ID)).Note.Path; p != "a.md" {
+		t.Fatalf("not moved back: %s", p)
+	}
+	if b := must(d.e.rec.base(g.ID)); b.Parked != nil {
+		t.Fatal("park not cleared")
+	}
+	if a.v.Seq() != aSeq {
+		t.Fatal("pushed")
+	}
+}
+
+// A note in the way that has local edits is not parked: it waits, and
+// nothing is lost.
+func TestEditedNoteInTheWayIsNotParked(t *testing.T) {
+	a, d, x, y := swapped(t)
+	d.e.Merge = nil
+	write(t, d.v, y.ID, "B edited here")
+	s := d.sync(t)
+	if len(s.Waiting) == 0 {
+		t.Fatal("nothing waiting")
+	}
+	if p := must(d.v.Get(y.ID)).Note.Path; p != "b.md" || text(t, d.v, y.ID) != "B edited here" {
+		t.Fatalf("edited note touched: %s", p)
+	}
+	if text(t, d.v, x.ID) != "A" || text(t, a.v, y.ID) != "B" {
+		t.Fatal("a side lost its text")
 	}
 }

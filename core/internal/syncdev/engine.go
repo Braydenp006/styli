@@ -291,11 +291,18 @@ func (e *Engine) group(ctx context.Context, p *pass, id string, remote *syncsrv.
 	}
 
 	b := base.Group(id)
-	lChanged, rChanged := !vault.SameState(local, b), !vault.SameState(r, b)
+	parked := base.isParked(local)
+	lChanged, rChanged := !vault.SameState(local, b) && !parked, !vault.SameState(r, b)
 	switch {
+	case parked && !rChanged:
+		// Parked for a pull that never came (the atrium has it where it was
+		// after all): put it back.
+		return e.unpark(p, local, base)
 	case !lChanged && !rChanged:
-		if r.Rev != base.Rev { // a restored atrium renumbered it
-			base.Rev = r.Rev
+		// A restored atrium renumbered it, or a park was written down but the
+		// move never happened (a crash in between): tidy the base.
+		if r.Rev != base.Rev || base.Parked != nil {
+			base.Rev, base.Parked = r.Rev, nil
 			return e.rec.saveBase(id, *base)
 		}
 		return nil
@@ -490,9 +497,12 @@ func (e *Engine) download(ctx context.Context, id string, index int, version str
 	return nil
 }
 
-// clearPaths moves never-synced local groups out of the paths remote needs.
-// A synced group in the way is left alone: the atrium moved it too, and the
-// pull that moves it comes in this pass or the next.
+// clearPaths frees the paths remote needs here. A never-synced group in the
+// way is renamed for good ("Name 2.md"). A synced one must have moved on the
+// atrium (the atrium never has two groups on one path), so if it has no
+// local changes it is parked at a spare name until its own pull, later in
+// this pass, puts it where the atrium has it. That is what lets two notes
+// swap names. A synced group with local changes waits for its merge.
 func (e *Engine) clearPaths(p *pass, id string, remote vault.Group) error {
 	if p.paths == nil {
 		gs, err := e.v.List()
@@ -515,9 +525,6 @@ func (e *Engine) clearPaths(p *pass, id string, remote vault.Group) error {
 		if err != nil {
 			return err
 		}
-		if b != nil {
-			return held(fmt.Sprintf("%s is still taken here by another note; waiting for it to move", f.Path))
-		}
 		g, err := e.v.Get(other)
 		if err != nil {
 			return groupErr(err, "cannot read the note in the way")
@@ -526,11 +533,57 @@ func (e *Engine) clearPaths(p *pass, id string, remote vault.Group) error {
 		for _, f := range allFiles(remote) {
 			taken[f.Path] = true
 		}
-		if err := e.renameLocal(p, g, taken); err != nil {
+		switch {
+		case b == nil:
+			err = e.renameLocal(p, g, taken)
+		case vault.SameState(g, b.Group(other)) || b.isParked(g):
+			err = e.park(p, g, b, taken)
+		default:
+			err = held(fmt.Sprintf("%s is still taken here by a note with changes on this device; waiting for it to sync", f.Path))
+		}
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// park moves a synced group to "Name (moving).md" (every file the same), the
+// first such name free here and not in busy. The base records the parked
+// paths before anything moves, so a crash in between can't be mistaken for
+// a rename made on this device.
+func (e *Engine) park(p *pass, g vault.Group, b *Base, busy map[string]bool) error {
+	for n := 1; n < 1000; n++ {
+		want, free := e.renamed(g, busy, func(path string) string { return moving(path, n) })
+		if !free {
+			continue
+		}
+		b.Parked = &Parked{Note: want.Note, Files: want.Files}
+		if err := e.rec.saveBase(g.ID, *b); err != nil {
+			return err
+		}
+		saved, err := e.v.Apply(g.ID, g.Rev, want)
+		if errors.Is(err, vault.ErrExists) {
+			continue
+		}
+		if err != nil {
+			return groupErr(err, "moving a note aside failed")
+		}
+		e.moved(p, g, saved)
+		return nil
+	}
+	return held("no free name was found to move a note aside")
+}
+
+// unpark moves a parked group back to its base paths.
+func (e *Engine) unpark(p *pass, local vault.Group, b *Base) error {
+	saved, err := e.v.Apply(local.ID, local.Rev, b.Group(local.ID))
+	if err != nil {
+		return groupErr(err, "moving a note back failed")
+	}
+	e.moved(p, local, saved)
+	b.Parked = nil
+	return e.rec.saveBase(local.ID, *b)
 }
 
 // renameLocal renames a never-synced group to "Name 2.md" (every file the
@@ -539,17 +592,7 @@ func (e *Engine) clearPaths(p *pass, id string, remote vault.Group) error {
 // overwrites anything.
 func (e *Engine) renameLocal(p *pass, g vault.Group, busy map[string]bool) error {
 	for n := 2; n < 1000; n++ {
-		want := g
-		want.Files = slices.Clone(g.Files)
-		if g.Note != nil {
-			nf := *g.Note
-			want.Note = &nf
-		}
-		free := true
-		for _, f := range allFiles(want) {
-			f.Path = numbered(f.Path, n)
-			free = free && !busy[f.Path] && !exists(e.v.Root(), f.Path)
-		}
+		want, free := e.renamed(g, busy, func(path string) string { return numbered(path, n) })
 		if !free {
 			continue
 		}
@@ -561,18 +604,40 @@ func (e *Engine) renameLocal(p *pass, g vault.Group, busy map[string]bool) error
 			return groupErr(err, "renaming a note whose name is taken failed")
 		}
 		e.logf("sync: renamed %s to %s: the atrium has another note with that name", firstPath(g), firstPath(saved))
-		if p.paths != nil {
-			for _, f := range allFiles(g) {
-				delete(p.paths, f.Path)
-			}
-			for _, f := range allFiles(saved) {
-				p.paths[f.Path] = g.ID
-			}
-		}
-		e.refresh(g.ID)
+		e.moved(p, g, saved)
 		return nil
 	}
 	return held("no free name was found for a note whose name is taken")
+}
+
+// renamed returns g with every path passed through name, and whether all
+// the new paths are free here and not in busy.
+func (e *Engine) renamed(g vault.Group, busy map[string]bool, name func(string) string) (vault.Group, bool) {
+	want := g
+	want.Files = slices.Clone(g.Files)
+	if g.Note != nil {
+		nf := *g.Note
+		want.Note = &nf
+	}
+	free := true
+	for _, f := range allFiles(want) {
+		f.Path = name(f.Path)
+		free = free && !busy[f.Path] && !exists(e.v.Root(), f.Path)
+	}
+	return want, free
+}
+
+// moved updates the pass's path map and the search index after a local move.
+func (e *Engine) moved(p *pass, from, to vault.Group) {
+	if p.paths != nil {
+		for _, f := range allFiles(from) {
+			delete(p.paths, f.Path)
+		}
+		for _, f := range allFiles(to) {
+			p.paths[f.Path] = to.ID
+		}
+	}
+	e.refresh(to.ID)
 }
 
 // atriumPaths returns the paths of every group this device has synced: what
@@ -656,6 +721,15 @@ func firstPath(g vault.Group) string {
 func numbered(p string, n int) string {
 	ext := path.Ext(p)
 	return fmt.Sprintf("%s %d%s", strings.TrimSuffix(p, ext), n, ext)
+}
+
+// moving turns "a/Name.md" into "a/Name (moving).md", or "(moving 2)" and on.
+func moving(p string, n int) string {
+	ext := path.Ext(p)
+	if n == 1 {
+		return fmt.Sprintf("%s (moving)%s", strings.TrimSuffix(p, ext), ext)
+	}
+	return fmt.Sprintf("%s (moving %d)%s", strings.TrimSuffix(p, ext), n, ext)
 }
 
 func exists(root, rel string) bool {

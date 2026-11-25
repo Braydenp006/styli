@@ -30,6 +30,27 @@ type Base struct {
 	Files   []vault.File `json:"files"`
 	History *bool        `json:"history,omitempty"`
 	Text    []byte       `json:"text,omitempty"`
+
+	// Parked is set while the engine has moved the group to a spare name to
+	// free its old one for another note (a swap of names on the atrium). It is
+	// written before the move, so a local copy at these paths is the engine's
+	// doing, not a rename to push. The pull that follows writes a new base.
+	Parked *Parked `json:"parked,omitempty"`
+}
+
+// Parked is where the engine moved a group's files.
+type Parked struct {
+	Note  *vault.File  `json:"note,omitempty"`
+	Files []vault.File `json:"files"`
+}
+
+// isParked reports whether local is the base, moved to its parked paths.
+func (b *Base) isParked(local vault.Group) bool {
+	if b.Parked == nil {
+		return false
+	}
+	g := vault.Group{Note: b.Parked.Note, Files: b.Parked.Files, History: b.History}
+	return vault.SameState(local, g)
 }
 
 // Group returns the base as a vault group, for comparing states.

@@ -49,3 +49,24 @@ func TestFailedWriteKeepsTheOldFileAndLeavesNoTemp(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", ents)
 	}
 }
+
+func TestBeforeWriteRunsFirstAndCanStopTheWrite(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "sub", "f")
+	var got string
+	SetBeforeWrite(func(d string) { got = d; panic("crash") })
+	defer SetBeforeWrite(nil)
+	func() {
+		defer func() { recover() }()
+		Write(dst, strings.NewReader("x"), true)
+	}()
+	if got != dst {
+		t.Fatalf("hook saw %q", got)
+	}
+	if _, err := os.Stat(filepath.Dir(dst)); err == nil {
+		t.Fatal("something was written before the hook ran")
+	}
+	SetBeforeWrite(nil)
+	if _, err := Write(dst, strings.NewReader("x"), true); err != nil {
+		t.Fatal(err)
+	}
+}
