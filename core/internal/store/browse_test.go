@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -146,7 +147,7 @@ func TestTextAndFiltersCombine(t *testing.T) {
 	put(t, s, note("c", "os/sched.md"), "# Scheduler\nhandshake <!-- styli:tags net -->", at(6))
 	q := Query{Text: "handshake", Folder: "net", Tags: []string{"net"}, From: at(1), To: at(3)}
 	got := must(s.Find(q))
-	if !reflect.DeepEqual(ids(got), []string{"a"}) || !strings.Contains(got[0].Snippet, "[handshake]") {
+	if !reflect.DeepEqual(ids(got), []string{"a"}) || !strings.Contains(got[0].Snippet, MatchStart+"handshake"+MatchEnd) {
 		t.Fatalf("%+v", got)
 	}
 	if got := ids(must(s.Find(Query{Text: "handshake", Folder: "net"}))); !sameSet(got, []string{"a", "b"}) {
@@ -233,5 +234,57 @@ func TestUpgradeFromVersion1KeepsDataAndReindexFillsFolders(t *testing.T) {
 	}
 	if got := must(s.Find(Query{Folder: "a"})); len(got) != 1 || got[0].ID != g.ID {
 		t.Fatalf("after reindex: %+v", got)
+	}
+}
+
+func TestSnippetMarkersAreNotBrackets(t *testing.T) {
+	s := newStore(t)
+	put(t, s, note("a", "a.md"), "# Links\nsee [plum](x) and [ ] plum jam [done]", at(1))
+	got := must(s.Find(Query{Text: "plum"}))
+	if len(got) != 1 || !strings.Contains(got[0].Snippet, MatchStart+"plum"+MatchEnd) {
+		t.Fatalf("%q", got)
+	}
+	// Brackets in the note stay brackets, so a UI can tell them from match marks.
+	if !strings.Contains(got[0].Snippet, "[") || strings.Count(got[0].Snippet, MatchStart) != strings.Count(got[0].Snippet, MatchEnd) {
+		t.Fatalf("%q", got[0].Snippet)
+	}
+}
+
+func TestNoteInfoHasTitleModifiedAndTags(t *testing.T) {
+	s := newStore(t)
+	put(t, s, note("a", "Net/tcp.md"), "# TCP\n<!-- styli:tags tcp, net -->", at(4))
+	put(t, s, note("b", "other.md"), "# Other", at(5))
+	info := must(s.Note("a"))
+	if info.ID != "a" || info.Title != "TCP" || info.Path != "Net/tcp.md" || !info.Modified.Equal(at(4)) ||
+		!reflect.DeepEqual(info.Tags, []string{"net", "tcp"}) {
+		t.Fatalf("%+v", info)
+	}
+	if got := must(s.Note("b")); got.Tags == nil || len(got.Tags) != 0 {
+		t.Fatalf("a note with no tags should have an empty list, got %#v", got.Tags)
+	}
+	if _, err := s.Note("missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCounts(t *testing.T) {
+	s := newStore(t)
+	if n, f, err := s.Counts(); n != 0 || f != 0 || err != nil {
+		t.Fatalf("empty: %d %d %v", n, f, err)
+	}
+	g := note("a", "a.md")
+	g.Files = []vault.File{{Path: "a.pdf", Version: "p"}, {Path: "a.png", Version: "q"}}
+	put(t, s, g, "x", at(1))
+	put(t, s, note("b", "b.md"), "y", at(1))
+	pdfOnly := vault.Group{ID: "c", Files: []vault.File{{Path: "c.pdf", Version: "r"}}}
+	if err := s.Upsert(pdfOnly, nil, at(1)); err != nil {
+		t.Fatal(err)
+	}
+	if n, f, _ := s.Counts(); n != 2 || f != 3 {
+		t.Fatalf("got %d notes, %d files", n, f)
+	}
+	s.Remove("a")
+	if n, f, _ := s.Counts(); n != 1 || f != 1 {
+		t.Fatalf("after remove: %d notes, %d files", n, f)
 	}
 }

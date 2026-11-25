@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"runtime"
 	"time"
 
 	"styli/core/internal/maid"
@@ -110,9 +111,41 @@ func toRunDTO(r maid.Result) runDTO {
 		job(r.History), job(r.Trash), r.NeedsAttention()}
 }
 
+// hubOS names the operating system the hub runs on, the way a person would.
+func hubOS() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "Linux"
+	case "freebsd":
+		return "FreeBSD"
+	case "windows":
+		return "Windows"
+	case "darwin":
+		return "macOS"
+	case "android":
+		return "Android"
+	}
+	return runtime.GOOS
+}
+
+type hubDTO struct {
+	Name    string `json:"name"`
+	OS      string `json:"os"`
+	Version string `json:"version"`
+	Vault   string `json:"vault"` // the vault folder, so the dashboard can remind about backups
+	Notes   int    `json:"notes"`
+	Files   int    `json:"files"`
+}
+
 func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.Maid.Status()
-	out := map[string]any{"maid_running": st.Running, "last_maid_run": nil}
+	hub := hubDTO{Name: s.Settings.Hub().Name, OS: hubOS(), Version: s.Version, Vault: s.Vault.Root()}
+	if n, f, err := s.Store.Counts(); err == nil {
+		hub.Notes, hub.Files = n, f
+	} else {
+		s.Logf("web: counts: %v", err)
+	}
+	out := map[string]any{"maid_running": st.Running, "last_maid_run": nil, "hub": hub}
 	if st.Last != nil {
 		out["last_maid_run"] = toRunDTO(*st.Last)
 	}

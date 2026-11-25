@@ -8,6 +8,7 @@ build:
 test:
 	cd core && go test ./...
 	cd tools/uiassets && go test ./...
+	@if command -v node >/dev/null 2>&1; then NODE_NO_WARNINGS=1 node --test core/internal/web/uitest/; else echo "node not found: skipping the UI helper tests"; fi
 
 # Copy the design system (design/, which is not in the repo) into the web UI.
 # Only needed when the design changes; the output is committed.

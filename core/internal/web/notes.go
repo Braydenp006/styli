@@ -81,6 +81,9 @@ type fileDTO struct {
 
 type noteDTO struct {
 	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	Modified       time.Time `json:"modified"`
+	Tags           []string  `json:"tags"`
 	HasNote        bool      `json:"has_note"`
 	Path           string    `json:"path"` // "" until the group has a note
 	Version        string    `json:"version"`
@@ -96,7 +99,10 @@ func (s *server) getNote(w http.ResponseWriter, r *http.Request) {
 		s.failErr(w, err)
 		return
 	}
-	n := noteDTO{ID: id, Files: make([]fileDTO, 0, len(g.Files))}
+	n := noteDTO{ID: id, Files: make([]fileDTO, 0, len(g.Files)), Tags: []string{}}
+	if info, err := s.Store.Note(id); err == nil { // the index may not know it yet; that is fine
+		n.Title, n.Modified, n.Tags = info.Title, info.Modified, info.Tags
+	}
 	for i, f := range g.Files {
 		n.Files = append(n.Files, fileDTO{i, path.Base(f.Path), f.Path})
 	}
@@ -145,13 +151,20 @@ func (s *server) saveNote(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Text string `json:"text"`
 		Base string `json:"base"`
+		// KeepOld keeps the text being replaced as its own history version,
+		// for the moment someone overwrites a version saved elsewhere.
+		KeepOld bool `json:"keep_old"`
 	}
 	if err := readJSON(w, r, &req); err != nil {
 		s.failErr(w, err)
 		return
 	}
 	id := r.PathValue("id")
-	ver, err := s.Vault.WriteNote(id, []byte(req.Text), req.Base)
+	write := s.Vault.WriteNote
+	if req.KeepOld {
+		write = s.Vault.WriteNoteKeepingOld
+	}
+	ver, err := write(id, []byte(req.Text), req.Base)
 	if err != nil {
 		s.failErr(w, err)
 		return

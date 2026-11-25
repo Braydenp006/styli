@@ -2,7 +2,7 @@
 
 A self-hosted notes app: handwrite on a tablet or type anywhere, sync between your own devices, and let a local AI turn handwriting into plain Markdown. Notes are ordinary `.md` files in a folder.
 
-Status: phase 1 (the Go core on one machine). There is a hub server with a JSON API, and the web interface is being built screen by screen (the page shell, theme, fonts and Markdown with math rendering are in; the vault and editor screens are next).
+Status: phase 1 (the Go core on one machine). There is a hub server with a JSON API, and the web interface is being built screen by screen (the tabularium view with search and notes, and the editor with autosave, move and trash, and the Trash screen, version history, the hub dashboard and the Settings screen are in, which completes the screens planned for phase 1).
 
 ## Run the hub
 
@@ -19,7 +19,7 @@ make build
 ## Develop
 
 ```
-make test    # go test ./... in core/
+make test    # Go tests, plus the UI helper tests if Node (22.7 or newer) is installed
 make cross   # check it builds for linux, freebsd and windows
 make ui-assets  # copy the design system (design/) into the web UI; only when the design changes
 ```

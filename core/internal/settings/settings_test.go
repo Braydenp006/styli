@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -272,5 +273,25 @@ func TestTimeServerForms(t *testing.T) {
 	h.TimeCheck = TimeCheck{On: false, Server: ""} // empty is fine while off
 	if err := s.SetHub(h); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDeviceFolderIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions")
+	}
+	root, dev := t.TempDir(), filepath.Join(t.TempDir(), "config", "styli", "abcd")
+	s := must(Open(root, dev))
+	s.SetDevice(Device{Name: "Laptop"})
+	for p, want := range map[string]os.FileMode{dev: 0o700, filepath.Join(dev, "device.json"): 0o600} {
+		fi, err := os.Stat(p)
+		if err != nil || fi.Mode().Perm() != want {
+			t.Errorf("%s: %v %o, want %o", p, err, fi.Mode().Perm(), want)
+		}
+	}
+	os.Chmod(dev, 0o755) // an older build's folder is tightened on the next start
+	must(Open(root, dev))
+	if fi, _ := os.Stat(dev); fi.Mode().Perm() != 0o700 {
+		t.Errorf("not tightened: %o", fi.Mode().Perm())
 	}
 }

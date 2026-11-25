@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/hex"
+	"errors"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -52,10 +54,27 @@ func Open(dir string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func openDB(dir string) (*sql.DB, string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// The index holds the full text of every note, so only this user may read
+	// it. Folders and files that already exist are tightened too.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, "", err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, "", err
 	}
 	path := filepath.Join(dir, "index.db")
+	// Create the database file ourselves, private: SQLite gives its -wal and
+	// -shm files the same permissions as the database file.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, "", err
+	}
+	f.Close()
+	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(name, 0o600); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, "", err
+		}
+	}
 	// WAL for concurrent readers, foreign keys for the cascades, and a wait
 	// instead of an immediate "database is locked".
 	dsn := (&url.URL{Scheme: "file", Path: path}).String() +

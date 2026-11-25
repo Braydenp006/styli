@@ -118,6 +118,12 @@ func DeviceDir(vaultRoot string) (string, error) {
 // comes from a newer build is an error: it is never replaced by defaults,
 // because that could silently change what the app deletes.
 func Open(vaultRoot, deviceDir string) (*Store, error) {
+	if err := os.MkdirAll(deviceDir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(deviceDir, 0o700); err != nil {
+		return nil, err
+	}
 	s := &Store{
 		hubPath: filepath.Join(vaultRoot, ".ids", "settings.json"),
 		devPath: filepath.Join(deviceDir, "device.json"),

@@ -64,8 +64,9 @@ type Group struct {
 
 // Vault is a folder of notes. Safe for concurrent use inside one process.
 type Vault struct {
-	root string
-	mu   sync.Mutex
+	root    string
+	dirMode fs.FileMode // the vault folder's permissions, given to folders the vault creates
+	mu      sync.Mutex
 
 	// Used only by Rescan (see scan.go).
 	seen    map[string]cached // size, modified time and hash from the last scan
@@ -82,13 +83,29 @@ type Vault struct {
 // Open opens (and if needed creates) a vault. Call Rescan afterwards to pick up
 // anything that changed while the app was not running.
 func Open(root string) (*Vault, error) {
-	if err := os.MkdirAll(filepath.Join(root, idsDir), 0o755); err != nil {
+	// .ids holds the records, history and trash: private to this user, even
+	// if it already existed with looser permissions.
+	ids := filepath.Join(root, idsDir)
+	if err := os.MkdirAll(ids, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(ids, 0o700); err != nil {
+		return nil, err
+	}
+	fi, err := os.Stat(root)
+	if err != nil {
 		return nil, err
 	}
 	return &Vault{
-		root: root, seen: map[string]cached{}, missing: map[string]bool{},
+		root: root, dirMode: fi.Mode().Perm(), seen: map[string]cached{}, missing: map[string]bool{},
 		historyOn: true, historyWindow: 30 * time.Minute, loc: time.Local, now: time.Now,
 	}, nil
+}
+
+// mkdirs makes the folders for a path in the vault with the vault folder's own
+// permissions, so a private vault stays private and a shared one stays shared.
+func (v *Vault) mkdirs(dir string) error {
+	return os.MkdirAll(dir, v.dirMode)
 }
 
 // CreateNote makes a new group from a Markdown note. p must end in .md.
@@ -123,6 +140,12 @@ func (v *Vault) create(p string, r io.Reader, content []byte, isNote bool) (Grou
 		if err := v.snapshot(g, content, nil, false); err != nil {
 			return Group{}, err
 		}
+	}
+	if err := v.mkdirs(filepath.Dir(abs)); err != nil {
+		if isNote {
+			v.dropHistory(g.ID)
+		}
+		return Group{}, err
 	}
 	// File first, record second: a crash in between leaves an unrecorded file
 	// (the later watcher can adopt it), never a record pointing at nothing.
@@ -239,7 +262,7 @@ func (v *Vault) readNote(id string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	b, err := os.ReadFile(abs)
+	b, err := readCapped(abs)
 	if err != nil {
 		return nil, "", err
 	}
@@ -253,6 +276,16 @@ func (v *Vault) WriteNote(id string, content []byte, base string) (string, error
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.writeNote(id, content, base, false)
+}
+
+// WriteNoteKeepingOld is WriteNote, except the text it replaces is always kept
+// as its own history version, even if it was saved moments ago (normally a
+// save within the history window folds into the newest version). It is for
+// the moment someone chooses to overwrite another person's or device's text.
+func (v *Vault) WriteNoteKeepingOld(id string, content []byte, base string) (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.writeNote(id, content, base, true)
 }
 
 // writeNote is WriteNote with the lock held. newVersion forces a new history
@@ -329,7 +362,7 @@ func (v *Vault) Move(id, folder string) error {
 		seen[to] = true
 		mvs = append(mvs, mv{f, to, from, ta})
 	}
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+	if err := v.mkdirs(dstDir); err != nil {
 		return err
 	}
 	for i, m := range mvs {
@@ -488,3 +521,29 @@ func (v *Vault) OpenFile(id string, index int) (*os.File, string, error) {
 
 // Root returns the vault's folder on disk.
 func (v *Vault) Root() string { return v.root }
+
+// MaxNoteSize is the largest note read into memory. A bigger .md file (only
+// possible by copying it into the vault folder) is listed and kept, but not
+// opened, so it cannot exhaust the hub's memory.
+var MaxNoteSize int64 = 64 << 20
+
+// ErrTooLarge means a note is bigger than MaxNoteSize.
+var ErrTooLarge = errors.New("vault: note is too large to open")
+
+func readCapped(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil {
+		return nil, err
+	} else if fi.Size() > MaxNoteSize {
+		return nil, ErrTooLarge
+	}
+	b, err := io.ReadAll(io.LimitReader(f, MaxNoteSize+1)) // it may grow while we read
+	if int64(len(b)) > MaxNoteSize {
+		return nil, ErrTooLarge
+	}
+	return b, err
+}

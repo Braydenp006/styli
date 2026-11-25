@@ -92,7 +92,7 @@ func (v *Vault) Trash(id string) error {
 		}
 		mvs = append(mvs, mv{src, filepath.Join(fdir, base)})
 	}
-	if err := os.MkdirAll(fdir, 0o755); err != nil {
+	if err := os.MkdirAll(fdir, 0o700); err != nil { // inside .ids, which is private anyway
 		return err
 	}
 	b, err := json.Marshal(trashRecord{Group: g, Folder: path.Dir(files[0].Path), DeletedAt: time.Now().UTC()})
@@ -213,7 +213,7 @@ func (v *Vault) Restore(id, folder string) error {
 		mvs = append(mvs, mv{f, to, src, dst})
 	}
 	for i, m := range mvs {
-		err := os.MkdirAll(filepath.Dir(m.dst), 0o755)
+		err := v.mkdirs(filepath.Dir(m.dst))
 		if err == nil {
 			err = os.Rename(m.src, m.dst)
 		}

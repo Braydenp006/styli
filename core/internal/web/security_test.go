@@ -214,3 +214,46 @@ func TestErrorsDoNotLeakInternals(t *testing.T) {
 		}
 	}
 }
+
+// Another website must not be able to make the browser fetch anything from the
+// API, reads included: even unreadable answers can be timed.
+func TestCrossSiteRequestsAreRefusedButLinksToTheHubWork(t *testing.T) {
+	e := newEnv(t)
+	id := e.create(t, "n.md", "confidential")
+	hdr := func(site, mode, dest string) []string {
+		return []string{"Sec-Fetch-Site", site, "Sec-Fetch-Mode", mode, "Sec-Fetch-Dest", dest}
+	}
+	for name, c := range map[string]struct {
+		method, path string
+		hdr          []string
+		want         int
+	}{
+		// what the attack page did
+		"cross-site search":             {"GET", "/api/notes?q=confidential", hdr("cross-site", "no-cors", "empty"), 403},
+		"same-site search (other port)": {"GET", "/api/notes?q=confidential", hdr("same-site", "no-cors", "empty"), 403},
+		"cross-site image of preview":   {"GET", "/api/maid/preview", hdr("cross-site", "no-cors", "image"), 403},
+		"cross-site file as image":      {"GET", "/api/notes/" + id + "/files/0", hdr("cross-site", "no-cors", "image"), 403},
+		"cross-site link to the API":    {"GET", "/api/notes/" + id, hdr("cross-site", "navigate", "document"), 403},
+		"cross-site script include":     {"GET", "/static/js/app.js", hdr("cross-site", "no-cors", "script"), 403},
+		"cross-site page in a frame":    {"GET", "/", hdr("cross-site", "navigate", "iframe"), 403},
+		"cross-site form post":          {"POST", "/api/notes/" + id + "/trash", hdr("cross-site", "navigate", "document"), 403},
+		// what must keep working
+		"link from another site to the hub": {"GET", "/", hdr("cross-site", "navigate", "document"), 200},
+		"typed address":                     {"GET", "/", hdr("none", "navigate", "document"), 200},
+		"the app's own search":              {"GET", "/api/notes?q=confidential", hdr("same-origin", "cors", "empty"), 200},
+		"the app's own script":              {"GET", "/static/js/app.js", hdr("same-origin", "no-cors", "script"), 200},
+		"no metadata (curl, old browsers)":  {"GET", "/api/notes?q=confidential", nil, 200},
+	} {
+		body := any(nil)
+		if c.method == "POST" {
+			body = `{}`
+		}
+		resp, _ := e.req(t, c.method, c.path, body, c.hdr...)
+		if resp.StatusCode != c.want {
+			t.Errorf("%s: %d, want %d", name, resp.StatusCode, c.want)
+		}
+	}
+	if e.call(t, "GET", "/api/notes/"+id, nil, 200)["text"] != "confidential" {
+		t.Fatal("a refused request changed the note")
+	}
+}

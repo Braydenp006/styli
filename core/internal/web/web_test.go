@@ -121,6 +121,9 @@ func TestCreateReadSaveAndTheIndexFollows(t *testing.T) {
 		t.Fatalf("search: %v", got)
 	}
 	n := e.call(t, "GET", "/api/notes/"+id, nil, 200)
+	if n["title"] != "TCP" || n["modified"] == "" || len(n["tags"].([]any)) != 0 {
+		t.Fatalf("index info missing: %v", n)
+	}
 	if n["text"] != "# TCP\nhandshake" || n["path"] != "Net/tcp.md" || n["has_note"] != true || n["history_enabled"] != true {
 		t.Fatalf("%v", n)
 	}
@@ -145,6 +148,27 @@ func TestStaleSaveIsAConflictAndChangesNothing(t *testing.T) {
 	if e.call(t, "GET", "/api/notes/"+id, nil, 200)["text"] != "v2" {
 		t.Fatal("stale save changed the note")
 	}
+}
+
+func TestSaveWithKeepOldKeepsTheReplacedVersion(t *testing.T) {
+	e := newEnv(t)
+	id := e.create(t, "n.md", "first")
+	get := func() map[string]any { return e.call(t, "GET", "/api/notes/"+id, nil, 200) }
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "theirs", "base": get()["version"]}, 200) // folds into the first version
+	if n := len(e.call(t, "GET", "/api/notes/"+id+"/history", nil, 200)["versions"].([]any)); n != 1 {
+		t.Fatalf("expected the save to fold, have %d versions", n)
+	}
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "mine", "base": get()["version"], "keep_old": true}, 200)
+	vs := e.call(t, "GET", "/api/notes/"+id+"/history", nil, 200)["versions"].([]any)
+	if len(vs) != 2 {
+		t.Fatalf("versions: %v", vs)
+	}
+	old := e.call(t, "GET", "/api/notes/"+id+"/history/"+vs[1].(map[string]any)["id"].(string), nil, 200)["text"]
+	if old != "theirs" || get()["text"] != "mine" {
+		t.Fatalf("old %v, now %v", old, get()["text"])
+	}
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "x", "base": "stale", "keep_old": true}, 409)
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "x", "base": "b", "keep_old": "yes"}, 400)
 }
 
 func TestCreateErrors(t *testing.T) {
@@ -355,6 +379,26 @@ func TestMissingNotesAndMaid(t *testing.T) {
 	e.call(t, "POST", "/api/maid/run", map[string]any{"force": "yes"}, 400) // wrong type
 }
 
+func TestStatusDescribesTheHub(t *testing.T) {
+	e := newEnv(t)
+	e.call(t, "PUT", "/api/settings/hub", map[string]any{"name": "Home hub"}, 200)
+	id := e.create(t, "a.md", "x")
+	e.create(t, "b.md", "y")
+	must(e.v.AddFile(id, "slides.pdf", strings.NewReader("%PDF")))
+	e.reindexAll(t)
+	hub := e.call(t, "GET", "/api/status", nil, 200)["hub"].(map[string]any)
+	// Notes are the Markdown notes; files are the attached or imported ones.
+	if hub["name"] != "Home hub" || hub["notes"] != 2.0 || hub["files"] != 1.0 {
+		t.Fatalf("%v", hub)
+	}
+	if hub["vault"] != e.root || hub["os"] == nil || hub["os"] == "" {
+		t.Fatalf("%v", hub)
+	}
+	if _, ok := hub["version"].(string); !ok {
+		t.Fatalf("version missing: %v", hub)
+	}
+}
+
 func TestSettings(t *testing.T) {
 	e := newEnv(t)
 	s := e.call(t, "GET", "/api/settings", nil, 200)
@@ -421,6 +465,32 @@ func TestOddIDsNeverReachTheFilesystem(t *testing.T) {
 		resp, _ := e.req(t, "POST", "/api/trash/"+id+"/delete-forever", nil)
 		if resp.StatusCode == 204 || resp.StatusCode >= 500 {
 			t.Errorf("delete-forever %q: status %d", id, resp.StatusCode)
+		}
+	}
+}
+
+func TestErrorMessagesReadLikeTheUI(t *testing.T) {
+	e := newEnv(t)
+	e.create(t, "a.md", "x")
+	for name, c := range map[string]struct {
+		method, path string
+		body         any
+		want         int
+		msg          string
+	}{
+		"duplicate": {"POST", "/api/notes", map[string]string{"path": "a.md", "text": "x"}, 409, "Something with that name is already there."},
+		"bad path":  {"POST", "/api/notes", map[string]string{"path": "../x.md", "text": "x"}, 400, "That name or folder isn't allowed. Avoid slashes, colons and a leading dot."},
+		"not found": {"GET", "/api/notes/zzz", nil, 404, "That note wasn't found."},
+		"bad value": {"PUT", "/api/settings/hub", map[string]any{"trash_retention_days": -1}, 400, "Trash retention must be between 0 and 36500 days."},
+		"bad json":  {"POST", "/api/notes", `{"path":5}`, 400, ""},
+	} {
+		m := e.call(t, c.method, c.path, c.body, c.want)
+		msg, _ := m["error"].(string)
+		if c.msg != "" && msg != c.msg {
+			t.Errorf("%s: %q, want %q", name, msg, c.msg)
+		}
+		if msg == "" || msg[0] < 'A' || msg[0] > 'Z' || !strings.HasSuffix(msg, ".") {
+			t.Errorf("%s: %q should start with a capital and end with a full stop", name, msg)
 		}
 	}
 }

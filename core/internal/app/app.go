@@ -32,6 +32,7 @@ type Config struct {
 	DataDir   string // search index; default: the user cache folder
 	ConfigDir string // this device's settings; default: the user config folder
 	Logf      func(string, ...any)
+	Version   string            // shown on the dashboard
 	Ready     func(addr string) // called once the hub is listening
 }
 
@@ -133,7 +134,7 @@ func Run(parent context.Context, cfg Config) error {
 	}
 	addr := ln.Addr().String()
 	srv := &http.Server{
-		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Addr: addr}),
+		Handler: web.New(web.Deps{Vault: v, Store: st, Settings: set, Maid: m, Logf: cfg.Logf, Version: cfg.Version, Addr: addr}),
 		// No WriteTimeout: a big PDF must be able to stream.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

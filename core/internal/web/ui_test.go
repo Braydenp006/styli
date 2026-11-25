@@ -98,13 +98,17 @@ func TestEveryReferencedFileExistsAndNothingLeavesTheHub(t *testing.T) {
 				refs = append(refs, ref)
 			}
 		case strings.HasPrefix(p, "/static/js/"):
-			for _, m := range regexp.MustCompile(`from "([^"]+)"`).FindAllStringSubmatch(text, -1) {
+			// Only real import lines: the words "from" and a quote also appear in text shown on screen.
+			for _, m := range regexp.MustCompile(`(?m)^import\b[^\n]*?\bfrom\s+"([^"]+)"`).FindAllStringSubmatch(text, -1) {
 				refs = append(refs, m[1])
 			}
 		}
 		// Our own files (not the vendored libraries) must not mention other sites.
 		if !strings.HasPrefix(p, "/static/vendor/") && p != "/static/img/styli-mark-light-bg.svg" && p != "/static/img/styli-mark-dark-bg.svg" {
 			for _, m := range regexp.MustCompile(`https?://[^\s"')]+`).FindAllString(text, -1) {
+				if m == "http://www.w3.org/2000/svg" {
+					continue // the XML namespace name the browser needs to make an SVG icon; nothing is fetched from it
+				}
 				t.Errorf("%s mentions %s", p, m)
 			}
 		}

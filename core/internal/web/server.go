@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"styli/core/internal/maid"
 	"styli/core/internal/settings"
@@ -35,6 +37,7 @@ type Deps struct {
 	Settings *settings.Store
 	Maid     *maid.Maid
 	Logf     func(string, ...any)
+	Version  string // the build version, shown on the dashboard
 	// Addr is the address the server listens on, for example "127.0.0.1:7878".
 	// Only requests addressed to that port on a loopback name are accepted.
 	Addr string
@@ -113,6 +116,16 @@ func (s *server) guard(next http.Handler) http.Handler {
 			fail(w, http.StatusForbidden, "forbidden_host", "unexpected Host header")
 			return
 		}
+		// Fetch Metadata: a browser says where a request comes from. Another
+		// site may link to the hub's page (a top-level navigation), but may not
+		// make the browser fetch anything else from it, reads included: even
+		// unreadable answers can be timed, which would let a site test whether
+		// your notes contain a word. Old browsers send no such header and fall
+		// back to the checks below.
+		if !sameSiteOK(r) {
+			fail(w, http.StatusForbidden, "forbidden_origin", "request came from another site")
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			// JSON only: other sites cannot send this type without a CORS
 			// preflight, and we never answer one.
@@ -136,12 +149,25 @@ func (s *server) guard(next http.Handler) http.Handler {
 	})
 }
 
+// sameSiteOK applies the Fetch Metadata rule described in guard.
+func sameSiteOK(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+		return true
+	}
+	// From another site: only a plain visit to a page of the app, never the API or its files.
+	navigate := r.Header.Get("Sec-Fetch-Mode") == "navigate"
+	dest := r.Header.Get("Sec-Fetch-Dest")
+	return navigate && (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+		(dest == "" || dest == "document") && !strings.HasPrefix(r.URL.Path, "/api/")
+}
+
 func (s *server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if p := recover(); p != nil {
 				s.Logf("web: panic in %s %s: %v", r.Method, r.URL.Path, p)
-				fail(w, http.StatusInternalServerError, "internal", "something went wrong")
+				fail(w, http.StatusInternalServerError, "internal", "Something went wrong on the hub. Try again.")
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -186,24 +212,26 @@ func (s *server) failErr(w http.ResponseWriter, err error) {
 	var tooBig *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooBig):
-		fail(w, http.StatusRequestEntityTooLarge, "too_large", "request is too large")
+		fail(w, http.StatusRequestEntityTooLarge, "too_large", "That is too large to save.")
+	case errors.Is(err, vault.ErrTooLarge):
+		fail(w, http.StatusRequestEntityTooLarge, "too_large", fmt.Sprintf("This note is too large to open here (over %d MB).", vault.MaxNoteSize>>20))
 	case errors.Is(err, vault.ErrNotFound), errors.Is(err, vault.ErrNoNote):
-		fail(w, http.StatusNotFound, "not_found", "not found")
+		fail(w, http.StatusNotFound, "not_found", "That note wasn't found.")
 	case errors.Is(err, fs.ErrNotExist):
-		fail(w, http.StatusNotFound, "missing", "the file is missing from the vault")
+		fail(w, http.StatusNotFound, "missing", "This file is missing from your vault folder.")
 	case errors.Is(err, vault.ErrConflict):
-		fail(w, http.StatusConflict, "conflict", "the note changed since you opened it")
+		fail(w, http.StatusConflict, "conflict", "This note changed since you opened it.")
 	case errors.Is(err, vault.ErrExists), errors.Is(err, vault.ErrHasNote):
-		fail(w, http.StatusConflict, "exists", "something with that name is already there")
+		fail(w, http.StatusConflict, "exists", "Something with that name is already there.")
 	case errors.Is(err, vault.ErrBadPath):
-		fail(w, http.StatusBadRequest, "bad_path", "that path is not allowed")
+		fail(w, http.StatusBadRequest, "bad_path", "That name or folder isn't allowed. Avoid slashes, colons and a leading dot.")
 	case errors.Is(err, vault.ErrBadPolicy), errors.Is(err, settings.ErrInvalid):
-		fail(w, http.StatusBadRequest, "invalid", err.Error())
+		fail(w, http.StatusBadRequest, "invalid", sentence(strings.TrimPrefix(err.Error(), "settings: invalid value: ")))
 	case errors.Is(err, errBadRequest):
-		fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		fail(w, http.StatusBadRequest, "bad_request", sentence(strings.TrimPrefix(err.Error(), "bad request: ")))
 	default:
 		s.Logf("web: internal error: %v", err)
-		fail(w, http.StatusInternalServerError, "internal", "something went wrong")
+		fail(w, http.StatusInternalServerError, "internal", "Something went wrong on the hub. Try again.")
 	}
 }
 
@@ -233,4 +261,20 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		return badRequest("unexpected data after the JSON object")
 	}
 	return nil
+}
+
+// sentence capitalises the first letter and ends with a full stop, so a message
+// built from an error reads like the rest of the UI.
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	if r, n := utf8.DecodeRuneInString(s); unicode.IsLower(r) {
+		s = string(unicode.ToUpper(r)) + s[n:]
+	}
+	if !strings.HasSuffix(s, ".") && !strings.HasSuffix(s, "?") && !strings.HasSuffix(s, "!") {
+		s += "."
+	}
+	return s
 }

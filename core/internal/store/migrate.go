@@ -105,7 +105,7 @@ func backup(db *sql.DB, path string, version int) error {
 		return err
 	}
 	defer src.Close()
-	dst, err := os.Create(fmt.Sprintf("%s.bak-v%d", path, version))
+	dst, err := os.OpenFile(fmt.Sprintf("%s.bak-v%d", path, version), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // a copy of the index: just as private
 	if err != nil {
 		return err
 	}

@@ -520,3 +520,29 @@ func TestPruneHistoryReportsTotals(t *testing.T) {
 		t.Fatalf("prune: %d of %d", n, total)
 	}
 }
+
+func TestOverwritingKeepsTheReplacedTextAsItsOwnVersion(t *testing.T) {
+	v, _ := open(t)
+	clock := fakeClock(v)
+	g := must(v.CreateNote("n.md", []byte("v1")))
+	*clock = clock.Add(5 * time.Minute) // inside the window
+	write2(t, v, g.ID, "theirs")        // folds into the newest version
+	eq(t, versions(t, v, g.ID), "theirs")
+
+	*clock = clock.Add(time.Minute)
+	_, base, _ := v.ReadNote(g.ID)
+	if _, err := v.WriteNoteKeepingOld(g.ID, []byte("mine"), base); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, versions(t, v, g.ID), "mine", "theirs") // theirs was not folded away
+
+	// A plain save in the same window still folds, as before.
+	*clock = clock.Add(time.Minute)
+	write2(t, v, g.ID, "mine, edited")
+	eq(t, versions(t, v, g.ID), "mine, edited", "theirs")
+
+	// It keeps the stale-write check.
+	if _, err := v.WriteNoteKeepingOld(g.ID, []byte("x"), "stale"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v", err)
+	}
+}

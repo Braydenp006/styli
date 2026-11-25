@@ -55,6 +55,7 @@ func serve(args []string, stdout, stderr io.Writer) int {
 	}
 	logger := log.New(stderr, "", log.LstdFlags)
 	cfg.Logf = logger.Printf
+	cfg.Version = Version
 	cfg.Ready = func(addr string) { fmt.Fprintf(stdout, "Styli is running at http://%s\n", addr) }
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

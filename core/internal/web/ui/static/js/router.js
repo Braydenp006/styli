@@ -3,6 +3,7 @@
 //   #/                 all notes
 //   #/folder/<path>    one folder
 //   #/note/<id>        one note
+//   #/note/<id>/history   its saved versions
 //   #/trash  #/dashboard  #/settings
 export function parseRoute(hash) {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeSafe);
@@ -13,7 +14,9 @@ export function parseRoute(hash) {
     case "folder":
       return { name: "folder", path: rest.join("/") };
     case "note":
-      return rest.length === 1 ? { name: "note", id: rest[0] } : { name: "notfound" };
+      if (rest.length === 1) return { name: "note", id: rest[0] };
+      if (rest.length === 2 && rest[1] === "history") return { name: "history", id: rest[0] };
+      return { name: "notfound" };
     case "trash":
     case "dashboard":
     case "settings":
@@ -35,6 +38,7 @@ export const href = {
   home: () => "#/",
   folder: (path) => "#/folder/" + path.split("/").map(encodeURIComponent).join("/"),
   note: (id) => "#/note/" + encodeURIComponent(id),
+  history: (id) => "#/note/" + encodeURIComponent(id) + "/history",
   trash: () => "#/trash",
   dashboard: () => "#/dashboard",
   settings: () => "#/settings",

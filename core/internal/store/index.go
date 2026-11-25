@@ -177,7 +177,7 @@ func (s *Store) refresh(v *vault.Vault, g vault.Group) error {
 			if fi, err := os.Stat(filepath.Join(v.Root(), filepath.FromSlash(g.Note.Path))); err == nil {
 				mod = fi.ModTime()
 			}
-		case errors.Is(err, fs.ErrNotExist): // note file missing: index it without text
+		case errors.Is(err, fs.ErrNotExist), errors.Is(err, vault.ErrTooLarge): // missing or too large: index it without text
 		default:
 			return err
 		}
