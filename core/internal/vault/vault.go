@@ -72,6 +72,8 @@ type Vault struct {
 	// Version history settings (see history.go). The hub's settings feed these.
 	historyOn     bool
 	historyWindow time.Duration
+	historyPolicy HistoryPolicy
+	loc           *time.Location   // time zone that day/week/month boundaries follow
 	now           func() time.Time // replaced in tests
 }
 
@@ -83,7 +85,7 @@ func Open(root string) (*Vault, error) {
 	}
 	return &Vault{
 		root: root, seen: map[string]cached{}, missing: map[string]bool{},
-		historyOn: true, historyWindow: 30 * time.Minute, now: time.Now,
+		historyOn: true, historyWindow: 30 * time.Minute, loc: time.Local, now: time.Now,
 	}, nil
 }
 

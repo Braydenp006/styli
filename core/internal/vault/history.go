@@ -145,13 +145,26 @@ func (v *Vault) RestoreVersion(id, versionID, base string) (string, error) {
 	return v.writeNote(id, text, base, true)
 }
 
-// snapshot records content as the note's newest version, following the window
+// snapshot saves a version (see saveVersion), then prunes the note's history
+// under the current policy. Pruning is best effort: if it fails the save still
+// stands, and the next PruneHistory reports the problem.
+func (v *Vault) snapshot(g Group, content []byte, seed *historySeed, force bool) error {
+	if err := v.saveVersion(g, content, seed, force); err != nil {
+		return err
+	}
+	if v.historyFor(g) {
+		v.pruneDir(v.historyPath(g.ID), v.now(), false)
+	}
+	return nil
+}
+
+// saveVersion records content as the note's newest version, following the window
 // rule above. force always adds a version. seed, if given, is the text the
 // note had just before this change: if that text is not already the newest
 // version (it was written while history was off, or edited outside the app and
 // not scanned yet) it is saved first so it is not lost. Does nothing if
 // history is off for the note. Call with the lock held.
-func (v *Vault) snapshot(g Group, content []byte, seed *historySeed, force bool) error {
+func (v *Vault) saveVersion(g Group, content []byte, seed *historySeed, force bool) error {
 	if !v.historyFor(g) {
 		return nil
 	}
@@ -251,4 +264,139 @@ func readGz(p string) ([]byte, error) {
 		return nil, err
 	}
 	return io.ReadAll(zr)
+}
+
+// Period is the calendar unit the "per period" pruning rule counts in.
+type Period int
+
+const (
+	PeriodDay  Period = iota + 1
+	PeriodWeek        // weeks start on Monday
+	PeriodMonth
+)
+
+// HistoryPolicy limits how much history is kept. Every limit is optional (zero
+// is off). A version is pruned if it breaks any limit that is on, except that
+// a note's newest version is never pruned.
+type HistoryPolicy struct {
+	MaxVersions int           // keep at most this many versions per note
+	MaxAge      time.Duration // delete versions older than this
+	PerPeriod   int           // keep at most this many versions per finished Period...
+	Period      Period        // ...the newest ones; the current period is left alone
+}
+
+// ErrBadPolicy means a negative limit, or PerPeriod without a valid Period.
+var ErrBadPolicy = errors.New("vault: bad history policy")
+
+// SetHistoryPolicy sets the vault-wide pruning limits. It deletes nothing by
+// itself: the limits apply on the next saved version or PruneHistory.
+func (v *Vault) SetHistoryPolicy(p HistoryPolicy) error {
+	if p.MaxVersions < 0 || p.MaxAge < 0 || p.PerPeriod < 0 ||
+		(p.PerPeriod > 0 && (p.Period < PeriodDay || p.Period > PeriodMonth)) {
+		return ErrBadPolicy
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.historyPolicy = p
+	return nil
+}
+
+// PruneHistory applies the policy to every note's history and returns how many
+// versions it deleted. With dryRun it deletes nothing and returns how many it
+// would delete. Run it daily: the per-period rule needs it for notes nobody is
+// editing. Trashed notes are skipped (Purge deletes their history).
+func (v *Vault) PruneHistory(dryRun bool) (int, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	groups, err := v.list()
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	var errs []error
+	for _, g := range groups {
+		n, err := v.pruneDir(v.historyPath(g.ID), v.now(), dryRun)
+		total += n
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return total, errors.Join(errs...)
+}
+
+// pruneDir applies the policy to one note's history folder. It only ever
+// removes version files (<13 digits>.gz) inside dir.
+func (v *Vault) pruneDir(dir string, now time.Time, dryRun bool) (int, error) {
+	p := v.historyPolicy
+	vs, err := listVersions(dir) // oldest first
+	if err != nil || len(vs) < 2 {
+		return 0, err
+	}
+	newest := len(vs) - 1
+	drop := make([]bool, len(vs))
+
+	if p.MaxAge > 0 {
+		for i, ver := range vs {
+			if i != newest && now.Sub(ver.Time) > p.MaxAge {
+				drop[i] = true
+			}
+		}
+	}
+	if p.PerPeriod > 0 {
+		cur := v.periodStart(now, p.Period)
+		buckets := map[int64][]int{} // period start -> versions in it, oldest first
+		for i, ver := range vs {
+			if ps := v.periodStart(ver.Time, p.Period); ps.Before(cur) {
+				buckets[ps.Unix()] = append(buckets[ps.Unix()], i)
+			}
+		}
+		for _, idx := range buckets {
+			for _, i := range idx[:max(0, len(idx)-p.PerPeriod)] {
+				drop[i] = true
+			}
+		}
+	}
+	if p.MaxVersions > 0 {
+		var kept []int
+		for i := range vs {
+			if !drop[i] {
+				kept = append(kept, i)
+			}
+		}
+		for _, i := range kept[:max(0, len(kept)-p.MaxVersions)] {
+			if i != newest {
+				drop[i] = true
+			}
+		}
+	}
+
+	n := 0
+	var errs []error
+	for i, d := range drop {
+		if !d {
+			continue
+		}
+		if !dryRun {
+			if err := os.Remove(filepath.Join(dir, vs[i].ID+".gz")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
+// periodStart is the start of the day, week (Monday) or month containing t, in
+// the vault's time zone.
+func (v *Vault) periodStart(t time.Time, p Period) time.Time {
+	t = t.In(v.loc)
+	y, m, d := t.Date()
+	switch p {
+	case PeriodWeek:
+		d -= (int(t.Weekday()) + 6) % 7
+	case PeriodMonth:
+		d = 1
+	}
+	return time.Date(y, m, d, 0, 0, 0, 0, v.loc)
 }
