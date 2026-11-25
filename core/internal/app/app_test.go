@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,9 +62,32 @@ func TestPortAlreadyInUse(t *testing.T) {
 	}
 }
 
+// client is the test's browser. signIn gives it a session.
+var client = &http.Client{}
+
+// signIn opens a one-time link the atrium printed, as a new browser would,
+// and keeps the session cookie for the requests that follow.
+func signIn(t *testing.T, link string) {
+	t.Helper()
+	base, token, ok := strings.Cut(link, "/#/join/")
+	if !ok {
+		t.Fatalf("not a sign-in link: %q", link)
+	}
+	jar, _ := cookiejar.New(nil)
+	client = &http.Client{Jar: jar}
+	resp, err := client.Post(base+"/api/join", "application/json", strings.NewReader(`{"token":"`+token+`","name":"Test browser"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("sign in: %d", resp.StatusCode)
+	}
+}
+
 func get(t *testing.T, url string) (int, map[string]any) {
 	t.Helper()
-	resp, err := http.Get(url)
+	resp, err := client.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,11 +110,11 @@ func TestWholeHubEndToEnd(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	addrCh := make(chan string, 1)
+	addrCh, linkCh := make(chan string, 1), make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, Config{Vault: vaultDir, Addr: "127.0.0.1:0", DataDir: t.TempDir(), ConfigDir: t.TempDir(),
-			Logf: t.Logf, Ready: func(a string) { addrCh <- a }})
+			Logf: t.Logf, Ready: func(a string) { addrCh <- a }, BrowserLink: func(l string) { linkCh <- l }})
 	}()
 	var addr string
 	select {
@@ -101,6 +125,12 @@ func TestWholeHubEndToEnd(t *testing.T) {
 		t.Fatal("hub did not start")
 	}
 	base := "http://" + addr
+	// No browser is trusted yet, so the atrium printed a link, and nothing
+	// works without signing in.
+	if code, m := get(t, base+"/api/status"); code != 401 || m["code"] != "login_required" {
+		t.Fatalf("before signing in: %d %v", code, m)
+	}
+	signIn(t, <-linkCh)
 
 	// The first scan finished before it started listening.
 	if code, m := get(t, base+"/api/notes?q=plum"); code != 200 || len(m["notes"].([]any)) != 1 {
@@ -140,11 +170,14 @@ func TestWholeHubEndToEnd(t *testing.T) {
 
 func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 	vaultDir, data, cfg := t.TempDir(), t.TempDir(), t.TempDir()
-	start := func(then func(base string)) {
+	var link string // the sign-in link the last start printed, if any
+	start := func(newLink bool, then func(base string)) {
 		ctx, cancel := context.WithCancel(context.Background())
 		addrCh, done := make(chan string, 1), make(chan error, 1)
+		link = ""
 		go func() {
-			done <- Run(ctx, Config{Vault: vaultDir, Addr: "127.0.0.1:0", DataDir: data, ConfigDir: cfg, Logf: t.Logf, Ready: func(a string) { addrCh <- a }})
+			done <- Run(ctx, Config{Vault: vaultDir, Addr: "127.0.0.1:0", DataDir: data, ConfigDir: cfg, Logf: t.Logf, NewBrowserLink: newLink,
+				Ready: func(a string) { addrCh <- a }, BrowserLink: func(l string) { link = l }})
 		}()
 		select {
 		case a := <-addrCh:
@@ -160,8 +193,9 @@ func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 		}
 	}
 	var id string
-	start(func(base string) {
-		resp, err := http.Post(base+"/api/notes", "application/json", strings.NewReader(`{"path":"keep.md","text":"# Keep\nfig"}`))
+	start(false, func(base string) {
+		signIn(t, link)
+		resp, err := client.Post(base+"/api/notes", "application/json", strings.NewReader(`{"path":"keep.md","text":"# Keep\nfig"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,12 +207,22 @@ func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 			t.Fatalf("create: %d", resp.StatusCode)
 		}
 	})
-	start(func(base string) {
+	start(false, func(base string) {
+		// The browser stays signed in across the restart, so no link is printed.
+		if link != "" {
+			t.Fatalf("a link was printed although a browser is trusted: %q", link)
+		}
 		if code, m := get(t, base+"/api/notes/"+id); code != 200 || m["text"] != "# Keep\nfig" {
 			t.Fatalf("note lost across restart: %d %v", code, m)
 		}
 		if _, m := get(t, base+"/api/notes?q=fig"); len(m["notes"].([]any)) != 1 {
 			t.Fatal("index lost across restart")
+		}
+	})
+	// --new-browser-link prints one anyway (every trusted browser was lost).
+	start(true, func(base string) {
+		if link == "" {
+			t.Fatal("no link with NewBrowserLink")
 		}
 	})
 }

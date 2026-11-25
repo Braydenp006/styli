@@ -8,6 +8,7 @@ import { href } from "../router.js";
 import { openDialog } from "../dialogs.js";
 import { showToast } from "../toast.js";
 import { toForm, toSettings, sameForm, NAME_MAX } from "../settingsform.js";
+import { browsersCard } from "./browsers.js";
 import { pairingCard } from "./pairing.js";
 
 let saved = null; // the form values as the atrium has them
@@ -158,6 +159,7 @@ function draw() {
         help: "This contacts the server below. It sends none of your notes: it only tells that server this address asked for the time." }),
       field({ key: "timeServer", label: "Time server", help: "A name or address, like pool.ntp.org. Use your router's address to keep the check on your own network." })),
 
+    browsersCard(),
     pairingCard(),
 
     card("This device", null,

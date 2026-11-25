@@ -320,3 +320,14 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
 .choice:has(input:checked) { border-color: var(--honey); background: var(--honey-tint); }
 .choice input { margin-top: 3px; accent-color: var(--honey); }
 .choice > span { display: flex; flex-direction: column; gap: var(--space-1); }
+
+/* ---- signing a browser in ---- */
+.signin { flex: 1 1 100%; display: flex; justify-content: center; align-items: flex-start; padding: var(--space-7) var(--space-4); }
+.signin-card { width: 100%; max-width: 30rem; display: flex; flex-direction: column; gap: var(--space-4); }
+.signin-brand { display: flex; align-items: center; gap: var(--space-2); font: 400 18px/24px var(--font-display); letter-spacing: 0.06em; }
+.signin-title { font: 400 26px/32px var(--font-display); }
+.signin-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.signin-card code { font: 400 13px/20px var(--font-mono); overflow-wrap: anywhere; }
+.join-link { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: flex-start; margin-top: var(--space-2); }
+.join-qr { width: 200px; height: 200px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.join-link .grow { flex: 1 1 240px; display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }

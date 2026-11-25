@@ -28,6 +28,9 @@ async function request(method, path, body) {
     // not JSON: fall through to the generic message below
   }
   if (!res.ok) {
+    if (res.status === 401 && data?.code === "login_required") {
+      globalThis.dispatchEvent?.(new CustomEvent("styli:signed-out")); // app.js shows how to sign in again
+    }
     throw new ApiError(res.status, data?.code ?? "error", data?.error ?? `Something went wrong (${res.status}).`);
   }
   return data;

@@ -5,6 +5,7 @@
 //   #/note/<id>        one note
 //   #/note/<id>/history   its saved versions
 //   #/trash  #/conflicts  #/dashboard  #/settings
+//   #/join/<secret>    a one-time sign-in link (see views/signin.js)
 export function parseRoute(hash) {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeSafe);
   const [name, ...rest] = parts;
@@ -17,6 +18,8 @@ export function parseRoute(hash) {
       if (rest.length === 1) return { name: "note", id: rest[0] };
       if (rest.length === 2 && rest[1] === "history") return { name: "history", id: rest[0] };
       return { name: "notfound" };
+    case "join":
+      return { name: "join", token: rest.length === 1 ? rest[0] : "" };
     case "trash":
     case "conflicts":
     case "dashboard":

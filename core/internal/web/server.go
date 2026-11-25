@@ -20,6 +20,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"styli/core/internal/browsers"
 	"styli/core/internal/devices"
 	"styli/core/internal/maid"
 	"styli/core/internal/pairing"
@@ -48,6 +49,10 @@ type Deps struct {
 	Devices *devices.List
 	// Sync, if set, is this device's sync with its atrium (nil on an atrium).
 	Sync *syncdev.Engine
+	// Browsers, if set, is the atrium's list of trusted browsers: every API
+	// call then needs a signed-in browser (see auth). nil on a device, whose
+	// page is for this machine only.
+	Browsers *browsers.List
 	// Addr is the address the server listens on, for example "127.0.0.1:7878".
 	// Only requests addressed to that port on a loopback name are accepted.
 	Addr string
@@ -56,6 +61,7 @@ type Deps struct {
 type server struct {
 	Deps
 	hosts map[string]bool
+	joins joinLimit
 }
 
 // New returns the API handler.
@@ -71,7 +77,7 @@ func New(d Deps) http.Handler {
 
 	mux := http.NewServeMux()
 	s.routes(mux)
-	return s.recoverer(s.logger(s.guard(mux)))
+	return s.recoverer(s.logger(s.guard(s.auth(mux))))
 }
 
 func (s *server) routes(mux *http.ServeMux) {
@@ -117,6 +123,12 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/devices/{id}/unrevoke", s.unrevokeDevice)
 	mux.HandleFunc("GET /api/maid/preview", s.maidPreview)
 	mux.HandleFunc("POST /api/maid/run", s.maidRun)
+
+	mux.HandleFunc("GET /api/session", s.getSession)
+	mux.HandleFunc("POST /api/join", s.join)
+	mux.HandleFunc("GET /api/browsers", s.listBrowsers)
+	mux.HandleFunc("POST /api/browsers/links", s.newBrowserLink)
+	mux.HandleFunc("POST /api/browsers/{id}/remove", s.removeBrowser)
 
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings/hub", s.putHub)

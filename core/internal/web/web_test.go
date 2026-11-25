@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"styli/core/internal/browsers"
 	"styli/core/internal/devices"
 	"styli/core/internal/maid"
 	"styli/core/internal/pairing"
@@ -25,12 +26,14 @@ import (
 )
 
 type tenv struct {
-	ts   *httptest.Server
-	v    *vault.Vault
-	st   *store.Store
-	set  *settings.Store
-	root string
-	host string
+	ts     *httptest.Server
+	br     *browsers.List
+	cookie string // the signed-in test browser's session; req sends it unless told not to
+	v      *vault.Vault
+	st     *store.Store
+	set    *settings.Store
+	root   string
+	host   string
 }
 
 func must[T any](v T, err error) T {
@@ -51,7 +54,12 @@ func newEnv(t *testing.T) *tenv {
 	m := maid.New(e.v, e.set, t.Logf)
 	e.ts = httptest.NewUnstartedServer(nil)
 	e.host = e.ts.Listener.Addr().String()
-	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: m, Logf: t.Logf, Addr: e.host})
+	// An atrium with one signed-in browser, which every request comes from
+	// unless a test says otherwise ("Cookie", "").
+	e.br = must(browsers.Open(e.root))
+	secret, _, _ := e.br.NewLink(browsers.LinkLife)
+	_, e.cookie, _ = e.br.Redeem(secret, "Test browser")
+	e.ts.Config.Handler = New(Deps{Vault: e.v, Store: e.st, Settings: e.set, Maid: m, Logf: t.Logf, Addr: e.host, Browsers: e.br})
 	e.ts.Start()
 	t.Cleanup(e.ts.Close)
 	return e
@@ -76,6 +84,9 @@ func (e *tenv) req(t *testing.T, method, path string, body any, hdr ...string) (
 	}
 	if method != http.MethodGet && method != http.MethodHead {
 		r.Header.Set("Content-Type", "application/json")
+	}
+	if e.cookie != "" {
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: e.cookie})
 	}
 	for i := 0; i+1 < len(hdr); i += 2 {
 		switch {

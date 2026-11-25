@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { noteFileName, folderPath, titleOf } from "../ui/static/js/names.js";
 import { relativeTime, relativeFuture } from "../ui/static/js/time.js";
 import { parseRoute, href } from "../ui/static/js/router.js";
+import { guessBrowserName } from "../ui/static/js/browsername.js";
 
 test("noteFileName keeps ordinary names and unicode", () => {
   assert.equal(noteFileName("Lecture 13"), "Lecture 13");
@@ -463,4 +464,28 @@ test("parseMarkers handles two clashes and an empty side", () => {
 test("conflicts route", () => {
   assert.deepEqual(parseRoute("#/conflicts"), { name: "conflicts" });
   assert.equal(href.conflicts(), "#/conflicts");
+});
+
+test("parseRoute reads a sign-in link, and one already read", () => {
+  assert.deepEqual(parseRoute("#/join/abc-DEF_123"), { name: "join", token: "abc-DEF_123" });
+  assert.deepEqual(parseRoute("#/join"), { name: "join", token: "" });
+  assert.deepEqual(parseRoute("#/join/a/b"), { name: "join", token: "" });
+});
+
+test("guessBrowserName names common browsers", () => {
+  const ua = {
+    iphoneSafari: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+    iphoneChrome: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1",
+    linuxFirefox: "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0",
+    windowsEdge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0",
+    macChrome: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+    android: "Mozilla/5.0 (Linux; Android 14; SM-P620) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+  };
+  assert.equal(guessBrowserName(ua.iphoneSafari), "Safari on iPhone");
+  assert.equal(guessBrowserName(ua.iphoneChrome), "Chrome on iPhone");
+  assert.equal(guessBrowserName(ua.linuxFirefox), "Firefox on Linux");
+  assert.equal(guessBrowserName(ua.windowsEdge), "Edge on Windows");
+  assert.equal(guessBrowserName(ua.macChrome), "Chrome on Mac");
+  assert.equal(guessBrowserName(ua.android), "Chrome on Android");
+  assert.equal(guessBrowserName(""), "Browser");
 });

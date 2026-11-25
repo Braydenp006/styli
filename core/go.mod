@@ -9,6 +9,7 @@ require (
 	github.com/hashicorp/mdns v1.0.7
 	github.com/yuin/goldmark v1.8.7
 	modernc.org/sqlite v1.63.0
+	rsc.io/qr v0.2.0
 )
 
 require (
