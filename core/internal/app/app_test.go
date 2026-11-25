@@ -76,7 +76,7 @@ func TestWholeHubEndToEnd(t *testing.T) {
 	defer func() { vault.Settle = old }()
 
 	vaultDir := t.TempDir()
-	// A note that exists before the hub starts: the first scan must index it.
+	// A note that exists before the atrium starts: the first scan must index it.
 	os.MkdirAll(filepath.Join(vaultDir, "Old"), 0o755)
 	os.WriteFile(filepath.Join(vaultDir, "Old/before.md"), []byte("# Before\nplum"), 0o644)
 	time.Sleep(100 * time.Millisecond)

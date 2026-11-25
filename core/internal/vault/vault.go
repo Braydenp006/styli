@@ -60,6 +60,9 @@ type Group struct {
 	// History overrides the vault's default for this note: nil follows the
 	// default, otherwise true or false. See history.go.
 	History *bool `json:"history,omitempty"`
+
+	// Rev is the number this vault gave the group's latest change (see rev.go).
+	Rev uint64 `json:"rev,omitempty"`
 }
 
 // Vault is a folder of notes. Safe for concurrent use inside one process.
@@ -72,12 +75,17 @@ type Vault struct {
 	seen    map[string]cached // size, modified time and hash from the last scan
 	missing map[string]bool   // group IDs already reported missing
 
-	// Version history settings (see history.go). The hub's settings feed these.
+	// Version history settings (see history.go). The atrium's settings feed these.
 	historyOn     bool
 	historyWindow time.Duration
 	historyPolicy HistoryPolicy
 	loc           *time.Location   // time zone that day/week/month boundaries follow
 	now           func() time.Time // replaced in tests
+
+	// Change numbering (see rev.go).
+	seq    uint64
+	epoch  string
+	mirror string // copy of seq outside the vault; "" until SetSeqMirror
 }
 
 // Open opens (and if needed creates) a vault. Call Rescan afterwards to pick up
@@ -96,10 +104,14 @@ func Open(root string) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Vault{
+	v := &Vault{
 		root: root, dirMode: fi.Mode().Perm(), seen: map[string]cached{}, missing: map[string]bool{},
 		historyOn: true, historyWindow: 30 * time.Minute, loc: time.Local, now: time.Now,
-	}, nil
+	}
+	if err := v.openRevs(); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // mkdirs makes the folders for a path in the vault with the vault folder's own
@@ -161,7 +173,8 @@ func (v *Vault) create(p string, r io.Reader, content []byte, isNote bool) (Grou
 	} else {
 		g.Files = append(g.Files, File{p, ver})
 	}
-	return g, v.save(g)
+	err = v.save(&g)
+	return g, err
 }
 
 // AddFile stores a source file in the group's folder.
@@ -184,7 +197,8 @@ func (v *Vault) AddFile(id, name string, r io.Reader) (Group, error) {
 		return Group{}, err
 	}
 	g.Files = append(g.Files, File{p, ver})
-	return g, v.save(g)
+	err = v.save(&g)
+	return g, err
 }
 
 // SetNote adds the Markdown note to a group that has none (for example after
@@ -214,7 +228,8 @@ func (v *Vault) SetNote(id, name string, content []byte) (Group, error) {
 		return Group{}, err
 	}
 	g.Note = &File{p, ver}
-	return g, v.save(g)
+	err = v.save(&g)
+	return g, err
 }
 
 // inGroupFolder loads a group and builds the path for a new file name in its folder.
@@ -317,7 +332,7 @@ func (v *Vault) writeNote(id string, content []byte, base string, newVersion boo
 		return "", err
 	}
 	g.Note.Version = ver
-	return ver, v.save(g)
+	return ver, v.save(&g)
 }
 
 // Move moves the whole group into folder ("" or "." is the vault root). If any
@@ -376,7 +391,7 @@ func (v *Vault) Move(id, folder string) error {
 	for _, m := range mvs {
 		m.f.Path = m.to
 	}
-	return v.save(g)
+	return v.save(&g)
 }
 
 // all returns pointers to every file in the group, note first.
@@ -409,7 +424,13 @@ func (v *Vault) load(id string) (Group, error) {
 	return g, nil
 }
 
-func (v *Vault) save(g Group) error {
+// save writes the group's record with the next change number in g.Rev.
+func (v *Vault) save(g *Group) error {
+	rev, err := v.nextRev()
+	if err != nil {
+		return err
+	}
+	g.Rev = rev
 	b, err := json.Marshal(g)
 	if err != nil {
 		return err
@@ -524,7 +545,7 @@ func (v *Vault) Root() string { return v.root }
 
 // MaxNoteSize is the largest note read into memory. A bigger .md file (only
 // possible by copying it into the vault folder) is listed and kept, but not
-// opened, so it cannot exhaust the hub's memory.
+// opened, so it cannot exhaust the atrium's memory.
 var MaxNoteSize int64 = 64 << 20
 
 // ErrTooLarge means a note is bigger than MaxNoteSize.

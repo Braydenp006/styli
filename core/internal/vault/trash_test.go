@@ -153,7 +153,7 @@ func TestRestoreWorksWhenLiveRecordStillExists(t *testing.T) {
 	g := group(t, v)
 	v.Trash(g.ID)
 	rec, _ := v.readTrash(g.ID)
-	v.save(rec.Group) // the "crashed before removing the live record" state
+	v.save(&rec.Group) // the "crashed before removing the live record" state
 	if err := v.Restore(g.ID, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPurgeSkipsEntryThatIsAlsoLive(t *testing.T) {
 	g := group(t, v)
 	v.Trash(g.ID)
 	rec, _ := v.readTrash(g.ID)
-	v.save(rec.Group) // interrupted Trash: live record plus trash entry
+	v.save(&rec.Group) // interrupted Trash: live record plus trash entry
 	age(t, v, g.ID, 90*24*time.Hour)
 	if n, err := purge(v, time.Now()); n != 0 || err != nil {
 		t.Fatalf("purged %d, %v", n, err)
@@ -317,7 +317,7 @@ func TestDeleteForeverRefusesAnEntryThatIsAlsoLive(t *testing.T) {
 	g := group(t, v)
 	v.Trash(g.ID)
 	rec, _ := v.readTrash(g.ID)
-	v.save(rec.Group) // interrupted Trash: live record plus trash entry
+	v.save(&rec.Group) // interrupted Trash: live record plus trash entry
 	if err := v.DeleteForever(g.ID); !errors.Is(err, ErrExists) {
 		t.Fatalf("got %v", err)
 	}

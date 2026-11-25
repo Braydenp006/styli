@@ -3,7 +3,7 @@
 // that deletes data without someone clicking, so before deleting it checks
 // that the clock is sane (optionally against a time server) and holds back any
 // job that would delete an unusually large share of what exists. Held-back
-// jobs and clock problems are reported for the hub dashboard; the user
+// jobs and clock problems are reported for the atrium dashboard; the user
 // decides what happens next, and the maid never retries a hold on its own.
 package maid
 

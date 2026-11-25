@@ -421,7 +421,7 @@ func TestSettings(t *testing.T) {
 	if e.set.Hub().Name != "Home" || e.set.Hub().TrashRetentionDays != 30 {
 		t.Fatal("invalid request changed settings")
 	}
-	// Device: its own retention beats the hub's, and null clears it again.
+	// Device: its own retention beats the atrium's, and null clears it again.
 	s = e.call(t, "PUT", "/api/settings/device", map[string]any{"name": "Laptop", "trash_retention_days": 7}, 200)
 	if s["trash_retention_days"] != 7.0 {
 		t.Fatalf("%v", s)

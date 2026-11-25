@@ -5,7 +5,7 @@
 // default safe mode: raw HTML in a note is dropped, and links with dangerous
 // schemes (javascript:, vbscript:, file:, data: other than a few image types)
 // are emptied. On top of that the page's Content-Security-Policy refuses
-// inline scripts and any resource from outside the hub.
+// inline scripts and any resource from outside the atrium.
 //
 // It understands CommonMark plus GitHub-style tables, strikethrough, task
 // lists and bare-URL links, and $math$ (see math.go).

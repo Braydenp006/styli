@@ -163,9 +163,9 @@ func TestTrashRetentionDeviceBeatsHub(t *testing.T) {
 	}
 	s.SetDevice(Device{TrashRetentionDays: ptr(0)}) // keep forever on this device
 	if s.TrashRetention() != 0 {
-		t.Fatal("explicit keep-forever must beat the hub's 30 days")
+		t.Fatal("explicit keep-forever must beat the atrium's 30 days")
 	}
-	s.SetDevice(Device{}) // nothing set: back to the hub's
+	s.SetDevice(Device{}) // nothing set: back to the atrium's
 	if s.TrashRetention() != 30*day {
 		t.Fatal("back to hub default")
 	}

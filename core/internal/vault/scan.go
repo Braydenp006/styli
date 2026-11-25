@@ -206,7 +206,7 @@ func (v *Vault) Rescan() (changes []Change, pending bool, err error) {
 	}
 	sort.Ints(idx)
 	for _, i := range idx {
-		if err := v.save(groups[i]); err != nil {
+		if err := v.save(&groups[i]); err != nil {
 			return nil, false, err
 		}
 		changes = append(changes, Change{changed[i], groups[i].ID})
@@ -236,7 +236,7 @@ func (v *Vault) Rescan() (changes []Change, pending bool, err error) {
 		} else {
 			g.Files = append(g.Files, f)
 		}
-		if err := v.save(g); err != nil {
+		if err := v.save(&g); err != nil {
 			return nil, false, err
 		}
 		changes = append(changes, Change{Added, g.ID})

@@ -21,7 +21,7 @@ import (
 //	<root>/.ids/history/<id>/<unix milliseconds>.gz
 //
 // The folder is keyed by the note's ID, so moves and renames do not touch it,
-// and it lives in the vault so it travels with backups and hub handover.
+// and it lives in the vault so it travels with backups and atrium handover.
 //
 // A version is saved whenever the note's text changes. If the newest version
 // is younger than the window (30 minutes by default) it is replaced instead of
@@ -68,7 +68,7 @@ func (v *Vault) SetHistory(id string, on *bool) error {
 		return err
 	}
 	g.History = on
-	return v.save(g)
+	return v.save(&g)
 }
 
 // HistoryEnabled reports whether new versions are being saved for a note.

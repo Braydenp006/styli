@@ -1,10 +1,10 @@
-// Talking to the hub. Every call returns parsed JSON, or throws an ApiError
+// Talking to the atrium. Every call returns parsed JSON, or throws an ApiError
 // whose message is safe to show the user.
 
 export class ApiError extends Error {
   constructor(status, code, message) {
     super(message);
-    this.status = status; // 0 means the hub could not be reached
+    this.status = status; // 0 means the atrium could not be reached
     this.code = code;
   }
 }
@@ -18,7 +18,7 @@ async function request(method, path, body) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new ApiError(0, "offline", "Can't reach your hub. Check that it is running, then try again.");
+    throw new ApiError(0, "offline", "Can't reach your atrium. Check that it is running, then try again.");
   }
   if (res.status === 204) return null;
   let data = null;

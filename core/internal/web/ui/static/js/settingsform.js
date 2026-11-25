@@ -1,10 +1,10 @@
-// The settings form and the settings the hub stores, converted both ways.
+// The settings form and the settings the atrium stores, converted both ways.
 // Pure functions, so they are tested without a browser.
 //
 // The form keeps everything as text and booleans, the way the inputs hold it.
-// toSettings checks the text and turns it into what the hub accepts, or says
-// what is wrong with which field. The limits mirror the hub's own checks, so a
-// mistake is caught here with a friendly message before the hub has to refuse it.
+// toSettings checks the text and turns it into what the atrium accepts, or says
+// what is wrong with which field. The limits mirror the atrium's own checks, so a
+// mistake is caught here with a friendly message before the atrium has to refuse it.
 
 // [smallest, largest, what it is, the unit]
 const LIMITS = {
@@ -19,7 +19,7 @@ const LIMITS = {
 export const NAME_MAX = 100;
 export const DEFAULT_TIME_SERVER = "pool.ntp.org";
 
-// What the hub returned (GET /api/settings) as form values.
+// What the atrium returned (GET /api/settings) as form values.
 export function toForm(s) {
   const h = s.hub;
   const own = s.device.trash_retention_days;
@@ -58,7 +58,7 @@ export function toSettings(f) {
   const errors = {};
   const name = f.hubName.trim();
   const deviceName = f.deviceName.trim();
-  if ([...name].length > NAME_MAX) errors.hubName = `The hub name can have at most ${NAME_MAX} characters.`;
+  if ([...name].length > NAME_MAX) errors.hubName = `The atrium name can have at most ${NAME_MAX} characters.`;
   if ([...deviceName].length > NAME_MAX) errors.deviceName = `The device name can have at most ${NAME_MAX} characters.`;
 
   const windowMinutes = wholeNumber(f.windowMinutes, "windowMinutes", errors);

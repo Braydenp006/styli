@@ -111,7 +111,7 @@ func toRunDTO(r maid.Result) runDTO {
 		job(r.History), job(r.Trash), r.NeedsAttention()}
 }
 
-// hubOS names the operating system the hub runs on, the way a person would.
+// hubOS names the operating system the atrium runs on, the way a person would.
 func hubOS() string {
 	switch runtime.GOOS {
 	case "linux":

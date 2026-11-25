@@ -296,7 +296,7 @@ func (s *server) restoreVersion(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) setHistoryEnabled(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		On *bool `json:"on"` // null or absent: follow the hub's default
+		On *bool `json:"on"` // null or absent: follow the atrium's default
 	}
 	if err := readJSON(w, r, &req); err != nil {
 		s.failErr(w, err)

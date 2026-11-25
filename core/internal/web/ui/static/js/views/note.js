@@ -55,7 +55,7 @@ export function createNotePane(host) {
       err instanceof ApiError && err.code === "not_found"
         ? emptyBlock("Note not found", "It may have been moved to the trash or deleted from your vault.")
         : err instanceof ApiError && err.code === "missing"
-          ? h("div", { class: "empty" }, h("h2", {}, "This note's file is missing"), h("p", {}, "Its file is gone from your vault folder."), h("a", { href: href.dashboard() }, "See the hub dashboard"))
+          ? h("div", { class: "empty" }, h("h2", {}, "This note's file is missing"), h("p", {}, "Its file is gone from your vault folder."), h("a", { href: href.dashboard() }, "See the atrium dashboard"))
           : errorBanner(err, () => open(id)));
   }
 

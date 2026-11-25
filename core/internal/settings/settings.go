@@ -1,8 +1,8 @@
 // Package settings stores the user's settings in two layers, as the design
-// says: hub settings (vault-wide defaults, kept inside the vault so they travel
+// says: atrium settings (vault-wide defaults, kept inside the vault so they travel
 // with its backups and handover) and device settings (this device only, kept in
 // the user's config folder). A device setting, where it has one, wins over the
-// hub's.
+// atrium's.
 package settings
 
 import (
@@ -66,12 +66,12 @@ type Hub struct {
 // Device is this device's own settings.
 type Device struct {
 	Name string `json:"name"`
-	// TrashRetentionDays overrides the hub's default. nil means "use the hub's";
+	// TrashRetentionDays overrides the atrium's default. nil means "use the atrium's";
 	// a pointer to 0 means "keep forever on this device".
 	TrashRetentionDays *int `json:"trash_retention_days,omitempty"`
 }
 
-// DefaultHub is what a new hub starts with.
+// DefaultHub is what a new atrium starts with.
 func DefaultHub() Hub {
 	return Hub{
 		History:            History{On: true, WindowMinutes: 30},
@@ -184,14 +184,14 @@ func save(path string, v any) error {
 	return err
 }
 
-// Hub returns the hub settings.
+// Hub returns the atrium settings.
 func (s *Store) Hub() Hub {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hub
 }
 
-// SetHub validates and saves the hub settings. It changes nothing if the
+// SetHub validates and saves the atrium settings. It changes nothing if the
 // values are invalid or the save fails. Call ApplyTo afterwards.
 func (s *Store) SetHub(h Hub) error {
 	if err := validateHub(h); err != nil {
@@ -237,7 +237,7 @@ func copyDevice(d Device) Device {
 }
 
 // TrashRetention is how long trash is kept on this device: the device's own
-// setting if it has one, otherwise the hub's. Zero means keep forever.
+// setting if it has one, otherwise the atrium's. Zero means keep forever.
 func (s *Store) TrashRetention() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -272,7 +272,7 @@ func validateHub(h Hub) error {
 	hi := h.History
 	switch {
 	case !validName(h.Name):
-		return invalid("hub name must be 100 characters or fewer, with no control characters")
+		return invalid("atrium name must be 100 characters or fewer, with no control characters")
 	case hi.WindowMinutes < 0 || hi.WindowMinutes > 7*24*60:
 		return invalid("history window must be between 0 minutes and 7 days")
 	case hi.MaxVersions < 0 || hi.MaxVersions > 100000:

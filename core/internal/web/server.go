@@ -1,4 +1,4 @@
-// Package web is the hub's HTTP API (and, later, its web UI). It listens on
+// Package web is the atrium's HTTP API (and, later, its web UI). It listens on
 // loopback only, because login does not exist yet, and every request passes
 // the guard below. Handlers never touch the filesystem themselves: every path
 // goes through the vault's own checks.
@@ -117,7 +117,7 @@ func (s *server) guard(next http.Handler) http.Handler {
 			return
 		}
 		// Fetch Metadata: a browser says where a request comes from. Another
-		// site may link to the hub's page (a top-level navigation), but may not
+		// site may link to the atrium's page (a top-level navigation), but may not
 		// make the browser fetch anything else from it, reads included: even
 		// unreadable answers can be timed, which would let a site test whether
 		// your notes contain a word. Old browsers send no such header and fall
@@ -167,7 +167,7 @@ func (s *server) recoverer(next http.Handler) http.Handler {
 		defer func() {
 			if p := recover(); p != nil {
 				s.Logf("web: panic in %s %s: %v", r.Method, r.URL.Path, p)
-				fail(w, http.StatusInternalServerError, "internal", "Something went wrong on the hub. Try again.")
+				fail(w, http.StatusInternalServerError, "internal", "Something went wrong on the atrium. Try again.")
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -231,7 +231,7 @@ func (s *server) failErr(w http.ResponseWriter, err error) {
 		fail(w, http.StatusBadRequest, "bad_request", sentence(strings.TrimPrefix(err.Error(), "bad request: ")))
 	default:
 		s.Logf("web: internal error: %v", err)
-		fail(w, http.StatusInternalServerError, "internal", "Something went wrong on the hub. Try again.")
+		fail(w, http.StatusInternalServerError, "internal", "Something went wrong on the atrium. Try again.")
 	}
 }
 

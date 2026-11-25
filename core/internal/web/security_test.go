@@ -238,11 +238,11 @@ func TestCrossSiteRequestsAreRefusedButLinksToTheHubWork(t *testing.T) {
 		"cross-site page in a frame":    {"GET", "/", hdr("cross-site", "navigate", "iframe"), 403},
 		"cross-site form post":          {"POST", "/api/notes/" + id + "/trash", hdr("cross-site", "navigate", "document"), 403},
 		// what must keep working
-		"link from another site to the hub": {"GET", "/", hdr("cross-site", "navigate", "document"), 200},
-		"typed address":                     {"GET", "/", hdr("none", "navigate", "document"), 200},
-		"the app's own search":              {"GET", "/api/notes?q=confidential", hdr("same-origin", "cors", "empty"), 200},
-		"the app's own script":              {"GET", "/static/js/app.js", hdr("same-origin", "no-cors", "script"), 200},
-		"no metadata (curl, old browsers)":  {"GET", "/api/notes?q=confidential", nil, 200},
+		"link from another site to the atrium": {"GET", "/", hdr("cross-site", "navigate", "document"), 200},
+		"typed address":                        {"GET", "/", hdr("none", "navigate", "document"), 200},
+		"the app's own search":                 {"GET", "/api/notes?q=confidential", hdr("same-origin", "cors", "empty"), 200},
+		"the app's own script":                 {"GET", "/static/js/app.js", hdr("same-origin", "no-cors", "script"), 200},
+		"no metadata (curl, old browsers)":     {"GET", "/api/notes?q=confidential", nil, 200},
 	} {
 		body := any(nil)
 		if c.method == "POST" {

@@ -1,4 +1,4 @@
-// What needs the person's attention on the hub, and how to say it. Pure
+// What needs the person's attention on the atrium, and how to say it. Pure
 // functions, so they are tested without a browser.
 
 // Turn the maid's last run and the list of missing notes into the things to

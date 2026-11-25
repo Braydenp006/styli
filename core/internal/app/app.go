@@ -1,4 +1,4 @@
-// Package app wires the pieces into a running hub: vault, settings, search
+// Package app wires the pieces into a running atrium: vault, settings, search
 // index, file watcher, maid and the HTTP API.
 package app
 
@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ import (
 	"styli/core/internal/web"
 )
 
-// DefaultAddr is where the hub listens unless told otherwise.
+// DefaultAddr is where the atrium listens unless told otherwise.
 const DefaultAddr = "127.0.0.1:7878"
 
 // Config says what to run.
@@ -33,7 +34,7 @@ type Config struct {
 	ConfigDir string // this device's settings; default: the user config folder
 	Logf      func(string, ...any)
 	Version   string            // shown on the dashboard
-	Ready     func(addr string) // called once the hub is listening
+	Ready     func(addr string) // called once the atrium is listening
 }
 
 // CheckAddr refuses anything that is not a loopback address. The web API has
@@ -48,13 +49,13 @@ func CheckAddr(addr string) error {
 	}
 	if host != "localhost" {
 		if ip := net.ParseIP(strings.Trim(host, "[]")); ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("refusing to listen on %q: until login exists the hub only listens on this machine (127.0.0.1)", addr)
+			return fmt.Errorf("refusing to listen on %q: until login exists the atrium only listens on this machine (127.0.0.1)", addr)
 		}
 	}
 	return nil
 }
 
-// Run starts the hub and blocks until ctx ends, then shuts down cleanly.
+// Run starts the atrium and blocks until ctx ends, then shuts down cleanly.
 func Run(parent context.Context, cfg Config) error {
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
@@ -91,6 +92,13 @@ func Run(parent context.Context, cfg Config) error {
 	if err := set.ApplyTo(v); err != nil {
 		return err
 	}
+	// settings.Open made the config folder; the counter's copy lives there,
+	// outside the vault, so a vault restored from a backup is noticed.
+	if restored, err := v.SetSeqMirror(filepath.Join(cfg.ConfigDir, "seq")); err != nil {
+		return err
+	} else if restored {
+		cfg.Logf("the vault's change counter went backwards (restored from a backup?); devices will do a full check")
+	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		return err
@@ -126,7 +134,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
-		return fmt.Errorf("cannot listen on %s (is the hub already running?): %w", cfg.Addr, err)
+		return fmt.Errorf("cannot listen on %s (is the atrium already running?): %w", cfg.Addr, err)
 	}
 	if tcp, ok := ln.Addr().(*net.TCPAddr); !ok || !tcp.IP.IsLoopback() {
 		ln.Close()
@@ -142,7 +150,7 @@ func Run(parent context.Context, cfg Config) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
-	cfg.Logf("hub is listening on http://%s", addr)
+	cfg.Logf("atrium is listening on http://%s", addr)
 	if cfg.Ready != nil {
 		cfg.Ready(addr)
 	}

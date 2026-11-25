@@ -67,7 +67,7 @@ function navItem(label, to, current, count = 0, countText = null) {
   }, label, count ? h("span", { class: "sty-nav-count", "aria-hidden": "true" }, String(count)) : null);
 }
 
-// The sidebar also shows how many things on the hub need a decision.
+// The sidebar also shows how many things on the atrium need a decision.
 let attentionCount = 0;
 async function refreshAttention() {
   try {
@@ -156,7 +156,7 @@ function drawNav() {
     navState.root && tree.length ? h("div", { class: "nav-folders", id: "nav-tree" }, nodes(tree, 1)) : null,
     h("span", { class: "nav-sep", role: "separator" }),
     navItem("Trash", href.trash(), route.name === "trash", trashCount),
-    navItem("Hub dashboard", href.dashboard(), route.name === "dashboard", attentionCount,
+    navItem("Atrium dashboard", href.dashboard(), route.name === "dashboard", attentionCount,
       `${attentionCount} ${attentionCount === 1 ? "thing needs" : "things need"} your attention`),
     navItem("Settings", href.settings(), route.name === "settings"),
   );

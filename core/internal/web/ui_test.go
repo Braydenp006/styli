@@ -56,7 +56,7 @@ func TestIndexPageIsServed(t *testing.T) {
 }
 
 // Everything the page references must exist, must be served with a sensible
-// type, and must live on the hub itself.
+// type, and must live on the atrium itself.
 func TestEveryReferencedFileExistsAndNothingLeavesTheHub(t *testing.T) {
 	e := newEnv(t)
 	seen := map[string]bool{}
@@ -115,7 +115,7 @@ func TestEveryReferencedFileExistsAndNothingLeavesTheHub(t *testing.T) {
 		for _, ref := range refs {
 			u, err := url.Parse(ref)
 			if err != nil || u.Scheme != "" || u.Host != "" {
-				t.Errorf("%s references %q, which is not a file on the hub", p, ref)
+				t.Errorf("%s references %q, which is not a file on the atrium", p, ref)
 				continue
 			}
 			if strings.HasPrefix(ref, "./") || !strings.HasPrefix(ref, "/") {

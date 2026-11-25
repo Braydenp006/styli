@@ -1,4 +1,4 @@
-// The hub dashboard: how the hub is doing, and anything that needs a decision.
+// The atrium dashboard: how the atrium is doing, and anything that needs a decision.
 // Nothing here changes by itself. The maid never retries something it held
 // back, and a missing note is only ever moved to the trash when asked.
 import { api, ApiError } from "../api.js";
@@ -26,9 +26,9 @@ export function init(callbacks) {
 const changed = () => document.dispatchEvent(new CustomEvent("attention-changed"));
 
 export async function show() {
-  document.title = "Hub dashboard — Styli";
+  document.title = "Atrium dashboard — Styli";
   preview = null;
-  setChildren(element, h("h1", { class: "view-title" }, "Hub dashboard"), h("p", { class: "view-sub", role: "status" }, "Loading…"));
+  setChildren(element, h("h1", { class: "view-title" }, "Atrium dashboard"), h("p", { class: "view-sub", role: "status" }, "Loading…"));
   await load();
   clearInterval(pollTimer);
   pollTimer = setInterval(() => {
@@ -47,7 +47,7 @@ async function load() {
   } catch (err) {
     if (mine !== seq) return;
     if (data) return; // keep showing what we had; the next poll tries again
-    setChildren(element, h("h1", { class: "view-title" }, "Hub dashboard"), errorBanner(err, load));
+    setChildren(element, h("h1", { class: "view-title" }, "Atrium dashboard"), errorBanner(err, load));
   }
 }
 
@@ -61,13 +61,13 @@ function draw() {
   setChildren(element,
     h("div", { class: "dash-head" },
       h("div", { class: "dash-title" },
-        h("h1", { class: "view-title" }, hub.name || "Your hub"),
-        h("span", { class: "view-sub" }, `Hub · ${hub.os} · running${hub.version ? " · " + hub.version : ""}`)),
+        h("h1", { class: "view-title" }, hub.name || "Your atrium"),
+        h("span", { class: "view-sub" }, `Atrium · ${hub.os} · running${hub.version ? " · " + hub.version : ""}`)),
       h("span", { class: "dash-state " + (items.length ? "dash-state--bad" : "dash-state--good"), role: "status" },
         items.length ? `${items.length} ${items.length === 1 ? "thing needs" : "things need"} your attention` : "Nothing needs your attention")),
     h("div", { class: "banner", role: "note" },
       h("span", { class: "grow" },
-        `This hub holds the only full copy of your ${hub.notes} ${hub.notes === 1 ? "note" : "notes"}${hub.files ? ` and ${hub.files} attached ${hub.files === 1 ? "file" : "files"}` : ""}. Make sure your backups include the vault folder: `,
+        `This atrium holds the only full copy of your ${hub.notes} ${hub.notes === 1 ? "note" : "notes"}${hub.files ? ` and ${hub.files} attached ${hub.files === 1 ? "file" : "files"}` : ""}. Make sure your backups include the vault folder: `,
         h("code", {}, hub.vault), ".")),
     items.length ? attentionCard(items) : null,
     h("div", { class: "dash-grid" }, maidCard(status), vaultCard(hub)));
@@ -178,7 +178,7 @@ function maidCard(status) {
           h("li", {}, h("strong", {}, "Trash: "), describeJob("trash", run.trash))),
         h("p", { class: "hint" }, describeTimeCheck(run)),
       ]
-    : [h("p", {}, "It has not run yet. The maid runs about a minute after the hub starts, then once a day.")];
+    : [h("p", {}, "It has not run yet. The maid runs about a minute after the atrium starts, then once a day.")];
   const previewBox = h("div", { class: "preview-box", role: "status", "aria-live": "polite" });
   if (preview) setChildren(previewBox, previewText(preview));
   const previewBtn = h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: async (e) => {

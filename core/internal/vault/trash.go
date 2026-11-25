@@ -229,7 +229,7 @@ func (v *Vault) Restore(id, folder string) error {
 			f.Path = path.Join(folder, path.Base(f.Path))
 		}
 	}
-	if err := v.save(g); err != nil {
+	if err := v.save(&g); err != nil {
 		return err
 	}
 	// Live again. Drop the trash entry, record first so it stops being listed.

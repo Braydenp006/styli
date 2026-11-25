@@ -373,7 +373,7 @@ test("the time check needs a server only while it is on", () => {
   }
 });
 
-test("device trash retention: the hub's, a number of days, or forever", () => {
+test("device trash retention: the atrium's, a number of days, or forever", () => {
   const base = toForm(stored());
   assert.equal(toSettings({ ...base, deviceMode: "hub" }).device.trash_retention_days, null);
   assert.equal(toSettings({ ...base, deviceMode: "forever" }).device.trash_retention_days, 0);

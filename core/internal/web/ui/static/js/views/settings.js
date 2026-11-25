@@ -9,7 +9,7 @@ import { openDialog } from "../dialogs.js";
 import { showToast } from "../toast.js";
 import { toForm, toSettings, sameForm, NAME_MAX } from "../settingsform.js";
 
-let saved = null; // the form values as the hub has them
+let saved = null; // the form values as the atrium has them
 let form = null; // the form values as they are on screen
 let fields = {}; // form key -> its input
 let seq = 0;
@@ -104,7 +104,7 @@ let bar;
 let notice;
 let errorSlot;
 let deviceDaysField;
-let hubOption; // the "use the hub's setting" choice, whose label shows the hub's number
+let hubOption; // the "use the atrium's setting" choice, whose label shows the atrium's number
 
 const hubTrashText = () => (Number(saved.trashDays) === 0 ? "until deleted by hand" : `${saved.trashDays} days`);
 
@@ -129,11 +129,11 @@ function draw() {
 
   setChildren(element,
     h("h1", { class: "view-title" }, "Settings"),
-    h("p", { class: "view-sub" }, "These apply to your whole hub, except the last section, which is only for this device."),
+    h("p", { class: "view-sub" }, "These apply to your whole atrium, except the last section, which is only for this device."),
     errorSlot, notice,
 
-    card("This hub", null,
-      field({ key: "hubName", label: "Hub name", help: "Shown at the top of the hub dashboard." })),
+    card("This atrium", null,
+      field({ key: "hubName", label: "Atrium name", help: "Shown at the top of the atrium dashboard." })),
 
     card("Version history", "Older versions of a note let you look back and restore. Each note can still turn history off for itself.",
       toggle({ key: "historyOn", label: "Keep older versions of notes" }),
@@ -158,7 +158,7 @@ function draw() {
       field({ key: "timeServer", label: "Time server", help: "A name or address, like pool.ntp.org. Use your router's address to keep the check on your own network." })),
 
     card("This device", null,
-      field({ key: "deviceName", label: "Device name", help: "How this device is shown in the hub." }),
+      field({ key: "deviceName", label: "Device name", help: "How this device is shown in the atrium." }),
       deviceMode, deviceDays),
     bar);
   syncDeviceDays();
@@ -166,7 +166,7 @@ function draw() {
 
 function syncDeviceDays() {
   deviceDaysField.hidden = form.deviceMode !== "days";
-  hubOption.textContent = `Use the hub's setting (${hubTrashText()})`;
+  hubOption.textContent = `Use the atrium's setting (${hubTrashText()})`;
 }
 
 // ---- changing and saving ----
@@ -221,7 +221,7 @@ async function save() {
   const buttons = bar.querySelectorAll("button");
   buttons.forEach((b) => (b.disabled = true));
   try {
-    saved = toForm(await api.put("/api/settings/hub", out.hub)); // the hub part is saved first, and shown as saved even if the device part fails
+    saved = toForm(await api.put("/api/settings/hub", out.hub)); // the atrium part is saved first, and shown as saved even if the device part fails
     bar.hidden = !dirty();
     saved = toForm(await api.put("/api/settings/device", out.device));
   } catch (err) {
