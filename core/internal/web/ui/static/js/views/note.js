@@ -206,6 +206,7 @@ export function createNotePane(host) {
         c.note.conflict = false;
         if (cur === c) { drawDisputed(c); setChildren(details, ...detailsFor(c)); }
         host.noteMoved(c.id); // the list shows the same flag
+        document.dispatchEvent(new CustomEvent("conflicts-refresh")); // so does the sidebar count
       } catch (err) {
         btn.disabled = false;
         msg.textContent = err instanceof ApiError ? err.message : "Couldn't mark it as settled.";

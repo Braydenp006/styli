@@ -318,6 +318,26 @@ func TestConflictFlagCanBeCleared(t *testing.T) {
 	}
 }
 
+func TestConflictsListHoldsOnlyFlaggedNotes(t *testing.T) {
+	e := newEnv(t)
+	e.create(t, "fine.md", "ok")
+	id := e.create(t, "n.md", "<<<<<<< this device\nmine\n=======\ntheirs\n>>>>>>> atrium\n")
+	if got := e.call(t, "GET", "/api/conflicts", nil, 200)["conflicts"].([]any); len(got) != 0 {
+		t.Fatalf("nothing is flagged yet: %v", got)
+	}
+	if err := e.v.SetConflict(id, true); err != nil {
+		t.Fatal(err)
+	}
+	got := e.call(t, "GET", "/api/conflicts", nil, 200)["conflicts"].([]any)
+	if len(got) != 1 || got[0].(map[string]any)["id"] != id || !strings.Contains(got[0].(map[string]any)["text"].(string), "theirs") {
+		t.Fatalf("%v", got)
+	}
+	e.call(t, "DELETE", "/api/notes/"+id+"/conflict", nil, 200)
+	if got := e.call(t, "GET", "/api/conflicts", nil, 200)["conflicts"].([]any); len(got) != 0 {
+		t.Fatalf("settled notes leave the list: %v", got)
+	}
+}
+
 func TestFileEndpointServesSafely(t *testing.T) {
 	e := newEnv(t)
 	g := must(e.v.CreateNote("a/n.md", []byte("note")))

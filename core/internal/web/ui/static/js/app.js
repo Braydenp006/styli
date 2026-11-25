@@ -3,6 +3,7 @@ import { h, setChildren } from "./dom.js";
 import { href, onRouteChange } from "./router.js";
 import * as vault from "./views/vault.js";
 import * as trash from "./views/trash.js";
+import * as conflicts from "./views/conflicts.js";
 import * as dashboard from "./views/dashboard.js";
 import * as settings from "./views/settings.js";
 import { attentionItems } from "./attention.js";
@@ -99,6 +100,20 @@ async function refreshTrashCount() {
 }
 document.addEventListener("trash-changed", () => { refreshTrashCount(); refreshAttention(); }); // recovery candidates count as attention
 
+// The sidebar shows how many notes are flagged after a merge.
+let conflictCount = 0;
+async function refreshConflictCount() {
+  try {
+    conflictCount = (await api.get("/api/conflicts")).conflicts.length;
+    drawNav();
+  } catch {
+    // leave the old number; the Conflicts screen shows the real error
+  }
+}
+document.addEventListener("conflicts-refresh", refreshConflictCount);
+document.addEventListener("conflicts-changed", (e) => { conflictCount = e.detail; drawNav(); });
+setInterval(() => { if (document.visibilityState === "visible") refreshConflictCount(); }, 60000);
+
 // Which sidebar entry is highlighted. Reading a note keeps its folder highlighted.
 function activeFolder() {
   if (route.name === "folder") return route.path;
@@ -156,6 +171,8 @@ function drawNav() {
     navState.root && tree.length ? h("div", { class: "nav-folders", id: "nav-tree" }, nodes(tree, 1)) : null,
     h("span", { class: "nav-sep", role: "separator" }),
     navItem("Trash", href.trash(), route.name === "trash", trashCount),
+    navItem("Conflicts", href.conflicts(), route.name === "conflicts", conflictCount,
+      `${conflictCount} ${conflictCount === 1 ? "note" : "notes"} to settle`),
     navItem("Atrium dashboard", href.dashboard(), route.name === "dashboard", attentionCount,
       `${attentionCount} ${attentionCount === 1 ? "thing needs" : "things need"} your attention`),
     navItem("Settings", href.settings(), route.name === "settings"),
@@ -182,6 +199,9 @@ function drawMain() {
     case "trash":
       simpleView(trash.element);
       return trash.show();
+    case "conflicts":
+      simpleView(conflicts.element);
+      return conflicts.show();
     case "dashboard":
       simpleView(dashboard.element);
       return dashboard.show();
@@ -231,4 +251,5 @@ onRouteChange(async (r) => {
 });
 refreshFolders();
 refreshTrashCount();
+refreshConflictCount();
 refreshAttention();

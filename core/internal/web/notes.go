@@ -318,6 +318,43 @@ func (s *server) setHistoryEnabled(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"history_enabled": on})
 }
 
+type conflictDTO struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Path  string `json:"path"`
+	Text  string `json:"text"` // with the merge's conflict markers; "" if only attached files clashed
+}
+
+// listConflicts returns every flagged note with its text, for the Conflicts screen.
+func (s *server) listConflicts(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.Vault.List()
+	if err != nil {
+		s.failErr(w, err)
+		return
+	}
+	out := []conflictDTO{}
+	for _, g := range groups {
+		if !g.Conflict {
+			continue
+		}
+		c := conflictDTO{ID: g.ID}
+		if info, err := s.Store.Note(g.ID); err == nil {
+			c.Title = info.Title
+		}
+		if g.Note != nil {
+			c.Path = g.Note.Path
+			text, _, err := s.Vault.ReadNote(g.ID)
+			if err != nil {
+				s.failErr(w, err)
+				return
+			}
+			c.Text = string(text)
+		}
+		out = append(out, c)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conflicts": out})
+}
+
 // clearConflict is "mark resolved": the person has sorted out the markers.
 func (s *server) clearConflict(w http.ResponseWriter, r *http.Request) {
 	if err := s.Vault.SetConflict(r.PathValue("id"), false); err != nil {

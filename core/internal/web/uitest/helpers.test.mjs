@@ -435,3 +435,32 @@ test("recoveryWhy says what happened, by device", () => {
   assert.equal(recoveryWhy({ why: "edited_after_delete", from: "Tablet" }), "Changed on Tablet after it was deleted everywhere.");
   assert.equal(recoveryWhy({ why: "deleted_while_changed", from: "Laptop" }), "Deleted everywhere from Laptop, which hadn't seen this newer version.");
 });
+
+import { parseMarkers, clashCount } from "../ui/static/js/markers.js";
+
+test("parseMarkers splits shared text from clashes", () => {
+  const parts = parseMarkers("top\n<<<<<<< this device\nmine\n=======\ntheirs\n>>>>>>> atrium\nbottom\n");
+  assert.deepEqual(parts, [
+    { type: "same", lines: ["top"] },
+    { type: "clash", mine: ["mine"], theirs: ["theirs"] },
+    { type: "same", lines: ["bottom"] },
+  ]);
+  assert.equal(clashCount(parts), 1);
+});
+
+test("parseMarkers leaves incomplete markers as plain text", () => {
+  assert.equal(clashCount(parseMarkers("<<<<<<< x\nno end\n")), 0);
+  assert.equal(clashCount(parseMarkers("a\n=======\nb\n")), 0);
+  assert.deepEqual(parseMarkers("<<<<<<< x\n=======\n"), [{ type: "same", lines: ["<<<<<<< x", "======="] }]);
+});
+
+test("parseMarkers handles two clashes and an empty side", () => {
+  const parts = parseMarkers("<<<<<<< a\n=======\nonly theirs\n>>>>>>> b\n<<<<<<< a\nx\n=======\n>>>>>>> b");
+  assert.deepEqual(parts.map((p) => p.type), ["clash", "clash"]);
+  assert.deepEqual(parts[1], { type: "clash", mine: ["x"], theirs: [] });
+});
+
+test("conflicts route", () => {
+  assert.deepEqual(parseRoute("#/conflicts"), { name: "conflicts" });
+  assert.equal(href.conflicts(), "#/conflicts");
+});
