@@ -73,6 +73,8 @@ export function createNotePane(host) {
     c.els.modified = h("time", { datetime: note.modified, title: fullDate(note.modified) }, relativeTime(note.modified));
     c.els.status = h("span", { class: "save-status", role: "status", "aria-live": "polite" });
     c.els.banner = h("div", { class: "conflict-slot" });
+    c.els.disputed = h("div", { class: "conflict-slot" });
+    drawDisputed(c);
     c.els.prose = h("div", { class: "prose" });
     c.els.text = h("textarea", { class: "editor-text", id: "note-text", spellcheck: "true", "aria-label": "Note text", hidden: true });
     c.els.text.value = c.draft;
@@ -96,7 +98,7 @@ export function createNotePane(host) {
       backLink(),
       h("div", { class: "note-bar" }, modes, c.els.status),
       h("p", { class: "view-sub" }, folder || "Vault", " · Edited ", c.els.modified),
-      c.els.banner, c.els.prose, c.els.text);
+      c.els.disputed, c.els.banner, c.els.prose, c.els.text);
 
     if (note.has_note) {
       setMode(c, edit ? "edit" : "preview");
@@ -190,6 +192,31 @@ export function createNotePane(host) {
     }
     setStatus(c, "Saved");
     return true;
+  }
+
+  // ---- a disputed note: a sync merge left both versions for you to settle ----
+
+  function drawDisputed(c) {
+    if (!c.note.conflict) { setChildren(c.els.disputed); return; }
+    const msg = h("p", { class: "sty-help", role: "status", "aria-live": "polite" });
+    const btn = h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: async () => {
+      btn.disabled = true;
+      try {
+        await api.delete(`/api/notes/${encodeURIComponent(c.id)}/conflict`);
+        c.note.conflict = false;
+        if (cur === c) { drawDisputed(c); setChildren(details, ...detailsFor(c)); }
+        host.noteMoved(c.id); // the list shows the same flag
+      } catch (err) {
+        btn.disabled = false;
+        msg.textContent = err instanceof ApiError ? err.message : "Couldn't mark it as settled.";
+      }
+    } }, "Mark as settled");
+    setChildren(c.els.disputed, h("div", { class: "banner", role: "note" },
+      h("div", { class: "grow" },
+        h("strong", {}, "This note is disputed: two devices changed it at once."),
+        h("p", { class: "banner-text" }, "Where they changed the same lines, both versions sit between ", h("code", {}, "<<<<<<<"), " and ", h("code", {}, ">>>>>>>"),
+          ". If an attached file changed on both, both copies are kept. Use Edit to see the markers, keep what you want, then mark it as settled."),
+        h("div", { class: "banner-actions" }, btn), msg)));
   }
 
   // ---- a conflict: the note changed somewhere else while this one was open ----
@@ -300,6 +327,7 @@ export function createNotePane(host) {
   function detailsFor(c) {
     const { note } = c;
     const out = [h("div", { class: "chip-row" }, h("span", { class: "sty-chip" }, note.has_note ? "Markdown" : "File only"),
+      note.conflict ? h("span", { class: "sty-chip sty-chip--danger" }, "Disputed") : null,
       note.tags.map((t) => h("span", { class: "sty-chip" }, t)))];
     if (note.files.length) {
       out.push(h("section", { class: "detail-section" }, h("h2", {}, "Files"),

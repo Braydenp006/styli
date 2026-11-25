@@ -296,18 +296,22 @@ func TestHistoryEndpoints(t *testing.T) {
 
 func TestConflictFlagCanBeCleared(t *testing.T) {
 	e := newEnv(t)
-	g := must(e.v.CreateNote("n.md", []byte("a")))
-	if e.call(t, "GET", "/api/notes/"+g.ID, nil, 200)["conflict"] != false {
+	id := e.create(t, "n.md", "a")
+	if e.call(t, "GET", "/api/notes/"+id, nil, 200)["conflict"] != false {
 		t.Fatal("a new note is flagged")
 	}
-	if err := e.v.SetConflict(g.ID, true); err != nil {
+	if err := e.v.SetConflict(id, true); err != nil {
 		t.Fatal(err)
 	}
-	if e.call(t, "GET", "/api/notes/"+g.ID, nil, 200)["conflict"] != true {
+	if e.call(t, "GET", "/api/notes/"+id, nil, 200)["conflict"] != true {
 		t.Fatal("the flag is not shown")
 	}
-	e.call(t, "DELETE", "/api/notes/"+g.ID+"/conflict", nil, 200)
-	if e.call(t, "GET", "/api/notes/"+g.ID, nil, 200)["conflict"] != false {
+	hits := e.call(t, "GET", "/api/notes", nil, 200)["notes"].([]any)
+	if len(hits) != 1 || hits[0].(map[string]any)["conflict"] != true {
+		t.Fatalf("the list does not show the flag: %v", hits)
+	}
+	e.call(t, "DELETE", "/api/notes/"+id+"/conflict", nil, 200)
+	if e.call(t, "GET", "/api/notes/"+id, nil, 200)["conflict"] != false {
 		t.Fatal("the flag did not clear")
 	}
 }

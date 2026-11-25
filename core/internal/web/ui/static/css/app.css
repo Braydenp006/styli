@@ -163,6 +163,7 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
 .conflict-slot:empty { display: none; }
 .banner-text { margin: var(--space-1) 0 var(--space-3); font-weight: 400; color: var(--ink); }
 .banner-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.conflict-slot:not(:empty) { margin-bottom: var(--space-4); }
 .conflict-slot .banner { flex-direction: column; align-items: stretch; }
 .conflict-slot .banner .grow { flex: 0 1 auto; }
 .theirs { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface); color: var(--ink); }

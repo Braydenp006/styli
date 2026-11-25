@@ -19,6 +19,7 @@ type hitDTO struct {
 	Path     string    `json:"path"`
 	Snippet  string    `json:"snippet"`
 	Modified time.Time `json:"modified"`
+	Conflict bool      `json:"conflict"` // a sync merge left both versions to settle
 }
 
 // listNotes searches or browses: ?q= &folder= &tag= (repeatable) &from= &to= &limit= &offset=
@@ -49,7 +50,8 @@ func (s *server) listNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]hitDTO, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, hitDTO{h.ID, h.Title, h.Path, h.Snippet, h.Modified})
+		g, _ := s.Vault.Get(h.ID) // the flag lives in the vault record, not the index
+		out = append(out, hitDTO{h.ID, h.Title, h.Path, h.Snippet, h.Modified, g.Conflict})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notes": out})
 }

@@ -246,6 +246,7 @@ function noteItem(hit) {
       hit.snippet ? h("span", { class: "note-item-snippet" }, snippetNodes(hit.snippet)) : null,
       h("span", { class: "note-item-meta" },
         h("span", {}, folder || "Top level", " · ", h("time", { datetime: hit.modified, title: fullDate(hit.modified) }, relativeTime(hit.modified))),
+        hit.conflict ? h("span", { class: "sty-chip sty-chip--danger" }, "Disputed") : null,
         isNote ? null : h("span", { class: "sty-chip" }, "File only"))));
 }
 
