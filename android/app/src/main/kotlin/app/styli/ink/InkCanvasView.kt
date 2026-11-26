@@ -48,7 +48,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE }
 
     private val model = PageModel()
     private val placed = HashMap<String, Placed>() // drawn strokes by ID, built once (pruned after every change)
@@ -121,6 +121,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 }
                 canvas.restore()
                 drawLassoOverlay(canvas)
+                drawLinePreview(canvas)
                 canvas.restore()
             }
         }
@@ -289,7 +290,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && !erasing && !lassoing) {
+            if (isPen(event.getToolType(i)) && strokeId == null && !erasing && !lassoing && !lining) {
                 gestureActive = false // a pen landing after a palm takes over
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
@@ -298,6 +299,14 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 if (tool == Tool.ERASER_STROKE || tool == Tool.ERASER_PART || eraserEnd) {
                     erasing = true
                     eraseTo(event, i)
+                    return true
+                }
+                if (tool == Tool.LINE) {
+                    lining = true
+                    lineStartX = geometry.toPageX(event.getX(i).toDouble()).toFloat()
+                    lineStartY = geometry.toPageY(event.getY(i).toDouble()).toFloat()
+                    lineStartMs = event.eventTime
+                    lineEnd = lineStartX to lineStartY
                     return true
                 }
                 if (tool == Tool.LASSO) {
@@ -316,7 +325,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 gestureActive = true
             }
         }
-        return if (erasing) erase(event) else if (lassoing) lasso(event) else if (strokeId != null) drawing(event) else moving(event)
+        return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (strokeId != null) drawing(event) else moving(event)
     }
 
     // ---- Lasso: draw a loop round strokes, then drag inside the box to move or a corner to resize. ----
@@ -458,6 +467,46 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 loop.clear()
                 dragMap = null
                 lassoing = false
+                changed(true)
+            }
+        }
+        return true
+    }
+
+    // ---- Straight line: the pen drags out a line from where it landed; it is stored when the pen lifts. ----
+
+    private var lining = false
+    private var lineStartX = 0f
+    private var lineStartY = 0f
+    private var lineStartMs = 0L
+    private var lineEnd = 0f to 0f // page units, after snapping
+    private val linePaint = Paint().apply { strokeCap = Paint.Cap.ROUND; isAntiAlias = true }
+
+    private fun drawLinePreview(canvas: Canvas) {
+        if (!lining) return
+        val g = geometry
+        linePaint.color = penColor
+        linePaint.strokeWidth = maxOf(1.5f, (penWidth * g.scale).toFloat())
+        canvas.drawLine(
+            g.toScreenX(lineStartX.toDouble()).toFloat(), g.toScreenY(lineStartY.toDouble()).toFloat(),
+            g.toScreenX(lineEnd.first.toDouble()).toFloat(), g.toScreenY(lineEnd.second.toDouble()).toFloat(), linePaint,
+        )
+    }
+
+    private fun line(event: MotionEvent): Boolean {
+        val g = geometry
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) {
+                lineEnd = LineGeometry.end(lineStartX, lineStartY, g.toPageX(event.getX(i).toDouble()).toFloat(), g.toPageY(event.getY(i).toDouble()).toFloat())
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                val pts = if (event.actionMasked == MotionEvent.ACTION_CANCEL) null
+                    else LineGeometry.points(lineStartX, lineStartY, lineEnd.first, lineEnd.second, event.eventTime - lineStartMs)
+                lining = false
+                if (pts != null) model.add(StrokeTool.TOOL_PEN, penColor, penWidth, pts)
                 changed(true)
             }
         }
