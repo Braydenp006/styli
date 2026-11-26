@@ -153,6 +153,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             addingBend = false
             field = v
             selection.clear() // a selection only lives while the lasso is the tool
+            if (pendingClip != null) { pendingClip = null; onPlacing?.invoke(null) }
             pageLayer.invalidate()
         }
     var penColor = Color.BLACK
@@ -210,6 +211,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     drawPage(canvas)
                 }
                 activate(work)
+                drawCarried(canvas)
                 drawLassoOverlay(canvas)
                 drawGuides(canvas)
                 drawLinePreview(canvas)
@@ -247,37 +249,54 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
         canvas.save()
         canvas.concat(toScreen)
-        for (id in model.order) { // bottom layer first
-            val table = model.tableOf(id)
-            if (table != null) { drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb); continue }
-            val item = model.itemOf(id)
-            if (item != null && item.tool == StrokeTool.TOOL_DOTTED) { drawDotted(canvas, item, vl, vt, vr, vb); continue }
-            if (item != null) {
-                // A transform makes a new Item under the same ID, so an old picture is not reused.
-                val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
-                val moved = dragMap?.takeIf { item.id in selection }
-                if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) continue
-                canvas.save()
-                if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
-                renderer.draw(canvas, p.stroke, toScreen)
-                canvas.restore()
-                continue
-            }
-            val fill = model.fillOf(id)
-            if (fill != null) { drawFill(canvas, fill); continue }
-            val shape = model.shapeOf(id)
-            if (shape != null) { drawShape(canvas, shape); continue }
-            val conn = model.connectorOf(id)
-            if (conn != null) { drawConnector(canvas, conn); continue }
-            val box = model.textOf(id) ?: continue
-            if (box.id == editBox?.id) continue // the editor shows it
-            val moved = dragMap?.takeIf { box.id in selection }
+        val carried = dragMap != null && drag == Drag.MOVE // a dragged selection is drawn last, over every page (see [drawCarried])
+        for (id in model.order) if (!(carried && id in selection)) drawObject(canvas, id, vl, vt, vr, vb) // bottom layer first
+        canvas.restore()
+        canvas.restore()
+    }
+
+    /** Draws one thing of the active page (in page units: the canvas already has the page's matrix). */
+    private fun drawObject(canvas: Canvas, id: String, vl: Float, vt: Float, vr: Float, vb: Float) {
+        val table = model.tableOf(id)
+        if (table != null) { drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb); return }
+        val item = model.itemOf(id)
+        if (item != null && item.tool == StrokeTool.TOOL_DOTTED) { drawDotted(canvas, item, vl, vt, vr, vb); return }
+        if (item != null) {
+            // A transform makes a new Item under the same ID, so an old picture is not reused.
+            val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
+            val moved = dragMap?.takeIf { item.id in selection }
+            if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) return
             canvas.save()
             if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
-            TextRender.draw(canvas, box, layoutOf(box))
+            renderer.draw(canvas, p.stroke, toScreen)
             canvas.restore()
+            return
         }
+        val fill = model.fillOf(id)
+        if (fill != null) { drawFill(canvas, fill); return }
+        val shape = model.shapeOf(id)
+        if (shape != null) { drawShape(canvas, shape); return }
+        val conn = model.connectorOf(id)
+        if (conn != null) { drawConnector(canvas, conn); return }
+        val box = model.textOf(id) ?: return
+        if (box.id == editBox?.id) return // the editor shows it
+        val moved = dragMap?.takeIf { box.id in selection }
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        TextRender.draw(canvas, box, layoutOf(box))
         canvas.restore()
+    }
+
+    /** The selection being dragged with the lasso, drawn over all the pages and not cut off at its own sheet, so it can be carried to another page. */
+    private fun drawCarried(canvas: Canvas) {
+        if (dragMap == null || drag != Drag.MOVE || selection.isEmpty()) return
+        val g = geometry
+        toScreen.setScale(g.scale.toFloat(), g.scale.toFloat())
+        toScreen.postTranslate(g.tx.toFloat(), g.ty.toFloat())
+        val (vl, vt, vr, vb) = g.visible().map { it.toFloat() }
+        canvas.save()
+        canvas.concat(toScreen)
+        for (id in model.order) if (id in selection) drawObject(canvas, id, vl, vt, vr, vb)
         canvas.restore()
     }
 
@@ -621,7 +640,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     connectTo = connectFrom
                     return true
                 }
-                if (tool == Tool.BUCKET) {
+                if (tool == Tool.BUCKET || pendingClip != null) { // a waiting clip uses the bucket's tap
                     bucketing = true
                     bucketX = geometry.toPageX(event.getX(i).toDouble()).toFloat()
                     bucketY = geometry.toPageY(event.getY(i).toDouble()).toFloat()
@@ -1123,7 +1142,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
                 bucketing = false
-                if (event.actionMasked != MotionEvent.ACTION_CANCEL) bucketTap(bucketX, bucketY)
+                if (event.actionMasked != MotionEvent.ACTION_CANCEL) { if (pendingClip != null) placeAt(bucketX, bucketY) else bucketTap(bucketX, bucketY) }
             }
         }
         return true
@@ -1511,13 +1530,25 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         return shelf.add(c)
     }
 
-    /** Puts a copy of [clip] in the middle of what the view shows (kept on the sheet), selected, so it can be moved at once. One undo step. */
-    fun placeClip(clip: Clip) {
-        tool = Tool.LASSO // a selection only lives while the lasso is the tool
+    /** The clip waiting for a tap to say where it goes (see [placeClip]); [onPlacing] tells the screen. */
+    var pendingClip: Clip? = null
+        private set
+    var onPlacing: ((Clip?) -> Unit)? = null
+
+    /** Gets ready to put [clip] down: the next pen tap, on any page, is where its middle goes. */
+    fun placeClip(clip: Clip?) {
+        tool = Tool.LASSO // a selection only lives while the lasso is the tool; this also cancels an earlier wait
+        pendingClip = clip
+        onPlacing?.invoke(clip)
+    }
+
+    /** Puts the waiting clip on the working page with its middle at the tapped point (kept on the sheet), selected so it can be moved at once. One undo step. */
+    private fun placeAt(px: Float, py: Float) {
+        val clip = pendingClip ?: return
+        placeClip(null)
         val g = geometry
-        val (vl, vt, vr, vb) = g.visible()
-        var x = ((vl + vr) / 2).toFloat() - clip.width / 2
-        var y = ((vt + vb) / 2).toFloat() - clip.height / 2
+        var x = px - clip.width / 2
+        var y = py - clip.height / 2
         if (!g.infinite) {
             x = x.coerceIn(0f, maxOf(0f, g.pageW - clip.width))
             y = y.coerceIn(0f, maxOf(0f, g.pageH - clip.height))
@@ -1879,7 +1910,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         val tap = drag == Drag.MOVE && (moved == null || Math.hypot(moved.e, moved.f) * geometry.scale < TAP_PX)
                         if (tap) {
                             if (!cancelled) lineTable()?.cellAt(dragStartX.toFloat(), dragStartY.toFloat())?.let { cellSel = it }
-                        } else moved?.let { model.transform(selection, it) }
+                        } else moved?.let { if (drag != Drag.MOVE || !moveToOtherPage(it)) model.transform(selection, it) }
                     }
                 }
                 loop.clear()
@@ -1895,6 +1926,31 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 changed(true)
             }
         }
+        return true
+    }
+
+    /**
+     * A selection moved by [m] (a plain move) that ends up mostly over another page goes onto that page: copied there
+     * first and only then taken off this one, so a failure cannot lose it. Returns false if it stays on this page.
+     * The two pages have their own undo steps.
+     */
+    private fun moveToOtherPage(m: Affine): Boolean {
+        val l = layout ?: return false
+        val src = model
+        val boxes = src.order.filter { it in selection }.mapNotNull(::boxOf)
+        if (boxes.isEmpty()) return false
+        val left = boxes.minOf { it.l }; val top = boxes.minOf { it.t }
+        val (ox, oy) = l.origin(src)
+        val cx = ox + (left + boxes.maxOf { it.r }) / 2 + m.e
+        val cy = oy + (top + boxes.maxOf { it.b }) / 2 + m.f
+        val dst = l.pageAt(cx, cy)?.takeIf { it !== src } ?: return false
+        val clip = Clip.of("", src, selection, ::boxOf) ?: return false
+        val (dx, dy) = l.origin(dst)
+        val ids = dst.paste(clip, (ox + left + m.e - dx).toFloat(), (oy + top + m.f - dy).toFloat())
+        if (ids.isEmpty()) return false
+        src.delete(selection)
+        becomeWork(dst) // clears the selection and makes [dst] the page the code works on
+        selection.addAll(ids)
         return true
     }
 

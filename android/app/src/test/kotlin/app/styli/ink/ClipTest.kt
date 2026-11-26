@@ -104,4 +104,21 @@ class ClipTest {
         shelf.remove(shelf.clips[0])
         assertTrue(shelf.clips.isEmpty())
     }
+
+    @Test
+    fun movingToAnotherPageCopiesFirstThenRemoves() {
+        val a = PageModel(); val b = PageModel()
+        val s1 = a.rect(1000f, 1000f)
+        val s2 = a.rect(4000f, 1000f)
+        val c = a.addConnector { Connector(it, End(s1.id, End.SPOT, 0f, 0f, 1f, 0.5f), End(s2.id, End.SPOT, 0f, 0f, 0f, 0.5f)) }
+        val sel = setOf(s1.id, c.id)
+        val clip = Clip.of("", a, sel, boxIn(a))!!
+        val ids = b.paste(clip, 200f, 300f)
+        assertEquals(2, ids.size)
+        a.delete(sel)
+        assertEquals(listOf(s2.id), a.shapes.map { it.id })
+        assertEquals(200f, b.shapes.single().x, 0f)
+        assertNull(b.connectors.single().to.shape) // the end on the shape left behind is free
+        assertNull(a.connectors.firstOrNull()) // the connector went with the selection
+    }
 }

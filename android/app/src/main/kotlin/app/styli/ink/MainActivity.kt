@@ -101,6 +101,7 @@ private fun InkScreen() {
     var textColor by remember { mutableStateOf(0) }
     var textHighlight by remember { mutableStateOf(0) }
     var clips by remember { mutableStateOf(emptyList<Clip>()) }
+    var placing by remember { mutableStateOf<Clip?>(null) } // the clip waiting for a tap
     var naming by remember { mutableStateOf<Clip?>(null) } // the clip being named
     var nameText by remember { mutableStateOf("") }
 
@@ -116,6 +117,7 @@ private fun InkScreen() {
                 InkCanvasView(context).also {
                     it.onLatency = { text -> latency = text }
                     it.onZoom = { percent -> zoom = percent }
+                    it.onPlacing = { c -> placing = c }
                     it.onPageChanged = {
                         // The page buttons show the page that is now current.
                         val p = it.page
@@ -255,7 +257,7 @@ private fun InkScreen() {
                     canvas?.saveSelection()?.let { clips = canvas!!.shelf.clips; naming = it; nameText = it.name }
                     close()
                 }
-                Heading(if (clips.isEmpty()) "Nothing saved yet (lasso something, then save it)" else "Tap to place on this page")
+                Heading(if (clips.isEmpty()) "Nothing saved yet (lasso something, then save it)" else "Pick one, then tap a page with the pen")
                 for (c in clips) DropdownMenuItem(
                     text = { Text(c.name) },
                     leadingIcon = { ClipPreview(c) },
@@ -330,6 +332,14 @@ private fun InkScreen() {
                 Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("$zoom%")
                     TextButton(onClick = { canvas?.fitToScreen() }, Modifier.padding(start = 8.dp)) { Text("Fit to screen") }
+                }
+            }
+        }
+        placing?.let { c ->
+            Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp) {
+                Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Tap where \"${c.name}\" goes")
+                    TextButton(onClick = { canvas?.placeClip(null) }, Modifier.padding(start = 8.dp)) { Text("Cancel") }
                 }
             }
         }
