@@ -17,7 +17,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -69,6 +72,12 @@ private fun InkScreen() {
     var tColor by remember { mutableStateOf(0) }
     var tFill by remember { mutableStateOf(0) }
     var tLine by remember { mutableStateOf(1) }
+    var sColor by remember { mutableStateOf(0) }
+    var sFill by remember { mutableStateOf(0) }
+    var sLine by remember { mutableStateOf(1) }
+    var sDashed by remember { mutableStateOf(false) }
+    var bColor by remember { mutableStateOf(0x99FFEB3B.toInt()) }
+    var preset by remember { mutableStateOf(ShapePreset.RECTANGLE) }
     var scroll by remember { mutableStateOf(2) } // how far a scroll carries on: off, low, medium, high
     var cell by remember { mutableStateOf(0 to 0) } // the page's (column, row)
     var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
@@ -101,118 +110,133 @@ private fun InkScreen() {
             Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp).horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val gap = Modifier.padding(start = 8.dp)
             Button(onClick = { canvas?.undo() }) { Text("Undo") }
-            Button(onClick = { canvas?.redo() }, Modifier.padding(start = 8.dp)) { Text("Redo") }
-            Button(onClick = { canvas?.deleteSelection() }, Modifier.padding(start = 8.dp)) { Text("Delete") }
-            Button(
-                onClick = {
-                    tool = InkCanvasView.Tool.entries[(tool.ordinal + 1) % InkCanvasView.Tool.entries.size]
-                    canvas?.tool = tool
-                    if (tool == InkCanvasView.Tool.TABLE) tableDialog = true // ask for the rows and columns first
-                },
-                Modifier.padding(start = 8.dp),
-            ) { Text(tool.name.lowercase().replace('_', ' ')) }
-            Button(
-                onClick = {
-                    shade = (shade + 1) % 3
-                    canvas?.apply {
-                        penColor = listOf(0xFF000000.toInt(), 0xFF1565C0.toInt(), 0xFFC62828.toInt())[shade]
-                        highlighterColor = listOf(0x99FFEB3B.toInt(), 0x9966BB6A.toInt(), 0x99F06292.toInt())[shade]
-                    }
-                },
-                Modifier.padding(start = 8.dp),
-            ) { Text("Colour ${shade + 1}") }
-            Button(
-                onClick = {
-                    thick = (thick + 1) % 3
-                    canvas?.apply {
-                        penWidth = listOf(40, 80, 160)[thick]
-                        highlighterWidth = listOf(400, 700, 1000)[thick]
-                    }
-                },
-                Modifier.padding(start = 8.dp),
-            ) { Text("Width ${thick + 1}") }
-            val strengths = listOf(0f, 0.25f, 1f, 2.5f)
-            val names = listOf("off", "low", "medium", "high")
-            fun penmanship() {
-                canvas?.penmanship = ShapeGeometry.Settings(
-                    strengths[pLines], strengths[pShapes], strengths[pLevel], listOf(300L, 500L, 800L, 1200L)[pHold],
-                )
-            }
-            Button(onClick = { pLines = (pLines + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Lines: ${names[pLines]}", softWrap = false) }
-            Button(onClick = { pShapes = (pShapes + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Shapes: ${names[pShapes]}", softWrap = false) }
-            Button(onClick = { pLevel = (pLevel + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Level: ${names[pLevel]}", softWrap = false) }
-            Button(onClick = { pHold = (pHold + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) {
-                Text("Hold: ${listOf("0.3", "0.5", "0.8", "1.2")[pHold]} s", softWrap = false)
+            Button(onClick = { canvas?.redo() }, gap) { Text("Redo") }
+            Button(onClick = { canvas?.deleteSelection() }, gap) { Text("Delete") }
+
+            // The tool, then whatever that tool needs.
+            Menu("Tool: " + toolName(tool)) { close ->
+                for (t in InkCanvasView.Tool.entries) Choice(toolName(t), t == tool) {
+                    tool = t
+                    canvas?.tool = t
+                    if (t == InkCanvasView.Tool.TABLE) tableDialog = true // ask for the rows and columns first
+                    close()
+                }
             }
             if (tool == InkCanvasView.Tool.ERASER_STROKE || tool == InkCanvasView.Tool.ERASER_PART) {
-                Button(
-                    onClick = { erasing = EraseOnly.entries[(erasing.ordinal + 1) % EraseOnly.entries.size]; canvas?.eraseOnly = erasing },
-                    Modifier.padding(start = 8.dp),
-                ) { Text("Erases: " + erasing.name.lowercase(), softWrap = false) }
+                Menu("Erases: " + erasing.name.lowercase()) { close ->
+                    for (e in EraseOnly.entries) Choice(e.name.lowercase(), e == erasing) { erasing = e; canvas?.eraseOnly = e; close() }
+                }
             }
-            Button(onClick = { canvas?.toggleRuler() }, Modifier.padding(start = 8.dp)) { Text("Ruler") }
-            Button(
-                onClick = { units = RulerUnits.entries[(units.ordinal + 1) % RulerUnits.entries.size]; canvas?.rulerUnits = units },
-                Modifier.padding(start = 8.dp),
-            ) { Text("Units: " + units.name.lowercase(), softWrap = false) }
+            if (tool == InkCanvasView.Tool.SHAPE) {
+                Menu("Shape: " + preset.name.lowercase()) { close ->
+                    for (p in ShapePreset.entries) Choice(p.name.lowercase(), p == preset) { preset = p; canvas?.shapePreset = p; close() }
+                }
+            }
             if (tool == InkCanvasView.Tool.TABLE) {
-                Button(onClick = { tableDialog = true }, Modifier.padding(start = 8.dp)) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
+                Button(onClick = { tableDialog = true }, gap) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
             }
-            if (tool == InkCanvasView.Tool.LASSO) {
-                // Layers for what is selected.
-                Button(onClick = { canvas?.arrange(Arrange.FRONT) }, Modifier.padding(start = 8.dp)) { Text("To front", softWrap = false) }
-                Button(onClick = { canvas?.arrange(Arrange.FORWARD) }, Modifier.padding(start = 8.dp)) { Text("Forward", softWrap = false) }
-                Button(onClick = { canvas?.arrange(Arrange.BACKWARD) }, Modifier.padding(start = 8.dp)) { Text("Backward", softWrap = false) }
-                Button(onClick = { canvas?.arrange(Arrange.BACK) }, Modifier.padding(start = 8.dp)) { Text("To back", softWrap = false) }
+            if (tool == InkCanvasView.Tool.BUCKET) {
+                Button(onClick = { picking = 7 }, gap) { Text("Fill colour", softWrap = false) }
             }
-            if (tool == InkCanvasView.Tool.LASSO) {
-                // For a table selected with the lasso: tap a cell first for the row and column buttons.
-                Button(onClick = { canvas?.insertRow(false) }, Modifier.padding(start = 8.dp)) { Text("Row above", softWrap = false) }
-                Button(onClick = { canvas?.insertRow(true) }, Modifier.padding(start = 8.dp)) { Text("Row below", softWrap = false) }
-                Button(onClick = { canvas?.insertColumn(false) }, Modifier.padding(start = 8.dp)) { Text("Col left", softWrap = false) }
-                Button(onClick = { canvas?.insertColumn(true) }, Modifier.padding(start = 8.dp)) { Text("Col right", softWrap = false) }
-                Button(onClick = { canvas?.deleteRow() }, Modifier.padding(start = 8.dp)) { Text("Delete row", softWrap = false) }
-                Button(onClick = { canvas?.deleteColumn() }, Modifier.padding(start = 8.dp)) { Text("Delete col", softWrap = false) }
-                Button(onClick = { picking = 3 }, Modifier.padding(start = 8.dp)) { Text("Table lines colour", softWrap = false) }
-                Button(onClick = { picking = 4 }, Modifier.padding(start = 8.dp)) { Text("Table fill", softWrap = false) }
-                Button(
-                    onClick = { tLine = (tLine + 1) % 4; canvas?.setTableStyle(null, null, listOf(20f, 40f, 80f, 160f)[tLine]) },
-                    Modifier.padding(start = 8.dp),
-                ) { Text("Lines: " + listOf("thin", "normal", "thick", "bold")[tLine], softWrap = false) }
+            if (tool == InkCanvasView.Tool.TEXT) {
+                Button(onClick = { picking = 1 }, gap) { Text("Text colour", softWrap = false) }
+                Button(onClick = { picking = 2 }, gap) { Text("Highlight", softWrap = false) }
+                Button(onClick = { canvas?.finishText() }, gap) { Text("Done") }
             }
-            if (tool == InkCanvasView.Tool.TEXT || tool == InkCanvasView.Tool.LASSO) {
-                Button(onClick = { picking = 1 }, Modifier.padding(start = 8.dp)) { Text("Text colour") }
-                Button(onClick = { picking = 2 }, Modifier.padding(start = 8.dp)) { Text("Highlight") }
-                if (tool == InkCanvasView.Tool.TEXT) Button(onClick = { canvas?.finishText() }, Modifier.padding(start = 8.dp)) { Text("Done") }
+
+            Menu("Ink") { close ->
+                Heading("Colour")
+                for (k in 0..2) Choice("Colour ${k + 1}", shade == k) {
+                    shade = k
+                    canvas?.apply {
+                        penColor = listOf(0xFF000000.toInt(), 0xFF1565C0.toInt(), 0xFFC62828.toInt())[k]
+                        highlighterColor = listOf(0x99FFEB3B.toInt(), 0x9966BB6A.toInt(), 0x99F06292.toInt())[k]
+                    }
+                    close()
+                }
+                Heading("Width")
+                for (k in 0..2) Choice(listOf("Fine", "Medium", "Broad")[k], thick == k) {
+                    thick = k
+                    canvas?.apply {
+                        penWidth = listOf(40, 80, 160)[k]
+                        highlighterWidth = listOf(400, 700, 1000)[k]
+                    }
+                    close()
+                }
             }
-            Button(onClick = { solid = !solid; canvas?.solidOutline = solid }, Modifier.padding(start = 8.dp)) {
-                Text("Outline: " + if (solid) "solid" else "dashed", softWrap = false)
+
+            // What the lasso has selected: layers, then the settings of each kind of thing.
+            Menu("Selection") { close ->
+                Heading("Layers")
+                Item("To front") { canvas?.arrange(Arrange.FRONT); close() }
+                Item("Forward") { canvas?.arrange(Arrange.FORWARD); close() }
+                Item("Backward") { canvas?.arrange(Arrange.BACKWARD); close() }
+                Item("To back") { canvas?.arrange(Arrange.BACK); close() }
+                Heading("Text")
+                Item("Text colour") { picking = 1; close() }
+                Item("Highlight") { picking = 2; close() }
+                Heading("Shape")
+                Item("Outline colour") { picking = 5; close() }
+                Item("Fill colour") { picking = 6; close() }
+                for (k in 0..3) Choice("Line: " + listOf("thin", "normal", "thick", "bold")[k], sLine == k) {
+                    sLine = k; canvas?.setShapeStyle(null, null, listOf(20f, 40f, 80f, 160f)[k], null); close()
+                }
+                Choice("Line: solid", !sDashed) { sDashed = false; canvas?.setShapeStyle(null, null, null, false); close() }
+                Choice("Line: dashed", sDashed) { sDashed = true; canvas?.setShapeStyle(null, null, null, true); close() }
+                Heading("Table (tap a cell first for rows and columns)")
+                Item("Row above") { canvas?.insertRow(false); close() }
+                Item("Row below") { canvas?.insertRow(true); close() }
+                Item("Column left") { canvas?.insertColumn(false); close() }
+                Item("Column right") { canvas?.insertColumn(true); close() }
+                Item("Delete row") { canvas?.deleteRow(); close() }
+                Item("Delete column") { canvas?.deleteColumn(); close() }
+                Item("Lines colour") { picking = 3; close() }
+                Item("Fill colour (whole table)") { picking = 4; close() }
+                for (k in 0..3) Choice("Lines: " + listOf("thin", "normal", "thick", "bold")[k], tLine == k) {
+                    tLine = k; canvas?.setTableStyle(null, null, listOf(20f, 40f, 80f, 160f)[k]); close()
+                }
             }
-            Button(onClick = { infinite = !infinite; apply() }, Modifier.padding(start = 8.dp)) {
-                Text(if (infinite) "Canvas" else "Page")
+
+            Menu("Ruler") { close ->
+                Choice(if (canvas?.ruler != null) "Hide ruler" else "Show ruler", false) { canvas?.toggleRuler(); close() }
+                Heading("Units")
+                for (u in RulerUnits.entries) Choice(u.name.lowercase(), u == units) { units = u; canvas?.rulerUnits = u; close() }
             }
-            Button(
-                onClick = {
+
+            // Hold the pen still at the end of a stroke and a line or shape is drawn clean. These stay open to change several.
+            Menu("Pen assist") { _ ->
+                val strengths = listOf(0f, 0.25f, 1f, 2.5f)
+                val names = listOf("off", "low", "medium", "high")
+                fun penmanship() {
+                    canvas?.penmanship = ShapeGeometry.Settings(
+                        strengths[pLines], strengths[pShapes], strengths[pLevel], listOf(300L, 500L, 800L, 1200L)[pHold],
+                    )
+                }
+                Item("Lines: ${names[pLines]}") { pLines = (pLines + 1) % 4; penmanship() }
+                Item("Shapes: ${names[pShapes]}") { pShapes = (pShapes + 1) % 4; penmanship() }
+                Item("Level and upright: ${names[pLevel]}") { pLevel = (pLevel + 1) % 4; penmanship() }
+                Item("Hold: ${listOf("0.3", "0.5", "0.8", "1.2")[pHold]} s") { pHold = (pHold + 1) % 4; penmanship() }
+            }
+
+            Menu("Page") { _ ->
+                Item(if (infinite) "Canvas (tap for page)" else "Page (tap for canvas)") { infinite = !infinite; apply() }
+                Item("Paper: " + template.name.removePrefix("TEMPLATE_").lowercase()) {
                     template = when (template) {
                         Template.TEMPLATE_BLANK -> Template.TEMPLATE_LINED
                         Template.TEMPLATE_LINED -> Template.TEMPLATE_GRID
                         else -> Template.TEMPLATE_BLANK
                     }
                     apply()
-                },
-                Modifier.padding(start = 8.dp),
-            ) { Text(template.name.removePrefix("TEMPLATE_").lowercase()) }
-            Button(onClick = { letter = !letter; apply() }, Modifier.padding(start = 8.dp)) { Text(if (letter) "Letter" else "A4") }
-            Button(onClick = { landscape = !landscape; apply() }, Modifier.padding(start = 8.dp)) {
-                Text(if (landscape) "Landscape" else "Portrait", softWrap = false)
-            }
-            // The rest of the page settings: which pulls add pages, and how far a scroll carries on.
-            Button(onClick = { flow = (flow + 1) % 3; canvas?.flow = Flow.entries[flow] }, Modifier.padding(start = 8.dp)) {
-                Text("Pages: " + listOf("down", "right", "both")[flow], softWrap = false)
-            }
-            Button(onClick = { scroll = (scroll + 1) % 4; canvas?.scrollIntensity = listOf(0.0, 0.5, 1.0, 2.0)[scroll] }, Modifier.padding(start = 8.dp)) {
-                Text("Scroll: " + listOf("off", "low", "medium", "high")[scroll], softWrap = false)
+                }
+                Item("Size: " + if (letter) "Letter" else "A4") { letter = !letter; apply() }
+                Item("Orientation: " + if (landscape) "landscape" else "portrait") { landscape = !landscape; apply() }
+                Item("Pages added: " + listOf("down", "right", "both")[flow]) { flow = (flow + 1) % 3; canvas?.flow = Flow.entries[flow] }
+                Item("Scroll glide: " + listOf("off", "low", "medium", "high")[scroll]) {
+                    scroll = (scroll + 1) % 4; canvas?.scrollIntensity = listOf(0.0, 0.5, 1.0, 2.0)[scroll]
+                }
+                Item("Selection outline: " + if (solid) "solid" else "dashed") { solid = !solid; canvas?.solidOutline = solid }
             }
             Text("Page row ${cell.second + 1}, column ${cell.first + 1} of ${canvas?.notebook?.pages?.size ?: 1}", Modifier.padding(start = 16.dp))
             Text(latency, Modifier.padding(start = 16.dp))
@@ -241,17 +265,18 @@ private fun InkScreen() {
             )
         }
         if (picking != 0) {
-            val text = picking == 1 || picking == 3 // the palette that starts with the default ink colour, not "none"
+            val text = picking == 1 || picking == 3 || picking == 5 // the palette that starts with the default ink colour, not "none"
+            val palette = when (picking) { 1, 3, 5 -> TEXT_COLOURS; 2 -> HIGHLIGHTS; else -> FILLS }
             AlertDialog(
                 onDismissRequest = { picking = 0 },
                 confirmButton = { TextButton(onClick = { picking = 0 }) { Text("Close") } },
-                title = { Text(when (picking) { 1 -> "Text colour"; 2 -> "Highlight"; 3 -> "Table lines colour"; else -> "Table fill" }) },
+                title = { Text(when (picking) { 1 -> "Text colour"; 2 -> "Highlight"; 3 -> "Table lines colour"; 5 -> "Shape outline"; 6 -> "Shape fill"; 7 -> "Fill colour"; else -> "Table fill" }) },
                 text = {
                     Column {
-                        (if (text) TEXT_COLOURS else HIGHLIGHTS).chunked(5).forEach { row ->
+                        palette.chunked(5).forEach { row ->
                             Row(Modifier.padding(bottom = 8.dp)) {
                                 row.forEach { argb ->
-                                    val chosen = argb == when (picking) { 1 -> textColor; 2 -> textHighlight; 3 -> tColor; else -> tFill }
+                                    val chosen = argb == when (picking) { 1 -> textColor; 2 -> textHighlight; 3 -> tColor; 5 -> sColor; 6 -> sFill; 7 -> bColor; else -> tFill }
                                     Box(
                                         Modifier.padding(end = 8.dp).size(44.dp).clip(CircleShape)
                                             .background(if (argb ushr 24 == 0) Color.White else Color(argb))
@@ -261,6 +286,9 @@ private fun InkScreen() {
                                                     1 -> { textColor = argb; canvas?.setTextStyle(textColor, textHighlight) }
                                                     2 -> { textHighlight = argb; canvas?.setTextStyle(textColor, textHighlight) }
                                                     3 -> { tColor = argb; canvas?.setTableStyle(argb, null, null) }
+                                                    5 -> { sColor = argb; canvas?.setShapeStyle(argb, null, null, null) }
+                                                    6 -> { sFill = argb; canvas?.setShapeStyle(null, argb, null, null) }
+                                                    7 -> { bColor = argb; canvas?.bucketColor = argb }
                                                     else -> { tFill = argb; canvas?.setTableStyle(null, argb, null) }
                                                 }
                                                 picking = 0
@@ -285,3 +313,45 @@ private val TEXT_COLOURS = listOf(
 private val HIGHLIGHTS = listOf(
     0, 0x99FFEB3B, 0x9966BB6A, 0x99F06292, 0x994FC3F7, 0x99FFB74D, 0x99BA68C8, 0x994DB6AC, 0x99EF5350, 0x99BDBDBD,
 ).map { it.toInt() }
+
+// Colours for fills: none, the see-through highlights, then some solid soft ones.
+private val FILLS = listOf(
+    0, 0x99FFEB3B, 0x9966BB6A, 0x99F06292, 0x994FC3F7, 0x99FFB74D,
+    0xFFFFF59D, 0xFFA5D6A7, 0xFFF8BBD0, 0xFF81D4FA, 0xFFFFCC80, 0xFFE1BEE7, 0xFFFFFFFF, 0xFFBDBDBD, 0xFF616161,
+).map { it.toInt() }
+
+private fun toolName(t: InkCanvasView.Tool) = when (t) {
+    InkCanvasView.Tool.PEN -> "Pen"
+    InkCanvasView.Tool.HIGHLIGHTER -> "Highlighter"
+    InkCanvasView.Tool.ERASER_STROKE -> "Eraser (whole stroke)"
+    InkCanvasView.Tool.ERASER_PART -> "Eraser (part of a stroke)"
+    InkCanvasView.Tool.LASSO -> "Lasso"
+    InkCanvasView.Tool.LINE -> "Line"
+    InkCanvasView.Tool.LINE_HIGHLIGHTER -> "Line highlighter"
+    InkCanvasView.Tool.LASER -> "Laser pointer"
+    InkCanvasView.Tool.TEXT -> "Text"
+    InkCanvasView.Tool.TABLE -> "Table"
+    InkCanvasView.Tool.SHAPE -> "Shape"
+    InkCanvasView.Tool.BUCKET -> "Paint bucket"
+}
+
+/** A button that opens a menu. [content] gets a function that closes it (some items leave it open). */
+@Composable
+private fun Menu(label: String, content: @Composable ColumnScope.(close: () -> Unit) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.padding(start = 8.dp)) {
+        Button(onClick = { open = true }) { Text("$label \u25BE", softWrap = false) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) { content { open = false } }
+    }
+}
+
+@Composable
+private fun Item(text: String, onClick: () -> Unit) = DropdownMenuItem(text = { Text(text) }, onClick = onClick)
+
+/** A menu item that says if it is the one in use. */
+@Composable
+private fun Choice(text: String, chosen: Boolean, onClick: () -> Unit) =
+    DropdownMenuItem(text = { Text(if (chosen) "\u2022 $text" else "   $text") }, onClick = onClick)
+
+@Composable
+private fun Heading(text: String) = Text(text, Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp), style = MaterialTheme.typography.labelMedium)

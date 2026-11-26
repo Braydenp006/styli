@@ -1,11 +1,5 @@
 package app.styli.ink
 
-import java.util.Random
-import kotlin.math.PI
-import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.hypot
-import kotlin.math.sin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -14,220 +8,110 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShapeTest {
-    private companion object { const val WOBBLE = 0.40f }
+    private fun rect(angle: Float = 0f) = Shape("r", ShapeKind.RECT, 1000f, 1000f, 2000f, 1000f, angle)
+    private fun ellipse() = Shape("e", ShapeKind.ELLIPSE, 0f, 0f, 2000f, 1000f)
+    private fun poly(p: ShapePreset) = p.make("p", 0f, 0f, 1000f, 1000f)
 
-    private val rnd = Random(7)
+    @Test
+    fun containsFollowsTheKind() {
+        assertTrue(rect().contains(1500f, 1500f))
+        assertFalse(rect().contains(500f, 1500f))
+        assertTrue(ellipse().contains(1000f, 500f)) // the middle
+        assertFalse(ellipse().contains(50f, 50f)) // a corner of the box is outside an ellipse
+        assertTrue(poly(ShapePreset.TRIANGLE).contains(500f, 800f))
+        assertFalse(poly(ShapePreset.TRIANGLE).contains(50f, 100f)) // beside the top point
+        assertTrue(poly(ShapePreset.STAR).contains(500f, 520f)) // the star's middle is inside
+    }
 
-    /** A hand-drawn stroke: points about every 0.5 mm along [path], each off by up to 0.15 mm. */
-    private fun trace(path: List<Pair<Float, Float>>): List<Pt> {
-        val out = ArrayList<Pt>()
-        for (i in 0 until path.size - 1) {
-            val (ax, ay) = path[i]
-            val (bx, by) = path[i + 1]
-            val n = maxOf(1, (hypot(bx - ax, by - ay) / 50f).toInt())
-            for (k in 0 until n) {
-                val f = k / n.toFloat()
-                out.add(Pt(ax + (bx - ax) * f + jitter(), ay + (by - ay) * f + jitter(), out.size * 8L, 0.7f))
+    @Test
+    fun aTurnedShapeIsHitWhereItIs() {
+        val q = rect((Math.PI / 2).toFloat()) // a quarter turn clockwise about (1000, 1000): the box now hangs below-left
+        assertTrue(q.contains(500f, 2000f))
+        assertFalse(q.contains(2000f, 1500f)) // where it was before the turn
+        val (cx, cy) = q.center
+        assertEquals(500f, cx, 0.01f)
+        assertEquals(2000f, cy, 0.01f)
+    }
+
+    @Test
+    fun outlineTowardGivesTheEdgeAlongTheLineFromTheCentre() {
+        val r = rect() // centre (2000, 1500), half 1000 by 500
+        val right = r.outlineToward(9000f, 1500f)
+        assertEquals(3000f, right.first, 0.01f); assertEquals(1500f, right.second, 0.01f)
+        val diag = r.outlineToward(2000f + 1000f, 1500f + 1000f) // steeper than the box: leaves through the bottom
+        assertEquals(2500f, diag.first, 0.01f); assertEquals(2000f, diag.second, 0.01f)
+        val e = ellipse().outlineToward(5000f, 500f)
+        assertEquals(2000f, e.first, 0.01f)
+        val tri = poly(ShapePreset.TRIANGLE).outlineToward(500f, -5000f) // straight up: the top point
+        assertEquals(500f, tri.first, 0.5f); assertEquals(0f, tri.second, 0.5f)
+        assertEquals(r.center, r.outlineToward(2000f, 1500f)) // aimed at the centre: stays there
+    }
+
+    @Test
+    fun aStarsOutlineIsTheFarthestCrossing() {
+        val s = poly(ShapePreset.STAR)
+        val up = s.outlineToward(500f, -9000f)
+        assertEquals(0f, up.second, 1f) // the tip, not the notch behind it
+    }
+
+    @Test
+    fun sidesAndAnchors() {
+        val r = rect()
+        assertEquals(2000f to 1000f, r.sideMiddle(1))
+        assertEquals(3000f to 1500f, r.sideMiddle(2))
+        assertNull(r.anchorPoint(0))
+        val a = r.anchorPoint(4)!!
+        assertEquals(1000f, a.first, 0.01f); assertEquals(1500f, a.second, 0.01f)
+    }
+
+    @Test
+    fun everyPresetIsAUsableShape() {
+        for (p in ShapePreset.entries) {
+            val s = p.make("x", 0f, 0f, 1000f, 1000f)
+            assertEquals(p.kind, s.kind)
+            if (p.kind == ShapeKind.POLYGON) {
+                assertTrue("$p", s.vertices.size >= 3)
+                assertTrue("$p", s.vertices.all { it.first in 0f..1f && it.second in 0f..1f })
+                assertEquals("$p fills the box", 0f, s.vertices.minOf { it.first }, 0.001f)
+                assertEquals("$p fills the box", 1f, s.vertices.maxOf { it.second }, 0.001f)
+                assertTrue("$p centre", s.contains(500f, 500f) || p == ShapePreset.STAR)
             }
         }
-        out.add(Pt(path.last().first, path.last().second, out.size * 8L, 0.7f))
-        return out
-    }
-
-    private fun jitter() = (rnd.nextFloat() - 0.5f) * 30f
-
-    private fun turned(pts: List<Pair<Float, Float>>, deg: Double) = pts.map {
-        val c = cos(Math.toRadians(deg)).toFloat(); val s = sin(Math.toRadians(deg)).toFloat()
-        (it.first * c - it.second * s) to (it.first * s + it.second * c)
-    }
-
-    private fun ellipse(a: Float, b: Float, deg: Double = 0.0, over: Int = 3) =
-        turned((0..72 + over).map { val t = 2 * PI * it / 72; (a * cos(t)).toFloat() to (b * sin(t)).toFloat() }, deg)
-
-    private fun box(w: Float, h: Float) = listOf(0f to 0f, w to 0f, w to h, 0f to h, 0f to 20f)
-
-    @Test
-    fun aWobblyLineBecomesTwoPointsAndLevelWhenNearlyLevel() {
-        val out = ShapeGeometry.snap(trace(listOf(0f to 0f, 5000f to 80f)))!! // about 1 degree
-        assertEquals(2, out.size)
-        assertEquals(out[0].y, out[1].y, 0f)
-        assertTrue(abs(out[1].x - 5000f) < 40f)
+        assertTrue(ShapePreset.ROUNDED.make("x", 0f, 0f, 1000f, 500f).corner > 0f)
+        assertEquals(0f, ShapePreset.RECTANGLE.make("x", 0f, 0f, 1000f, 500f).corner, 0f)
     }
 
     @Test
-    fun aSlantedLineKeepsItsSlant() {
-        val out = ShapeGeometry.snap(trace(listOf(0f to 0f, 4000f to 1500f)))!!
-        assertEquals(2, out.size)
-        assertTrue(abs(out[1].y - 1500f) < 40f)
+    fun fillsAreEvenOdd() {
+        val outer = listOf(0f to 0f, 100f to 0f, 100f to 100f, 0f to 100f)
+        val hole = listOf(40f to 40f, 60f to 40f, 60f to 60f, 40f to 60f)
+        val f = Fill("f", 0xFF00FF00.toInt(), listOf(outer, hole))
+        assertTrue(f.contains(10f, 10f))
+        assertFalse(f.contains(50f, 50f))
+        assertFalse(f.contains(200f, 50f))
+        assertNotNull(f.box())
+        assertEquals(100.0, f.box()!!.r, 0.0)
+        val moved = f.map(Affine.translate(10.0, 0.0))
+        assertTrue(moved.contains(105f, 10f))
+        assertEquals(f.id, moved.id)
     }
 
     @Test
-    fun aCurveAShortStrokeAndAZigzagStayAsDrawn() {
-        val bow = (0..40).map { it * 125f to (400f * sin(PI * it / 40)).toFloat() } // bends 8% of its length
-        assertNull(ShapeGeometry.snap(trace(bow)))
-        assertNull(ShapeGeometry.snap(trace(listOf(0f to 0f, 300f to 10f)))) // 3 mm: writing
-        assertNull(ShapeGeometry.snap(trace(listOf(0f to 0f, 3000f to 0f, 0f to 20f, 3000f to 20f)))) // scribbled over
+    fun theLassoTakesShapesMoreThanHalfInside() {
+        val a = Shape("a", ShapeKind.RECT, 0f, 0f, 1000f, 1000f)
+        val b = Shape("b", ShapeKind.RECT, 5000f, 0f, 1000f, 1000f)
+        val c = Shape("c", ShapeKind.RECT, 800f, 0f, 1000f, 1000f) // about 20% inside the loop
+        val loop = floatArrayOf(-100f, -100f, 1000f, -100f, 1000f, 1100f, -100f, 1100f)
+        assertEquals(setOf("a"), LassoGeometry.selectedShapes(listOf(a, b, c), loop))
+        assertTrue(LassoGeometry.selectedShapes(listOf(a), floatArrayOf(0f, 0f, 10f, 10f)).isEmpty()) // not a loop
     }
 
     @Test
-    fun aCircleBecomesARound72PointClosedShape() {
-        val out = ShapeGeometry.snap(trace(ellipse(2000f, 2000f)))!!
-        assertEquals(73, out.size)
-        assertEquals(out.first().x, out.last().x, 0f)
-        val (cx, cy) = out.dropLast(1).let { o -> o.map { it.x }.average().toFloat() to o.map { it.y }.average().toFloat() }
-        for (p in out) assertEquals(2000f, hypot(p.x - cx, p.y - cy), 80f)
-    }
-
-    @Test
-    fun aSlightlyOvalLoopIsMadeRound() {
-        val out = ShapeGeometry.snap(trace(ellipse(2000f, 1850f)))!!
-        assertEquals(out.maxOf { it.x } - out.minOf { it.x }, out.maxOf { it.y } - out.minOf { it.y }, 5f)
-    }
-
-    @Test
-    fun anEllipseStaysAnEllipseAndLevelWhenNearlyLevel() {
-        val out = ShapeGeometry.snap(trace(ellipse(3000f, 1500f, 2.0)))!!
-        assertEquals(6000f, out.maxOf { it.x } - out.minOf { it.x }, 150f)
-        assertEquals(3000f, out.maxOf { it.y } - out.minOf { it.y }, 150f)
-    }
-
-    @Test
-    fun aTiltedEllipseKeepsItsTilt() {
-        val out = ShapeGeometry.snap(trace(ellipse(3000f, 1000f, 30.0)))!!
-        // Level, its height would be 2000; at 30 degrees it is about 3200.
-        assertTrue(out.maxOf { it.y } - out.minOf { it.y } > 2800f)
-    }
-
-    @Test
-    fun aRoughRectangleBecomesFourLevelCorners() {
-        val out = ShapeGeometry.snap(trace(turned(box(5000f, 3000f), 2.0)))!!
-        assertEquals(5, out.size)
-        assertEquals(out.first().x, out.last().x, 0f)
-        assertEquals(2, out.dropLast(1).map { Math.round(it.x) }.distinct().size)
-        assertEquals(2, out.dropLast(1).map { Math.round(it.y) }.distinct().size)
-        assertEquals(5000f, out.maxOf { it.x } - out.minOf { it.x }, 150f)
-    }
-
-    @Test
-    fun aRectangleTiltedWellOffLevelStaysTilted() {
-        val out = ShapeGeometry.snap(trace(turned(box(5000f, 3000f), 30.0)))!!
-        assertEquals(5, out.size)
-        assertTrue(out.dropLast(1).map { Math.round(it.x) }.distinct().size == 4)
-    }
-
-    @Test
-    fun aTriangleBecomesThreeCorners() {
-        val out = ShapeGeometry.snap(trace(listOf(0f to 0f, 5000f to 300f, 1800f to -4000f, 0f to -30f)))!!
-        assertEquals(4, out.size)
-        assertEquals(out.first().x, out.last().x, 0f)
-        // Each corner of the drawing is near one of the three points.
-        for ((x, y) in listOf(0f to 0f, 5000f to 300f, 1800f to -4000f)) assertTrue(out.any { hypot(it.x - x, it.y - y) < 400f })
-    }
-
-    @Test
-    fun aStarAClosedScribbleAndATinyLoopAreLeftAlone() {
-        val star = (0..10).map { val r = if (it % 2 == 0) 3000f else 1200f; val t = PI * it / 5; (r * cos(t)).toFloat() to (r * sin(t)).toFloat() }
-        assertNull(ShapeGeometry.snap(trace(star)))
-        assertNull(ShapeGeometry.snap(trace(ellipse(150f, 150f)))) // 3 mm across: a handwritten o
-        assertNull(ShapeGeometry.snap(trace(listOf(0f to 0f, 4000f to 600f, 0f to 1200f, 4000f to 1800f, 0f to 2400f, 4000f to 3000f, 0f to 20f)))) // zigzag back to the start
-    }
-
-    @Test
-    fun theNewPointsRunOverTheSameTime() {
-        val raw = trace(ellipse(2000f, 2000f))
-        val out = ShapeGeometry.snap(raw)!!
-        assertEquals(0L, out.first().t)
-        assertEquals(raw.last().t, out.last().t)
-    }
-
-    @Test
-    fun aRectangleTiltedEitherWayKeepsItsWidthAndHeight() {
-        for (tilt in listOf(-7.0, -2.0, 2.0, 7.0)) {
-            val out = ShapeGeometry.snap(trace(turned(box(6000f, 2500f), tilt)))!!
-            assertEquals("tilt $tilt", 6000f, out.maxOf { it.x } - out.minOf { it.x }, 250f)
-            assertEquals("tilt $tilt", 2500f, out.maxOf { it.y } - out.minOf { it.y }, 250f)
-        }
-    }
-
-    @Test
-    fun aSloppyCircleAndASloppyLineStillSnap() {
-        // Radius wobbles by 6% round the loop, and the ends miss each other.
-        val loop = (0..60).map { val t = 2 * PI * it / 66; val r = 2000f * (1 + 0.06f * sin(3 * t).toFloat()); (r * cos(t)).toFloat() to (r * sin(t)).toFloat() }
-        assertNotNull(ShapeGeometry.snap(trace(loop)))
-        val bendy = (0..20).map { it * 250f to (5000f * 0.05f * sin(PI * it / 20)).toFloat() } // bows 5% of its length
-        assertNotNull(ShapeGeometry.snap(trace(bendy)))
-    }
-
-    @Test
-    fun strengthDecidesHowSloppyIsStillCorrected() {
-        val loop = (0..60).map { val t = 2 * PI * it / 66; val r = 2000f * (1 + 0.06f * sin(3 * t).toFloat()); (r * cos(t)).toFloat() to (r * sin(t)).toFloat() }
-        val bendy = (0..20).map { it * 250f to (5000f * 0.05f * sin(PI * it / 20)).toFloat() }
-        assertNull(ShapeGeometry.snap(trace(bendy), 0.5f))
-        assertNotNull(ShapeGeometry.snap(trace(bendy), 1f))
-        assertNull(ShapeGeometry.snap(trace(loop), 0.3f))
-        assertNotNull(ShapeGeometry.snap(trace(loop), 1.6f))
-        // A bow of 12% is a curve even at the highest strength.
-        assertNull(ShapeGeometry.snap(trace((0..40).map { it * 125f to (600f * sin(PI * it / 40)).toFloat() }), 1.6f))
-    }
-
-    @Test
-    fun strengthAlsoWidensHowMuchAShapeMayWobble() {
-        // A closed loop whose radius swings by 40% (five lobes): too rough for normal, fine for high.
-        val loop = (0..66).map { val t = 2 * PI * it / 66; val r = 2000f * (1 + WOBBLE * sin(5 * t).toFloat()); (r * cos(t)).toFloat() to (r * sin(t)).toFloat() }
-        assertNull(ShapeGeometry.snap(trace(loop), 1f))
-        assertNotNull(ShapeGeometry.snap(trace(loop), 1.6f))
-    }
-
-    @Test
-    fun linesShapesAndLevelAreSeparateSettings() {
-        val line = trace(listOf(0f to 0f, 5000f to 80f))
-        val circle = trace(ellipse(2000f, 2000f))
-        assertNull(ShapeGeometry.snap(line, ShapeGeometry.Settings(lines = 0f)))
-        assertNotNull(ShapeGeometry.snap(circle, ShapeGeometry.Settings(lines = 0f)))
-        assertNull(ShapeGeometry.snap(circle, ShapeGeometry.Settings(shapes = 0f)))
-        assertNotNull(ShapeGeometry.snap(line, ShapeGeometry.Settings(shapes = 0f)))
-        // Level off: the 1 degree slope stays; level on: it is made flat.
-        val slope = ShapeGeometry.snap(line, ShapeGeometry.Settings(level = 0f))!!
-        assertTrue(abs(slope[1].y - slope[0].y) > 50f)
-        // A rectangle 2 degrees off level keeps its tilt with level off.
-        val tilted = ShapeGeometry.snap(trace(turned(box(5000f, 3000f), 2.0)), ShapeGeometry.Settings(level = 0f))!!
-        assertTrue(tilted.dropLast(1).map { Math.round(it.x) }.distinct().size == 4)
-    }
-
-    private fun lobed(wobble: Float) = (0..66).map { val t = 2 * PI * it / 66; val r = 2000f * (1 + wobble * sin(5 * t).toFloat()); (r * cos(t)).toFloat() to (r * sin(t)).toFloat() }
-
-    @Test
-    fun lowMediumAndHighReallyDiffer() {
-        val low = 0.25f; val high = 2.5f
-        // An ordinary hand: a line bowed 3% and a circle that wobbles 12%.
-        val bowed = trace((0..20).map { it * 250f to (5000f * 0.03f * sin(PI * it / 20)).toFloat() })
-        assertNull(ShapeGeometry.snap(bowed, ShapeGeometry.Settings(lines = low)))
-        assertNotNull(ShapeGeometry.snap(bowed, ShapeGeometry.Settings(lines = 1f)))
-        val loop = trace(lobed(0.12f))
-        assertNull(ShapeGeometry.snap(loop, ShapeGeometry.Settings(shapes = low)))
-        assertNotNull(ShapeGeometry.snap(loop, ShapeGeometry.Settings(shapes = 1f)))
-        // A rough one: a line bowed 12% and a circle that wobbles 60%, taken only at high.
-        val rough = trace((0..20).map { it * 250f to (5000f * 0.12f * sin(PI * it / 20)).toFloat() })
-        assertNull(ShapeGeometry.snap(rough, ShapeGeometry.Settings(lines = 1f)))
-        assertNotNull(ShapeGeometry.snap(rough, ShapeGeometry.Settings(lines = high)))
-        val sloppy = trace(lobed(0.6f))
-        assertNull(ShapeGeometry.snap(sloppy, ShapeGeometry.Settings(shapes = 1f)))
-        assertNotNull(ShapeGeometry.snap(sloppy, ShapeGeometry.Settings(shapes = high)))
-        // Level: a line 4 degrees off level is made level at medium, not at low.
-        val slant = trace(listOf(0f to 0f, 5000f to 350f))
-        val medium = ShapeGeometry.snap(slant, ShapeGeometry.Settings(level = 1f))!!
-        val strict = ShapeGeometry.snap(slant, ShapeGeometry.Settings(level = low))!!
-        assertEquals(medium[0].y, medium[1].y, 0f)
-        assertTrue(abs(strict[1].y - strict[0].y) > 100f)
-    }
-
-    @Test
-    fun holdStartsAgainOnlyWhenThePenMovesMoreThanOneMillimetre() {
-        val h = ShapeGeometry.HoldTracker()
-        h.start(0f, 0f)
-        assertFalse(h.move(40f, 30f)) // 0.5 mm of shake
-        assertTrue(h.move(300f, 0f)) // 3 mm: moved on
-        assertFalse(h.move(330f, 20f)) // measured from where it stopped last, not from the start
-        assertTrue(h.move(500f, 0f))
+    fun theLassoTakesFillsMoreThanHalfInside() {
+        val sq = listOf(0f to 0f, 1000f to 0f, 1000f to 1000f, 0f to 1000f)
+        val a = Fill("a", 1, listOf(sq))
+        val b = Fill("b", 1, listOf(sq.map { it.first + 5000f to it.second }))
+        val loop = floatArrayOf(-100f, -100f, 1100f, -100f, 1100f, 1100f, -100f, 1100f)
+        assertEquals(setOf("a"), LassoGeometry.selectedFills(listOf(a, b), loop))
     }
 }

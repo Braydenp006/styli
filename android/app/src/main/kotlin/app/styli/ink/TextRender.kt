@@ -20,7 +20,7 @@ object TextRender {
     fun smooth(paint: Paint) { paint.flags = paint.flags or Paint.LINEAR_TEXT_FLAG or Paint.SUBPIXEL_TEXT_FLAG or Paint.ANTI_ALIAS_FLAG }
 
     /** The text wrapped to the box's width, in page units. Its height is the box's height. */
-    fun layout(box: TextBox): StaticLayout {
+    fun layout(box: TextBox, align: Layout.Alignment = Layout.Alignment.ALIGN_NORMAL): StaticLayout {
         val paint = TextPaint().apply {
             smooth(this)
             textSize = box.fontSize
@@ -28,7 +28,7 @@ object TextRender {
             typeface = Typeface.SANS_SERIF
         }
         return StaticLayout.Builder.obtain(box.text, 0, box.text.length, paint, box.width.toInt().coerceAtLeast(1))
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setAlignment(align)
             .setIncludePad(false)
             .build()
     }

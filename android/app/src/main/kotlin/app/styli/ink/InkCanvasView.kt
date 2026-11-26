@@ -58,7 +58,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, LASER, TEXT, TABLE }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, LASER, TEXT, TABLE, SHAPE, BUCKET }
 
     /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
     val notebook = Notebook()
@@ -151,6 +151,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawLinePreview(canvas)
                 drawSnapPreview(canvas)
                 drawTextDragPreview(canvas)
+                drawShapeDragPreview(canvas)
                 drawTableDragPreview(canvas)
                 canvas.restore() // the pull's shift
                 drawPullHint(canvas)
@@ -194,6 +195,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 canvas.restore()
                 continue
             }
+            val fill = model.fillOf(id)
+            if (fill != null) { drawFill(canvas, fill); continue }
+            val shape = model.shapeOf(id)
+            if (shape != null) { drawShape(canvas, shape); continue }
             val box = model.textOf(id) ?: continue
             if (box.id == editBox?.id) continue // the editor shows it
             val moved = dragMap?.takeIf { box.id in selection }
@@ -375,7 +380,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val all = notebook.pages
         placed.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         layouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.texts.map { it.id } })
-        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id })
+        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id } + model.shapes.map { it.id } + model.fills.map { it.id })
+        fillPaths.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.fills.map { it.id } })
+        shapeLayouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.shapes.map { it.id } })
         cellSel = cellSel?.takeIf { (r, c) -> lineTable()?.let { r < it.rows && c < it.cols } == true }
         if (layoutKey() != shownKey) rebuildLayout(false) // an undo or redo of a size change
         pageLayer.invalidate()
@@ -505,7 +512,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (rulerGrab(event)) return true
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !textTapping && !tabling) {
+            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !shaping && !bucketing && !textTapping && !tabling) {
                 gestureActive = false // a pen landing after a palm takes over
                 pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
@@ -521,6 +528,18 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 if (tool == Tool.TEXT) {
                     textTapping = true
                     textDown(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                    return true
+                }
+                if (tool == Tool.BUCKET) {
+                    bucketing = true
+                    bucketX = geometry.toPageX(event.getX(i).toDouble()).toFloat()
+                    bucketY = geometry.toPageY(event.getY(i).toDouble()).toFloat()
+                    return true
+                }
+                if (tool == Tool.SHAPE) {
+                    shaping = true
+                    val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                    shapeFromX = x; shapeFromY = y; shapeToX = x; shapeToY = y
                     return true
                 }
                 if (tool == Tool.TABLE) {
@@ -587,7 +606,213 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (lasering) return laser(event)
         if (textTapping) return textGesture(event)
         if (tabling) return tableGesture(event)
+        if (shaping) return shapeGesture(event)
+        if (bucketing) return bucketGesture(event)
         return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (snapped != null) snapping(event) else if (strokeId != null) drawing(event) else moving(event)
+    }
+
+    // ---- Shapes: pick a premade shape, drag out its box; the lasso then moves, resizes, turns and styles it, and the
+    // text tool types inside it. ----
+
+    /** Which premade shape the next one is. */
+    var shapePreset = ShapePreset.RECTANGLE
+
+    private var shaping = false
+    private var shapeFromX = 0f
+    private var shapeFromY = 0f
+    private var shapeToX = 0f
+    private var shapeToY = 0f
+    private val shapePath = android.graphics.Path()
+    private val shapeFillPaint = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val shapeLinePaint = Paint().apply { style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
+    private val shapeLayouts = HashMap<String, Pair<Shape, StaticLayout>>()
+    private var editShape: Shape? = null // the shape whose text is being typed
+
+    private fun shapeGesture(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) {
+                val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                shapeToX = x; shapeToY = y
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                shaping = false
+                val w = Math.abs(shapeToX - shapeFromX); val h = Math.abs(shapeToY - shapeFromY)
+                if (event.actionMasked != MotionEvent.ACTION_CANCEL && w >= SHAPE_MIN && h >= SHAPE_MIN) { // a tap or a sliver makes nothing
+                    model.addShape { shapePreset.make(it, minOf(shapeFromX, shapeToX), minOf(shapeFromY, shapeToY), w, h, penWidth.toFloat(), penColor) }
+                    changed(true)
+                }
+                pageLayer.invalidate()
+            }
+        }
+        return true
+    }
+
+    /** The shape being dragged out, in the drag colour. */
+    private fun drawShapeDragPreview(canvas: Canvas) {
+        if (!shaping) return
+        val g = geometry
+        val l = minOf(shapeFromX, shapeToX); val t = minOf(shapeFromY, shapeToY)
+        val w = Math.abs(shapeToX - shapeFromX); val h = Math.abs(shapeToY - shapeFromY)
+        if (w < 1f || h < 1f) return
+        canvas.save()
+        canvas.translate(g.toScreenX(l.toDouble()).toFloat(), g.toScreenY(t.toDouble()).toFloat())
+        canvas.scale(g.scale.toFloat(), g.scale.toFloat())
+        buildShapePath(shapePreset.make("", 0f, 0f, w, h))
+        dragPaint.strokeWidth = 2f / g.scale.toFloat()
+        canvas.drawPath(shapePath, dragPaint)
+        dragPaint.strokeWidth = 2f
+        canvas.restore()
+    }
+
+    /** The outline of [s] in its own frame (the corner at 0, 0) into [shapePath]. */
+    private fun buildShapePath(s: Shape) {
+        shapePath.reset()
+        when (s.kind) {
+            ShapeKind.RECT -> shapePath.addRoundRect(android.graphics.RectF(0f, 0f, s.width, s.height), s.corner, s.corner, android.graphics.Path.Direction.CW)
+            ShapeKind.ELLIPSE -> shapePath.addOval(android.graphics.RectF(0f, 0f, s.width, s.height), android.graphics.Path.Direction.CW)
+            ShapeKind.POLYGON -> {
+                s.vertices.forEachIndexed { k, (fx, fy) -> if (k == 0) shapePath.moveTo(fx * s.width, fy * s.height) else shapePath.lineTo(fx * s.width, fy * s.height) }
+                shapePath.close()
+            }
+        }
+    }
+
+    private fun shapeLayout(s: Shape): StaticLayout {
+        val c = shapeLayouts[s.id]
+        if (c != null && c.first === s) return c.second
+        return TextRender.layout(TextBox("", 0f, 0f, maxOf(1f, s.width - 2 * SHAPE_PAD), s.fontSize, s.text, s.textColor), android.text.Layout.Alignment.ALIGN_CENTER)
+            .also { shapeLayouts[s.id] = s to it }
+    }
+
+    /** Draws a shape (in page units; the canvas already has the page matrix): fill, outline, then its text. */
+    private fun drawShape(canvas: Canvas, s: Shape) {
+        val moved = dragMap?.takeIf { s.id in selection }
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        canvas.translate(s.x, s.y)
+        canvas.rotate(Math.toDegrees(s.angle.toDouble()).toFloat()) // clockwise on screen, about the corner
+        buildShapePath(s)
+        if (s.fill ushr 24 != 0) { shapeFillPaint.color = s.fill; canvas.drawPath(shapePath, shapeFillPaint) }
+        val w = maxOf(s.lineWidth, (1 / geometry.scale).toFloat())
+        shapeLinePaint.color = TextRender.ink(s.color)
+        shapeLinePaint.strokeWidth = w
+        shapeLinePaint.pathEffect = if (s.dashed) android.graphics.DashPathEffect(floatArrayOf(w * 4, w * 3), 0f) else null
+        canvas.drawPath(shapePath, shapeLinePaint)
+        if (s.text.isNotBlank() && s.id != editShape?.id) {
+            val l = shapeLayout(s)
+            canvas.translate(SHAPE_PAD, (s.height - l.height) / 2f)
+            l.draw(canvas)
+        }
+        canvas.restore()
+    }
+
+    /** The box round a shape's corners on the page (a turned shape is boxed loosely). */
+    private fun shapeRect(s: Shape): Box {
+        val c = s.corners()
+        return Box(c.minOf { it.first }.toDouble(), c.minOf { it.second }.toDouble(), c.maxOf { it.first }.toDouble(), c.maxOf { it.second }.toDouble())
+    }
+
+    /** Outline colour, fill, line width and dashing for the selected shapes (null leaves one as it is): one undo step. */
+    fun setShapeStyle(color: Int?, fill: Int?, lineWidth: Float?, dashed: Boolean?) {
+        val picked = model.shapes.filter { it.id in selection }
+        if (picked.isEmpty()) return
+        if (model.setShapes(picked.map { it.copy(color = color ?: it.color, fill = fill ?: it.fill, lineWidth = lineWidth ?: it.lineWidth, dashed = dashed ?: it.dashed) })) changed(true)
+    }
+
+    /** Types in a shape: an editor over its box, text centred. Ends like any text (see [finishText]). */
+    private fun startShapeEdit(s: Shape) {
+        val (x, y) = s.toPage(SHAPE_PAD, 0f)
+        editShape = s
+        startEdit(TextBox("", x, y, maxOf(1f, s.width - 2 * SHAPE_PAD), s.fontSize, s.text, s.textColor, 0, s.angle), false, s.height)
+    }
+
+    // ---- Paint bucket: tap to colour the innermost thing there: a text box (its highlight), a shape, a table cell, a
+    // fill made before, or the area closed in by pen strokes. ----
+
+    /** The colour poured; zero alpha empties what is tapped. */
+    var bucketColor = 0x99FFEB3B.toInt()
+
+    /** Gaps up to this big (page units, 1 mm) in the lines round an area do not let the paint out. */
+    var bucketGap = 100f
+
+    private var bucketing = false
+    private var bucketX = 0f
+    private var bucketY = 0f
+    private val fillPaint = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val fillPaths = HashMap<String, Pair<Fill, android.graphics.Path>>()
+
+    private fun bucketGesture(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                bucketing = false
+                if (event.actionMasked != MotionEvent.ACTION_CANCEL) bucketTap(bucketX, bucketY)
+            }
+        }
+        return true
+    }
+
+    /** One thing a tap could colour: how big it is round the tap (the smallest wins), and doing it. */
+    private class Pour(val area: Double, val apply: () -> Boolean)
+
+    private fun bucketTap(px: Float, py: Float) {
+        val color = bucketColor
+        val empty = color ushr 24 == 0
+        val options = ArrayList<Pour>()
+        model.texts.lastOrNull { it.contains(px, py, layoutOf(it).height.toFloat()) }?.let { t ->
+            options.add(Pour(t.width.toDouble() * layoutOf(t).height) { model.setText(t.copy(highlight = color)) })
+        }
+        for (s in model.shapes) if (s.contains(px, py)) options.add(Pour(shapeArea(s)) { model.setShape(s.copy(fill = color)) })
+        model.tables.lastOrNull { it.contains(px, py) }?.let { t ->
+            t.cellAt(px, py)?.let { (r, c) -> options.add(Pour(t.colWidths[c].toDouble() * t.rowHeights[r]) { model.setTable(t.withCellFill(r, c, color)) }) }
+        }
+        // A fill poured before is recoloured rather than covered; counted a little smaller so it wins over the area it fills.
+        for (f in model.fills) if (f.contains(px, py)) {
+            val area = Math.abs(f.rings.sumOf { RegionFill.areaOf(it) })
+            options.add(Pour(area * 0.8) { if (empty) model.delete(setOf(f.id)) else model.setFills(listOf(f.copy(color = color))) })
+        }
+        if (!empty) {
+            val pens = model.items.filter { it.tool == StrokeTool.TOOL_PEN }
+            val bounds = if (!geometry.infinite) Box(0.0, 0.0, geometry.pageW.toDouble(), geometry.pageH.toDouble()) else {
+                val l = minOf(px.toDouble(), pens.minOfOrNull { i -> i.pts.minOf { it.x }.toDouble() } ?: px.toDouble()) - 1000
+                val t = minOf(py.toDouble(), pens.minOfOrNull { i -> i.pts.minOf { it.y }.toDouble() } ?: py.toDouble()) - 1000
+                val r = maxOf(px.toDouble(), pens.maxOfOrNull { i -> i.pts.maxOf { it.x }.toDouble() } ?: px.toDouble()) + 1000
+                val b = maxOf(py.toDouble(), pens.maxOfOrNull { i -> i.pts.maxOf { it.y }.toDouble() } ?: py.toDouble()) + 1000
+                Box(l, t, r, b)
+            }
+            RegionFill.find(pens.map { i -> RegionFill.Path(i.pts.map { it.x to it.y }, i.width.toFloat()) }, px, py, bounds, bucketGap)?.let { region ->
+                options.add(Pour(region.area) { model.addFill(color, region.rings) != null })
+            }
+        }
+        val best = options.minByOrNull { it.area } ?: return
+        if (best.apply()) changed(true)
+    }
+
+    private fun shapeArea(s: Shape): Double = when (s.kind) {
+        ShapeKind.RECT -> s.width.toDouble() * s.height
+        ShapeKind.ELLIPSE -> Math.PI / 4 * s.width * s.height
+        ShapeKind.POLYGON -> Math.abs(RegionFill.areaOf(s.vertices.map { it.first * s.width to it.second * s.height }))
+    }
+
+    /** Draws a fill (page units, the canvas has the page matrix): its rings, even-odd, so holes stay empty. */
+    private fun drawFill(canvas: Canvas, f: Fill) {
+        val moved = dragMap?.takeIf { f.id in selection }
+        val path = fillPaths[f.id]?.takeIf { it.first === f }?.second ?: android.graphics.Path().also { p ->
+            p.fillType = android.graphics.Path.FillType.EVEN_ODD
+            for (ring in f.rings) {
+                ring.forEachIndexed { k, (x, y) -> if (k == 0) p.moveTo(x, y) else p.lineTo(x, y) }
+                p.close()
+            }
+            fillPaths[f.id] = f to p
+        }
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        fillPaint.color = f.color
+        canvas.drawPath(path, fillPaint)
+        canvas.restore()
     }
 
     // ---- Tables: choose rows and columns, then drag out the grid like a text box. ----
@@ -662,6 +887,14 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             tableFill.color = table.fill
             canvas.drawRect(table.x, table.y, table.x + table.width, table.y + table.height, tableFill)
         }
+        if (table.cellFills.isNotEmpty()) {
+            for (r in 0 until table.rows) for (c in 0 until table.cols) {
+                val col = table.cellFill(r, c)
+                if (col ushr 24 == 0) continue
+                tableFill.color = col
+                canvas.drawRect(table.lineX(c), table.lineY(r), table.lineX(c + 1), table.lineY(r + 1), tableFill)
+            }
+        }
         tablePaint.color = TextRender.ink(table.color)
         tablePaint.strokeWidth = maxOf(table.lineWidth, (1 / geometry.scale).toFloat())
         canvas.drawRect(table.x, table.y, table.x + table.width, table.y + table.height, tablePaint)
@@ -696,6 +929,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     // A pen gesture with the text tool: a tap on a box edits it, a drag over empty page draws the new box's
     // width (and where it starts), a tap on empty page does nothing, and anything while editing only finishes.
     private var textHit: TextBox? = null // the box the pen went down on, if any
+    private var shapeHit: Shape? = null // or the shape, if no box
     private var textDragging = false // going to make a new box
     private var textFromX = 0f
     private var textFromY = 0f
@@ -708,6 +942,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (editor != null) { finishText(); return } // tapping away finishes; it does not also start another
         textHit = model.texts.lastOrNull { it.contains(px, py, layoutOf(it).height.toFloat()) }
         if (textHit != null) return
+        shapeHit = model.order.asReversed().firstNotNullOfOrNull { model.shapeOf(it)?.takeIf { s -> s.contains(px, py) } }
+        if (shapeHit != null) return // a tap in a shape types in it
         textDragging = true
         textFromX = px; textFromY = py; textToX = px; textToY = py
     }
@@ -726,7 +962,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                 val hit = textHit
                 textHit = null
+                val shape = shapeHit
+                shapeHit = null
                 if (!cancelled && hit != null) startEdit(hit, false)
+                else if (!cancelled && shape != null) startShapeEdit(shape)
                 if (textDragging) {
                     textDragging = false
                     pageLayer.invalidate()
@@ -761,7 +1000,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         )
     }
 
-    private fun startEdit(box: TextBox, isNew: Boolean) {
+    private fun startEdit(box: TextBox, isNew: Boolean, fixedHeight: Float? = null) {
         val s = geometry.scale
         editScale = s
         editBox = box
@@ -775,10 +1014,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             TextRender.smooth(paint)
             setTextSize(TypedValue.COMPLEX_UNIT_PX, (box.fontSize * s).toFloat())
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            gravity = Gravity.TOP or Gravity.START
+            gravity = if (fixedHeight != null) Gravity.CENTER else Gravity.TOP or Gravity.START // a shape's text is centred
             pivotX = 0f
             pivotY = 0f
-            layoutParams = LayoutParams((box.width * s).toInt().coerceAtLeast(1), LayoutParams.WRAP_CONTENT)
+            layoutParams = LayoutParams((box.width * s).toInt().coerceAtLeast(1), if (fixedHeight != null) (fixedHeight * s).toInt().coerceAtLeast(1) else LayoutParams.WRAP_CONTENT)
         }
         editor = ed
         styleEditor()
@@ -817,6 +1056,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         styleEditor()
         // Not editing: the boxes the lasso holds take the colours, all in one undo step.
         if (editor == null && model.setTexts(model.texts.filter { it.id in selection }.map { it.copy(color = color, highlight = highlight) })) changed(true)
+        if (editor == null && model.setShapes(model.shapes.filter { it.id in selection }.map { it.copy(textColor = color) })) changed(true) // and the text in selected shapes
     }
 
     /** Ends editing: the box is added or changed (one undo step), or removed if its text is empty. */
@@ -828,6 +1068,14 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         editBox = null
         (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(ed.windowToken, 0)
         removeView(ed)
+        val shape = editShape
+        editShape = null
+        if (shape != null) { // typing in a shape: blank clears its text
+            model.shapeOf(shape.id)?.let { if (it.text != text || it.textColor != box.color) model.setShape(it.copy(text = text, textColor = box.color)) }
+            changed(true)
+            pageLayer.invalidate()
+            return
+        }
         val now = box.copy(text = text)
         when {
             text.isBlank() -> if (!editIsNew) model.delete(setOf(box.id))
@@ -892,6 +1140,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
         model.textOf(id)?.let { return textRect(it) }
         model.tableOf(id)?.let { return Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }
+        model.shapeOf(id)?.let { return shapeRect(it) }
+        model.fillOf(id)?.let { return it.box() }
         return null
     }
 
@@ -909,10 +1159,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val strokes = model.items.filter { it.id in selection }
         val boxes = model.texts.filter { it.id in selection }
         val tables = model.tables.filter { it.id in selection }.map { linePreview?.takeIf { p -> p.id == it.id } ?: it }
-        val base = if (strokes.isEmpty() && tables.isEmpty() && boxes.isNotEmpty() && boxes.all { LassoGeometry.sameTurn(it.angle, boxes[0].angle) }) {
-            LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) }, boxes[0].angle)
+        val shapes = model.shapes.filter { it.id in selection }
+        val fills = model.fills.filter { it.id in selection }
+        val angles = boxes.map { it.angle } + shapes.map { it.angle }
+        val base = if (strokes.isEmpty() && tables.isEmpty() && fills.isEmpty() && angles.isNotEmpty() && angles.all { LassoGeometry.sameTurn(it, angles[0]) }) {
+            LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) } + shapes.flatMap { it.corners() }, angles[0])
         } else {
-            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
+            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + shapes.map(::shapeRect) + fills.mapNotNull { it.box() } + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
         }
         return dragMap?.let { base.map(it) } ?: base
     }
@@ -1021,7 +1274,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     /** The table that is selected on its own (as it would be now), whose lines can be dragged; null otherwise. */
     private fun lineTable(): Table? {
-        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection }) return null
+        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection } || model.shapes.any { it.id in selection } || model.fills.any { it.id in selection }) return null
         val t = model.tables.filter { it.id in selection }.singleOrNull() ?: return null
         return linePreview?.takeIf { it.id == t.id } ?: t
     }
@@ -1104,11 +1357,17 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     Drag.LOOP -> if (!cancelled && loopIsTap()) {
                         // A tap on a table's line picks the table alone (a loop round it takes the ink in it too).
                         val tol = (TAP_PX * 2 / geometry.scale).toFloat()
-                        model.tables.lastOrNull { it.nearLine(loop[0], loop[1], tol) }?.let { selection.add(it.id) }
+                        val table = model.tables.lastOrNull { it.nearLine(loop[0], loop[1], tol) }
+                        if (table != null) selection.add(table.id)
+                        else model.order.asReversed().firstOrNull { // a tap in a shape or a fill picks it, the topmost
+                            model.shapeOf(it)?.contains(loop[0], loop[1]) == true || model.fillOf(it)?.contains(loop[0], loop[1]) == true
+                        }?.let { selection.add(it) }
                     } else if (!cancelled) {
                         selection.addAll(LassoGeometry.selected(model.items, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedBoxes(model.texts.map { it to layoutOf(it).height.toFloat() }, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedTables(model.tables, loop.toFloatArray()))
+                        selection.addAll(LassoGeometry.selectedShapes(model.shapes, loop.toFloatArray()))
+                        selection.addAll(LassoGeometry.selectedFills(model.fills, loop.toFloatArray()))
                     }
                     Drag.LINE -> if (!cancelled) linePreview?.takeIf { it !== lineBase }?.let { model.setTable(it) }
                     else -> {
@@ -1571,5 +1830,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val SLIDE_MIN_PX = 8.0 // a finger gesture that moved sideways less than this does not settle onto a page
         const val TEXT_MIN_WIDTH = 1000f // a dragged box narrower than 10 mm is not a box
         const val TEXT_SIZE = 400f // text 4 mm high
+        const val SHAPE_MIN = 300f // a dragged shape smaller than 3 mm either way is not one
+        const val SHAPE_PAD = 200f // room between a shape's edge and its text, 2 mm
     }
 }

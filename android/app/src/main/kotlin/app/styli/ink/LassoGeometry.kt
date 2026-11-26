@@ -162,6 +162,39 @@ object LassoGeometry {
         }.mapTo(HashSet()) { it.id }
     }
 
+    /** The shapes more than half inside the loop by area, judged like text boxes (in the shape's own frame). */
+    fun selectedShapes(shapes: List<Shape>, poly: FloatArray): Set<String> {
+        if (poly.size < 6) return emptySet()
+        return shapes.filter { sh ->
+            var inside = 0
+            for (i in 0 until GRID) for (j in 0 until GRID) {
+                val (x, y) = sh.toPage(sh.width * (i + 0.5f) / GRID, sh.height * (j + 0.5f) / GRID)
+                if (contains(poly, x, y)) inside++
+            }
+            inside * 2 > GRID * GRID
+        }.mapTo(HashSet()) { it.id }
+    }
+
+    /** The fills more than half inside the loop by area (judged on a grid over each fill's box, counting only what is painted). */
+    fun selectedFills(fills: List<Fill>, poly: FloatArray): Set<String> {
+        if (poly.size < 6) return emptySet()
+        return fills.filter { f ->
+            val b = f.box() ?: return@filter false
+            var painted = 0
+            var inside = 0
+            for (i in 0 until FILL_GRID) for (j in 0 until FILL_GRID) {
+                val x = (b.l + (b.r - b.l) * (i + 0.5) / FILL_GRID).toFloat()
+                val y = (b.t + (b.b - b.t) * (j + 0.5) / FILL_GRID).toFloat()
+                if (!f.contains(x, y)) continue
+                painted++
+                if (contains(poly, x, y)) inside++
+            }
+            painted > 0 && inside * 2 > painted
+        }.mapTo(HashSet()) { it.id }
+    }
+
+    private const val FILL_GRID = 20
+
     /** Do two angles (radians) point the same way? */
     fun sameTurn(a: Float, b: Float) = kotlin.math.abs(sin((a - b).toDouble())) < 1e-3 && cos((a - b).toDouble()) > 0
 

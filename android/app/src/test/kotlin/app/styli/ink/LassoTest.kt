@@ -167,7 +167,7 @@ class LassoTest {
         for (e in m.log) when (e) {
             is Ev.Added -> replay[e.item.id] = e.item
             is Ev.Erased -> replay.remove(e.id)
-            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved -> {}
+            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved, is Ev.ShapeSet, is Ev.ShapeRemoved, is Ev.ConnectorSet, is Ev.ConnectorRemoved, is Ev.FillSet, is Ev.FillRemoved -> {}
             is Ev.Transformed -> for (id in e.ids) replay[id]?.let { replay[id] = Item(it.id, it.tool, it.color, it.width, it.pts.map(e.map::apply)) }
         }
         assertEquals(m.items.map { it.id }, replay.keys.toList())
@@ -218,7 +218,7 @@ class LassoTest {
         for (e in m.log) when (e) {
             is Ev.Added -> replay[e.item.id] = e.item
             is Ev.Erased -> replay.remove(e.id)
-            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved -> {}
+            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved, is Ev.ShapeSet, is Ev.ShapeRemoved, is Ev.ConnectorSet, is Ev.ConnectorRemoved, is Ev.FillSet, is Ev.FillRemoved -> {}
             is Ev.Transformed -> for (id in e.ids) replay[id]?.let { replay[id] = Item(it.id, it.tool, it.color, it.width, it.pts.map(e.map::apply)) }
         }
         assertEquals(m.items[0].pts[4].x, replay.getValue(a.id).pts[4].x, 0.01f)

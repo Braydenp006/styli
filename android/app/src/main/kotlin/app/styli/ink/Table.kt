@@ -15,6 +15,7 @@ class Table(
     val lineWidth: Float,
     val color: Int = 0,
     val fill: Int = 0,
+    val cellFills: List<Int> = emptyList(),
 ) {
     val cols get() = colWidths.size
     val rows get() = rowHeights.size
@@ -23,8 +24,19 @@ class Table(
 
     fun copy(
         x: Float = this.x, y: Float = this.y, colWidths: List<Float> = this.colWidths, rowHeights: List<Float> = this.rowHeights,
-        lineWidth: Float = this.lineWidth, color: Int = this.color, fill: Int = this.fill,
-    ) = Table(id, x, y, colWidths, rowHeights, lineWidth, color, fill)
+        lineWidth: Float = this.lineWidth, color: Int = this.color, fill: Int = this.fill, cellFills: List<Int> = this.cellFills,
+    ) = Table(id, x, y, colWidths, rowHeights, lineWidth, color, fill, cellFills)
+
+    /** The colour of the cell at ([row], [col]), row by row; a zero alpha (or no list at all) means none. */
+    fun cellFill(row: Int, col: Int) = cellFills.getOrElse(row * cols + col) { 0 }
+
+    /** The table with that cell's colour set (zero for none). */
+    fun withCellFill(row: Int, col: Int, color: Int): Table {
+        require(row in 0 until rows && col in 0 until cols) { "no such cell" }
+        val all = List(rows * cols) { cellFill(it / cols, it % cols) }.toMutableList()
+        all[row * cols + col] = color
+        return copy(cellFills = if (all.all { it == 0 }) emptyList() else all)
+    }
 
     /** Where vertical line [i] (0 is the left edge, [cols] the right edge) is on the page. */
     fun lineX(i: Int): Float = x + colWidths.take(i).sum()
@@ -98,7 +110,13 @@ class Table(
         val sizes = (if (vertical) colWidths else rowHeights).toMutableList()
         require(at in 0..sizes.size) { "no such place" }
         sizes.add(at, size)
-        return if (vertical) copy(colWidths = sizes) else copy(rowHeights = sizes)
+        // The new cells have no colour; the others keep theirs.
+        val cells = if (cellFills.isEmpty()) cellFills else if (vertical) {
+            List(rows) { r -> List(cols + 1) { c -> if (c == at) 0 else cellFill(r, if (c > at) c - 1 else c) } }.flatten()
+        } else {
+            List(rows + 1) { r -> List(cols) { c -> if (r == at) 0 else cellFill(if (r > at) r - 1 else r, c) } }.flatten()
+        }
+        return if (vertical) copy(colWidths = sizes, cellFills = cells) else copy(rowHeights = sizes, cellFills = cells)
     }
 
     /** The table without row (or column, if [vertical]) number [index]. The last one cannot go. */
@@ -106,7 +124,12 @@ class Table(
         val sizes = (if (vertical) colWidths else rowHeights).toMutableList()
         require(sizes.size > 1 && index in sizes.indices) { "no such row or column, or the last one" }
         sizes.removeAt(index)
-        return if (vertical) copy(colWidths = sizes) else copy(rowHeights = sizes)
+        val cells = if (cellFills.isEmpty()) cellFills else if (vertical) {
+            List(rows) { r -> List(cols - 1) { c -> cellFill(r, if (c >= index) c + 1 else c) } }.flatten()
+        } else {
+            List(rows - 1) { r -> List(cols) { c -> cellFill(if (r >= index) r + 1 else r, c) } }.flatten()
+        }
+        return if (vertical) copy(colWidths = sizes, cellFills = cells) else copy(rowHeights = sizes, cellFills = cells)
     }
 
     companion object {

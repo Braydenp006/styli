@@ -277,3 +277,46 @@ func TestZMoved(t *testing.T) {
 		}
 	}
 }
+
+// Shapes, connectors, fills and per-cell table fills read back whole and dump readably.
+func TestShapesConnectorsFills(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	shape := &inkpb.ShapeSet{Kind: inkpb.ShapeKind_SHAPE_POLYGON, X: -50, Y: 80, Width: 3000, Height: 2000, Angle: 4500, Color: 0xff1565c0, LineWidth: 40,
+		LineStyle: inkpb.LineStyle_LINE_DASHED, Fill: 0x99ffeb3b, Vertices: []uint32{5000, 0, 10000, 10000, 0, 10000}, Text: "hi", TextColor: 0xff000000, FontSize: 400}
+	conn := &inkpb.ConnectorSet{From: &inkpb.ConnectorEnd{Shape: id, Anchor: 2, X: 10, Y: 20}, To: &inkpb.ConnectorEnd{X: -300, Y: 400},
+		FromHead: inkpb.Arrowhead_ARROW_DOT, ToHead: inkpb.Arrowhead_ARROW_FILLED, Color: 0xffc62828, LineWidth: 60}
+	fill := &inkpb.FillSet{Color: 0x9966bb6a, Rings: []*inkpb.Ring{{X0: 5, Y0: -5, Dx: []int32{100, 0, -100}, Dy: []int32{0, 100, 0}}}}
+	table := &inkpb.TableSet{X: 0, Y: 0, ColWidths: []uint32{1000, 1000}, RowHeights: []uint32{500}, LineWidth: 40, CellFills: []uint32{0, 0x99ffeb3b}}
+	evs := []*inkpb.Event{
+		{Id: id, Device: "d", Seq: 1, Kind: &inkpb.Event_ShapeSet{ShapeSet: shape}},
+		{Id: id, Device: "d", Seq: 2, Kind: &inkpb.Event_ConnectorSet{ConnectorSet: conn}},
+		{Id: id, Device: "d", Seq: 3, Kind: &inkpb.Event_FillSet{FillSet: fill}},
+		{Id: id, Device: "d", Seq: 4, Kind: &inkpb.Event_TableSet{TableSet: table}},
+		{Id: id, Device: "d", Seq: 5, Kind: &inkpb.Event_ShapeRemoved{ShapeRemoved: &inkpb.ShapeRemoved{}}},
+		{Id: id, Device: "d", Seq: 6, Kind: &inkpb.Event_ConnectorRemoved{ConnectorRemoved: &inkpb.ConnectorRemoved{}}},
+		{Id: id, Device: "d", Seq: 7, Kind: &inkpb.Event_FillRemoved{FillRemoved: &inkpb.FillRemoved{}}},
+	}
+	if err := Append(p, evs...); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 7 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[0].GetShapeSet(), shape) || !proto.Equal(l.Events[1].GetConnectorSet(), conn) ||
+		!proto.Equal(l.Events[2].GetFillSet(), fill) || !proto.Equal(l.Events[3].GetTableSet(), table) {
+		t.Error("an event changed on the way")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{
+		`polygon at=(-50,80) size=3000x2000 angle=4500 line=ff1565c0/40/dashed fill=99ffeb3b corner=0 vertices=3 "hi"`,
+		"3031323334353637383961626364656" + "6/2@(10,20) -> (-300,400) heads=dot,filled",
+		"color=9966bb6a rings=1", "cells=2", "shape-removed", "connector-removed", "fill-removed",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}

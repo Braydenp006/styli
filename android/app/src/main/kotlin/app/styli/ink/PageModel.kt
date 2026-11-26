@@ -69,6 +69,13 @@ sealed interface Ev {
     /** A table was added or changed (moved, resized, a line moved): the whole new state. */
     data class TableSet(val table: Table) : Ev
     data class TableRemoved(val id: String) : Ev
+    /** A shape, connector or fill was added or changed: the whole new state. */
+    data class ShapeSet(val shape: Shape) : Ev
+    data class ShapeRemoved(val id: String) : Ev
+    data class ConnectorSet(val connector: Connector) : Ev
+    data class ConnectorRemoved(val id: String) : Ev
+    data class FillSet(val fill: Fill) : Ev
+    data class FillRemoved(val id: String) : Ev
     /** The page's size, template or fixed-or-infinite changed; the whole new state. */
     data class PageChanged(val page: PageSet) : Ev
     /** Object [id] now sits just above [above] in the layers, or at the very bottom if [above] is null. */
@@ -101,9 +108,19 @@ class PageModel(page: PageSet = A4_LINED) {
     var tables: List<Table> = emptyList()
         private set
 
+    var shapes: List<Shape> = emptyList()
+        private set
+
+    var connectors: List<Connector> = emptyList()
+        private set
+
+    var fills: List<Fill> = emptyList()
+        private set
+
     /**
-     * Every object's ID (strokes, text boxes, tables), bottom layer first: the drawing order. A new stroke or text
-     * box goes on top and a new table at the bottom; [arrange] changes it.
+     * Every object's ID (strokes, text boxes, tables, shapes, connectors, fills), bottom layer first: the drawing
+     * order. A new stroke, text box, shape or connector goes on top and a new table or fill at the bottom;
+     * [arrange] changes it.
      */
     var order: List<String> = emptyList()
         private set
@@ -114,6 +131,12 @@ class PageModel(page: PageSet = A4_LINED) {
     fun itemOf(id: String): Item? = itemIndex.of(items)[id]
     fun textOf(id: String): TextBox? = textIndex.of(texts)[id]
     fun tableOf(id: String): Table? = tableIndex.of(tables)[id]
+    private val shapeIndex = Index<Shape> { it.id }
+    private val connectorIndex = Index<Connector> { it.id }
+    private val fillIndex = Index<Fill> { it.id }
+    fun shapeOf(id: String): Shape? = shapeIndex.of(shapes)[id]
+    fun connectorOf(id: String): Connector? = connectorIndex.of(connectors)[id]
+    fun fillOf(id: String): Fill? = fillIndex.of(fills)[id]
 
     /** ID to object, rebuilt only when the list it is for was replaced. */
     private class Index<T>(val id: (T) -> String) {
@@ -131,11 +154,15 @@ class PageModel(page: PageSet = A4_LINED) {
     private class Tf(val ids: List<String>, val map: Affine)
 
     /** Everything an undo step puts back: the lists are replaced, never changed, so they can be kept as they were. */
-    private data class Snap(val items: List<Item>, val texts: List<TextBox>, val tables: List<Table>, val order: List<String>, val page: PageSet)
+    private data class Snap(
+        val items: List<Item>, val texts: List<TextBox>, val tables: List<Table>,
+        val shapes: List<Shape>, val connectors: List<Connector>, val fills: List<Fill>,
+        val order: List<String>, val page: PageSet,
+    )
 
     private class Step(val before: Snap, val after: Snap, val tf: Tf? = null)
 
-    private fun now() = Snap(items, texts, tables, order, page)
+    private fun now() = Snap(items, texts, tables, shapes, connectors, fills, order, page)
 
     private val undoStack = ArrayDeque<Step>()
     private val redoStack = ArrayDeque<Step>()
@@ -311,7 +338,8 @@ class PageModel(page: PageSet = A4_LINED) {
      */
     fun transform(ids: Set<String>, map: Affine): Boolean {
         endErase()
-        if (map.isIdentity || (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids })) return false
+        if (map.isIdentity || (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids } &&
+                shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids })) return false
         val after = items.map { if (it.id in ids) Item(it.id, it.tool, it.color, it.width, it.pts.map(map::apply)) else it }
         val scale = sqrt(abs(map.a * map.d - map.b * map.c)).toFloat()
         val turn = atan2(map.b, map.a).toFloat()
@@ -321,15 +349,98 @@ class PageModel(page: PageSet = A4_LINED) {
         val tablesAfter = tables.map {
             if (it.id in ids) it.copy(x = map.x(it.x, it.y), y = map.y(it.x, it.y), colWidths = it.colWidths.map { w -> w * scale }, rowHeights = it.rowHeights.map { h -> h * scale }) else it
         }
-        commit(now().copy(items = after, texts = textsAfter, tables = tablesAfter), Tf(items.filter { it.id in ids }.map { it.id }, map))
+        val shapesAfter = shapes.map {
+            if (it.id in ids) it.copy(
+                x = map.x(it.x, it.y), y = map.y(it.x, it.y), width = it.width * scale, height = it.height * scale, angle = it.angle + turn,
+                corner = it.corner * scale, fontSize = it.fontSize * scale,
+            ) else it
+        }
+        // A connector's free ends move with it; an end on a shape follows the shape.
+        fun end(e: End) = if (e.shape == null) End(null, 0, map.x(e.x, e.y), map.y(e.x, e.y)) else e
+        val connectorsAfter = connectors.map { if (it.id in ids) it.copy(from = end(it.from), to = end(it.to)) else it }
+        val fillsAfter = fills.map { if (it.id in ids) it.map(map) else it }
+        commit(
+            now().copy(items = after, texts = textsAfter, tables = tablesAfter, shapes = shapesAfter, connectors = connectorsAfter, fills = fillsAfter),
+            Tf(items.filter { it.id in ids }.map { it.id }, map),
+        )
         return true
     }
 
-    /** Deletes the strokes, text boxes and tables [ids] (whole). One undo step. */
+    /**
+     * Deletes the strokes, text boxes, tables, shapes, connectors and fills [ids] (whole). A connector left
+     * attached to a deleted shape stays, its end now free where it was. One undo step.
+     */
     fun delete(ids: Set<String>): Boolean {
         endErase()
-        if (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids }) return false
-        commit(now().copy(items = items.filter { it.id !in ids }, texts = texts.filter { it.id !in ids }, tables = tables.filter { it.id !in ids }))
+        if (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids } &&
+            shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids }) return false
+        val goneShapes = shapes.filter { it.id in ids }.mapTo(HashSet()) { it.id }
+        val kept = connectors.filter { it.id !in ids }.map { c ->
+            if (c.from.shape !in goneShapes && c.to.shape !in goneShapes) c else {
+                val (a, b) = c.resolve(::shapeOf)
+                c.copy(from = if (c.from.shape in goneShapes) End(null, 0, a.first, a.second) else c.from, to = if (c.to.shape in goneShapes) End(null, 0, b.first, b.second) else c.to)
+            }
+        }
+        commit(now().copy(
+            items = items.filter { it.id !in ids }, texts = texts.filter { it.id !in ids }, tables = tables.filter { it.id !in ids },
+            shapes = shapes.filter { it.id !in ids }, connectors = kept, fills = fills.filter { it.id !in ids },
+        ))
+        return true
+    }
+
+    /** A new shape, made by [make] from its new ID. One undo step. */
+    fun addShape(make: (String) -> Shape): Shape {
+        endErase()
+        val shape = make(newId())
+        commit(now().copy(shapes = shapes + shape))
+        return shape
+    }
+
+    /** Replaces every shape with the same ID as one in [list], all in one undo step (an edit, a restyle). False if none matches. */
+    fun setShapes(list: List<Shape>): Boolean {
+        endErase()
+        val by = list.associateBy { it.id }
+        if (shapes.none { it.id in by }) return false
+        commit(now().copy(shapes = shapes.map { by[it.id] ?: it }))
+        return true
+    }
+
+    fun setShape(shape: Shape) = setShapes(listOf(shape))
+
+    /** A new connector, made by [make] from its new ID. One undo step. */
+    fun addConnector(make: (String) -> Connector): Connector {
+        endErase()
+        val c = make(newId())
+        commit(now().copy(connectors = connectors + c))
+        return c
+    }
+
+    /** Replaces every connector with the same ID as one in [list], all in one undo step. False if none matches. */
+    fun setConnectors(list: List<Connector>): Boolean {
+        endErase()
+        val by = list.associateBy { it.id }
+        if (connectors.none { it.id in by }) return false
+        commit(now().copy(connectors = connectors.map { by[it.id] ?: it }))
+        return true
+    }
+
+    fun setConnector(c: Connector) = setConnectors(listOf(c))
+
+    /** A new fill of [color] in [rings] (see [Fill]); it goes at the bottom. Null (nothing added) if there are no rings. One undo step. */
+    fun addFill(color: Int, rings: List<List<Pair<Float, Float>>>): Fill? {
+        endErase()
+        if (rings.isEmpty() || rings.any { it.size < 3 }) return null
+        val fill = Fill(newId(), color, rings)
+        commit(now().copy(fills = fills + fill))
+        return fill
+    }
+
+    /** Replaces every fill with the same ID as one in [list] (a new colour), all in one undo step. False if none matches. */
+    fun setFills(list: List<Fill>): Boolean {
+        endErase()
+        val by = list.associateBy { it.id }
+        if (fills.none { it.id in by }) return false
+        commit(now().copy(fills = fills.map { by[it.id] ?: it }))
         return true
     }
 
@@ -363,20 +474,23 @@ class PageModel(page: PageSet = A4_LINED) {
     private fun commit(after: Snap, tf: Tf? = null) {
         val before = now()
         val settled = if (after.order === before.order) after.copy(order = settle(before.order, after)) else after
-        if (before.items === settled.items && before.texts === settled.texts && before.tables === settled.tables && before.order === settled.order && before.page == settled.page) return
+        if (before.items === settled.items && before.texts === settled.texts && before.tables === settled.tables &&
+            before.shapes === settled.shapes && before.connectors === settled.connectors && before.fills === settled.fills && before.order === settled.order && before.page == settled.page) return
         undoStack.addLast(Step(before, settled, tf))
         redoStack.clear()
         move(before, settled, tf)
     }
 
-    /** The layers after a change that did not name them: what is gone leaves, a new stroke or text box goes on top, a new table at the bottom. */
+    /** The layers after a change that did not name them: what is gone leaves, a new stroke, text box, shape or connector goes on top, a new table or fill at the bottom. */
     private fun settle(old: List<String>, to: Snap): List<String> {
         val have = HashSet<String>()
         to.items.mapTo(have) { it.id }; to.texts.mapTo(have) { it.id }; to.tables.mapTo(have) { it.id }
+        to.shapes.mapTo(have) { it.id }; to.connectors.mapTo(have) { it.id }; to.fills.mapTo(have) { it.id }
         val known = old.toHashSet()
         val kept = old.filter { it in have }
-        val top = to.items.filter { it.id !in known }.map { it.id } + to.texts.filter { it.id !in known }.map { it.id }
-        val bottom = to.tables.filter { it.id !in known }.map { it.id }
+        val top = to.items.filter { it.id !in known }.map { it.id } + to.texts.filter { it.id !in known }.map { it.id } +
+            to.shapes.filter { it.id !in known }.map { it.id } + to.connectors.filter { it.id !in known }.map { it.id }
+        val bottom = to.fills.filter { it.id !in known }.map { it.id } + to.tables.filter { it.id !in known }.map { it.id }
         return if (kept.size == old.size && top.isEmpty() && bottom.isEmpty()) old else bottom + kept + top
     }
 
@@ -432,11 +546,26 @@ class PageModel(page: PageSet = A4_LINED) {
         val tableWas = from.tables.associateBy { it.id }
         from.tables.filter { it.id !in tableNow }.forEach { log.add(Ev.TableRemoved(it.id)) }
         to.tables.filter { tableWas[it.id] !== it }.forEach { log.add(Ev.TableSet(it)) }
+        val shapeNow = to.shapes.mapTo(HashSet()) { it.id }
+        val shapeWas = from.shapes.associateBy { it.id }
+        from.shapes.filter { it.id !in shapeNow }.forEach { log.add(Ev.ShapeRemoved(it.id)) }
+        to.shapes.filter { shapeWas[it.id] !== it }.forEach { log.add(Ev.ShapeSet(it)) }
+        val connNow = to.connectors.mapTo(HashSet()) { it.id }
+        val connWas = from.connectors.associateBy { it.id }
+        from.connectors.filter { it.id !in connNow }.forEach { log.add(Ev.ConnectorRemoved(it.id)) }
+        to.connectors.filter { connWas[it.id] !== it }.forEach { log.add(Ev.ConnectorSet(it)) }
+        val fillNow = to.fills.mapTo(HashSet()) { it.id }
+        val fillWas = from.fills.associateBy { it.id }
+        from.fills.filter { it.id !in fillNow }.forEach { log.add(Ev.FillRemoved(it.id)) }
+        to.fills.filter { fillWas[it.id] !== it }.forEach { log.add(Ev.FillSet(it)) }
         if (to.page != from.page) log.add(Ev.PageChanged(to.page))
         logLayers(from, to)
         items = to.items
         texts = to.texts
         tables = to.tables
+        shapes = to.shapes
+        connectors = to.connectors
+        fills = to.fills
         page = to.page
         order = to.order
     }
@@ -449,6 +578,9 @@ class PageModel(page: PageSet = A4_LINED) {
         to.items.filter { it.id !in was }.forEach { plain.add(it.id) }
         to.texts.filter { it.id !in was }.forEach { plain.add(it.id) }
         to.tables.filter { it.id !in was }.forEach { plain.add(0, it.id) }
+        to.shapes.filter { it.id !in was }.forEach { plain.add(it.id) }
+        to.connectors.filter { it.id !in was }.forEach { plain.add(it.id) }
+        to.fills.filter { it.id !in was }.forEach { plain.add(0, it.id) }
         if (plain.size != to.order.size) return
         for (i in to.order.indices) {
             if (plain[i] == to.order[i]) continue

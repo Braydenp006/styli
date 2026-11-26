@@ -124,6 +124,155 @@ func (Template) EnumDescriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{1}
 }
 
+type LineStyle int32
+
+const (
+	LineStyle_LINE_SOLID  LineStyle = 0
+	LineStyle_LINE_DASHED LineStyle = 1
+)
+
+// Enum value maps for LineStyle.
+var (
+	LineStyle_name = map[int32]string{
+		0: "LINE_SOLID",
+		1: "LINE_DASHED",
+	}
+	LineStyle_value = map[string]int32{
+		"LINE_SOLID":  0,
+		"LINE_DASHED": 1,
+	}
+)
+
+func (x LineStyle) Enum() *LineStyle {
+	p := new(LineStyle)
+	*p = x
+	return p
+}
+
+func (x LineStyle) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LineStyle) Descriptor() protoreflect.EnumDescriptor {
+	return file_ink_proto_enumTypes[2].Descriptor()
+}
+
+func (LineStyle) Type() protoreflect.EnumType {
+	return &file_ink_proto_enumTypes[2]
+}
+
+func (x LineStyle) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LineStyle.Descriptor instead.
+func (LineStyle) EnumDescriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{2}
+}
+
+type ShapeKind int32
+
+const (
+	ShapeKind_SHAPE_RECT    ShapeKind = 0
+	ShapeKind_SHAPE_ELLIPSE ShapeKind = 1
+	// A closed outline through `vertices`; a triangle, diamond, star and the
+	// other premade shapes are all this.
+	ShapeKind_SHAPE_POLYGON ShapeKind = 2
+)
+
+// Enum value maps for ShapeKind.
+var (
+	ShapeKind_name = map[int32]string{
+		0: "SHAPE_RECT",
+		1: "SHAPE_ELLIPSE",
+		2: "SHAPE_POLYGON",
+	}
+	ShapeKind_value = map[string]int32{
+		"SHAPE_RECT":    0,
+		"SHAPE_ELLIPSE": 1,
+		"SHAPE_POLYGON": 2,
+	}
+)
+
+func (x ShapeKind) Enum() *ShapeKind {
+	p := new(ShapeKind)
+	*p = x
+	return p
+}
+
+func (x ShapeKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ShapeKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_ink_proto_enumTypes[3].Descriptor()
+}
+
+func (ShapeKind) Type() protoreflect.EnumType {
+	return &file_ink_proto_enumTypes[3]
+}
+
+func (x ShapeKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ShapeKind.Descriptor instead.
+func (ShapeKind) EnumDescriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{3}
+}
+
+type Arrowhead int32
+
+const (
+	Arrowhead_ARROW_NONE   Arrowhead = 0
+	Arrowhead_ARROW_OPEN   Arrowhead = 1 // two strokes, like >
+	Arrowhead_ARROW_FILLED Arrowhead = 2 // a solid triangle
+	Arrowhead_ARROW_DOT    Arrowhead = 3
+)
+
+// Enum value maps for Arrowhead.
+var (
+	Arrowhead_name = map[int32]string{
+		0: "ARROW_NONE",
+		1: "ARROW_OPEN",
+		2: "ARROW_FILLED",
+		3: "ARROW_DOT",
+	}
+	Arrowhead_value = map[string]int32{
+		"ARROW_NONE":   0,
+		"ARROW_OPEN":   1,
+		"ARROW_FILLED": 2,
+		"ARROW_DOT":    3,
+	}
+)
+
+func (x Arrowhead) Enum() *Arrowhead {
+	p := new(Arrowhead)
+	*p = x
+	return p
+}
+
+func (x Arrowhead) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Arrowhead) Descriptor() protoreflect.EnumDescriptor {
+	return file_ink_proto_enumTypes[4].Descriptor()
+}
+
+func (Arrowhead) Type() protoreflect.EnumType {
+	return &file_ink_proto_enumTypes[4]
+}
+
+func (x Arrowhead) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Arrowhead.Descriptor instead.
+func (Arrowhead) EnumDescriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{4}
+}
+
 type Record struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -276,6 +425,12 @@ type Event struct {
 	//	*Event_TableSet
 	//	*Event_TableRemoved
 	//	*Event_ZMoved
+	//	*Event_ShapeSet
+	//	*Event_ShapeRemoved
+	//	*Event_ConnectorSet
+	//	*Event_ConnectorRemoved
+	//	*Event_FillSet
+	//	*Event_FillRemoved
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -427,6 +582,60 @@ func (x *Event) GetZMoved() *ZMoved {
 	return nil
 }
 
+func (x *Event) GetShapeSet() *ShapeSet {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ShapeSet); ok {
+			return x.ShapeSet
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetShapeRemoved() *ShapeRemoved {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ShapeRemoved); ok {
+			return x.ShapeRemoved
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetConnectorSet() *ConnectorSet {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ConnectorSet); ok {
+			return x.ConnectorSet
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetConnectorRemoved() *ConnectorRemoved {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ConnectorRemoved); ok {
+			return x.ConnectorRemoved
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetFillSet() *FillSet {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_FillSet); ok {
+			return x.FillSet
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetFillRemoved() *FillRemoved {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_FillRemoved); ok {
+			return x.FillRemoved
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -467,6 +676,30 @@ type Event_ZMoved struct {
 	ZMoved *ZMoved `protobuf:"bytes,18,opt,name=z_moved,json=zMoved,proto3,oneof"`
 }
 
+type Event_ShapeSet struct {
+	ShapeSet *ShapeSet `protobuf:"bytes,19,opt,name=shape_set,json=shapeSet,proto3,oneof"`
+}
+
+type Event_ShapeRemoved struct {
+	ShapeRemoved *ShapeRemoved `protobuf:"bytes,20,opt,name=shape_removed,json=shapeRemoved,proto3,oneof"`
+}
+
+type Event_ConnectorSet struct {
+	ConnectorSet *ConnectorSet `protobuf:"bytes,21,opt,name=connector_set,json=connectorSet,proto3,oneof"`
+}
+
+type Event_ConnectorRemoved struct {
+	ConnectorRemoved *ConnectorRemoved `protobuf:"bytes,22,opt,name=connector_removed,json=connectorRemoved,proto3,oneof"`
+}
+
+type Event_FillSet struct {
+	FillSet *FillSet `protobuf:"bytes,23,opt,name=fill_set,json=fillSet,proto3,oneof"`
+}
+
+type Event_FillRemoved struct {
+	FillRemoved *FillRemoved `protobuf:"bytes,24,opt,name=fill_removed,json=fillRemoved,proto3,oneof"`
+}
+
 func (*Event_StrokeAdded) isEvent_Kind() {}
 
 func (*Event_StrokeErased) isEvent_Kind() {}
@@ -484,6 +717,18 @@ func (*Event_TableSet) isEvent_Kind() {}
 func (*Event_TableRemoved) isEvent_Kind() {}
 
 func (*Event_ZMoved) isEvent_Kind() {}
+
+func (*Event_ShapeSet) isEvent_Kind() {}
+
+func (*Event_ShapeRemoved) isEvent_Kind() {}
+
+func (*Event_ConnectorSet) isEvent_Kind() {}
+
+func (*Event_ConnectorRemoved) isEvent_Kind() {}
+
+func (*Event_FillSet) isEvent_Kind() {}
+
+func (*Event_FillRemoved) isEvent_Kind() {}
 
 type StrokeAdded struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -889,7 +1134,12 @@ type TableSet struct {
 	// The colour behind the whole table, drawn under its lines: 0xAARRGGBB, and a
 	// zero alpha (so zero, and so absent in a log written before this was added)
 	// means no fill.
-	Fill          uint32 `protobuf:"varint,7,opt,name=fill,proto3" json:"fill,omitempty"`
+	Fill uint32 `protobuf:"varint,7,opt,name=fill,proto3" json:"fill,omitempty"`
+	// One colour per cell, row by row from the top left (rows times columns of
+	// them), drawn over the table's own fill: 0xAARRGGBB, and a zero alpha means
+	// no fill for that cell. Empty (as in a log written before this was added)
+	// means no cell has one.
+	CellFills     []uint32 `protobuf:"varint,8,rep,packed,name=cell_fills,json=cellFills,proto3" json:"cell_fills,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -973,6 +1223,13 @@ func (x *TableSet) GetFill() uint32 {
 	return 0
 }
 
+func (x *TableSet) GetCellFills() []uint32 {
+	if x != nil {
+		return x.CellFills
+	}
+	return nil
+}
+
 type TableRemoved struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1009,9 +1266,10 @@ func (*TableRemoved) Descriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{9}
 }
 
-// Layers. A page's objects (strokes, text boxes, tables, and later shapes) sit
-// in one order, bottom to top. A reader keeps a list: a new stroke or text box
-// goes on top, a new table goes at the bottom, a removed one leaves the list.
+// Layers. A page's objects (strokes, text boxes, tables, shapes, connectors, fills) sit
+// in one order, bottom to top. A reader keeps a list: a new stroke, text box,
+// shape or connector goes on top, a new table or fill goes at the bottom, a
+// removed one leaves the list.
 // ZMoved then puts the object named by Event.id just above the object `above`,
 // or at the very bottom if `above` is empty. A writer emits one wherever the
 // list it means differs from what those rules give (a bring-to-front, a piece
@@ -1150,6 +1408,574 @@ func (x *PageSet) GetRow() int32 {
 	return 0
 }
 
+// The whole state of a shape: adding, moving, resizing, turning, restyling or
+// editing it is this event; the last one wins. The shape fills a box with its
+// top-left corner at (x, y), `width` by `height`, turned clockwise about (x, y)
+// by `angle` (0.01 degrees, like a text box). Drawn in the page's layers.
+type ShapeSet struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Kind   ShapeKind              `protobuf:"varint,1,opt,name=kind,proto3,enum=styli.ink.v1.ShapeKind" json:"kind,omitempty"`
+	X      int32                  `protobuf:"zigzag32,2,opt,name=x,proto3" json:"x,omitempty"`
+	Y      int32                  `protobuf:"zigzag32,3,opt,name=y,proto3" json:"y,omitempty"`
+	Width  uint32                 `protobuf:"varint,4,opt,name=width,proto3" json:"width,omitempty"`
+	Height uint32                 `protobuf:"varint,5,opt,name=height,proto3" json:"height,omitempty"`
+	Angle  int32                  `protobuf:"zigzag32,6,opt,name=angle,proto3" json:"angle,omitempty"`
+	// The outline: 0xAARRGGBB as on a light page (a zero alpha, so zero, means the
+	// page's ordinary ink colour), its width and its style.
+	Color     uint32    `protobuf:"varint,7,opt,name=color,proto3" json:"color,omitempty"`
+	LineWidth uint32    `protobuf:"varint,8,opt,name=line_width,json=lineWidth,proto3" json:"line_width,omitempty"`
+	LineStyle LineStyle `protobuf:"varint,9,opt,name=line_style,json=lineStyle,proto3,enum=styli.ink.v1.LineStyle" json:"line_style,omitempty"`
+	// The colour inside, 0xAARRGGBB; a zero alpha means none.
+	Fill uint32 `protobuf:"varint,10,opt,name=fill,proto3" json:"fill,omitempty"`
+	// SHAPE_RECT: the corner radius. Zero is square corners.
+	Corner uint32 `protobuf:"varint,11,opt,name=corner,proto3" json:"corner,omitempty"`
+	// SHAPE_POLYGON: x and y of each corner in turn, as a whole number of
+	// 1/10000 of the box's width and height (0 to 10000), clockwise.
+	Vertices []uint32 `protobuf:"varint,12,rep,packed,name=vertices,proto3" json:"vertices,omitempty"`
+	// Text inside, centred and wrapped to the box; colour as above.
+	Text          string `protobuf:"bytes,13,opt,name=text,proto3" json:"text,omitempty"`
+	TextColor     uint32 `protobuf:"varint,14,opt,name=text_color,json=textColor,proto3" json:"text_color,omitempty"`
+	FontSize      uint32 `protobuf:"varint,15,opt,name=font_size,json=fontSize,proto3" json:"font_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShapeSet) Reset() {
+	*x = ShapeSet{}
+	mi := &file_ink_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShapeSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShapeSet) ProtoMessage() {}
+
+func (x *ShapeSet) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShapeSet.ProtoReflect.Descriptor instead.
+func (*ShapeSet) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ShapeSet) GetKind() ShapeKind {
+	if x != nil {
+		return x.Kind
+	}
+	return ShapeKind_SHAPE_RECT
+}
+
+func (x *ShapeSet) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetWidth() uint32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetAngle() int32 {
+	if x != nil {
+		return x.Angle
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetColor() uint32 {
+	if x != nil {
+		return x.Color
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetLineWidth() uint32 {
+	if x != nil {
+		return x.LineWidth
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetLineStyle() LineStyle {
+	if x != nil {
+		return x.LineStyle
+	}
+	return LineStyle_LINE_SOLID
+}
+
+func (x *ShapeSet) GetFill() uint32 {
+	if x != nil {
+		return x.Fill
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetCorner() uint32 {
+	if x != nil {
+		return x.Corner
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetVertices() []uint32 {
+	if x != nil {
+		return x.Vertices
+	}
+	return nil
+}
+
+func (x *ShapeSet) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ShapeSet) GetTextColor() uint32 {
+	if x != nil {
+		return x.TextColor
+	}
+	return 0
+}
+
+func (x *ShapeSet) GetFontSize() uint32 {
+	if x != nil {
+		return x.FontSize
+	}
+	return 0
+}
+
+type ShapeRemoved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShapeRemoved) Reset() {
+	*x = ShapeRemoved{}
+	mi := &file_ink_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShapeRemoved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShapeRemoved) ProtoMessage() {}
+
+func (x *ShapeRemoved) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShapeRemoved.ProtoReflect.Descriptor instead.
+func (*ShapeRemoved) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{13}
+}
+
+// One end of a connector. With a `shape` the end sits on that shape's outline:
+// where the line from the shape's centre towards `anchor` crosses it (1 top,
+// 2 right, 3 bottom, 4 left: the middle of that side of the box), or towards
+// the connector's other end if `anchor` is 0. Without one it is the free point
+// (x, y). (x, y) is also where the end was when last written, for a reader
+// that cannot find the shape.
+type ConnectorEnd struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Shape         []byte                 `protobuf:"bytes,1,opt,name=shape,proto3" json:"shape,omitempty"`
+	Anchor        uint32                 `protobuf:"varint,2,opt,name=anchor,proto3" json:"anchor,omitempty"`
+	X             int32                  `protobuf:"zigzag32,3,opt,name=x,proto3" json:"x,omitempty"`
+	Y             int32                  `protobuf:"zigzag32,4,opt,name=y,proto3" json:"y,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectorEnd) Reset() {
+	*x = ConnectorEnd{}
+	mi := &file_ink_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorEnd) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorEnd) ProtoMessage() {}
+
+func (x *ConnectorEnd) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorEnd.ProtoReflect.Descriptor instead.
+func (*ConnectorEnd) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ConnectorEnd) GetShape() []byte {
+	if x != nil {
+		return x.Shape
+	}
+	return nil
+}
+
+func (x *ConnectorEnd) GetAnchor() uint32 {
+	if x != nil {
+		return x.Anchor
+	}
+	return 0
+}
+
+func (x *ConnectorEnd) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *ConnectorEnd) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+// The whole state of a connector, a straight line between two ends with an
+// optional arrowhead at each; the last event wins. It follows the shapes it is
+// attached to. Drawn in the page's layers.
+type ConnectorSet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	From          *ConnectorEnd          `protobuf:"bytes,1,opt,name=from,proto3" json:"from,omitempty"`
+	To            *ConnectorEnd          `protobuf:"bytes,2,opt,name=to,proto3" json:"to,omitempty"`
+	FromHead      Arrowhead              `protobuf:"varint,3,opt,name=from_head,json=fromHead,proto3,enum=styli.ink.v1.Arrowhead" json:"from_head,omitempty"`
+	ToHead        Arrowhead              `protobuf:"varint,4,opt,name=to_head,json=toHead,proto3,enum=styli.ink.v1.Arrowhead" json:"to_head,omitempty"`
+	Color         uint32                 `protobuf:"varint,5,opt,name=color,proto3" json:"color,omitempty"` // as a shape's outline colour
+	LineWidth     uint32                 `protobuf:"varint,6,opt,name=line_width,json=lineWidth,proto3" json:"line_width,omitempty"`
+	LineStyle     LineStyle              `protobuf:"varint,7,opt,name=line_style,json=lineStyle,proto3,enum=styli.ink.v1.LineStyle" json:"line_style,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectorSet) Reset() {
+	*x = ConnectorSet{}
+	mi := &file_ink_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorSet) ProtoMessage() {}
+
+func (x *ConnectorSet) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorSet.ProtoReflect.Descriptor instead.
+func (*ConnectorSet) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ConnectorSet) GetFrom() *ConnectorEnd {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *ConnectorSet) GetTo() *ConnectorEnd {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+func (x *ConnectorSet) GetFromHead() Arrowhead {
+	if x != nil {
+		return x.FromHead
+	}
+	return Arrowhead_ARROW_NONE
+}
+
+func (x *ConnectorSet) GetToHead() Arrowhead {
+	if x != nil {
+		return x.ToHead
+	}
+	return Arrowhead_ARROW_NONE
+}
+
+func (x *ConnectorSet) GetColor() uint32 {
+	if x != nil {
+		return x.Color
+	}
+	return 0
+}
+
+func (x *ConnectorSet) GetLineWidth() uint32 {
+	if x != nil {
+		return x.LineWidth
+	}
+	return 0
+}
+
+func (x *ConnectorSet) GetLineStyle() LineStyle {
+	if x != nil {
+		return x.LineStyle
+	}
+	return LineStyle_LINE_SOLID
+}
+
+type ConnectorRemoved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectorRemoved) Reset() {
+	*x = ConnectorRemoved{}
+	mi := &file_ink_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorRemoved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorRemoved) ProtoMessage() {}
+
+func (x *ConnectorRemoved) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorRemoved.ProtoReflect.Descriptor instead.
+func (*ConnectorRemoved) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{16}
+}
+
+// Paint poured into a closed area: filled rings (the first is the outside, any
+// others are holes, even-odd), delta-coded like a stroke. A fill is only
+// colour, it does not follow the lines that closed the area. New ones go at
+// the bottom of the layers.
+type Ring struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X0            int32                  `protobuf:"zigzag32,1,opt,name=x0,proto3" json:"x0,omitempty"`
+	Y0            int32                  `protobuf:"zigzag32,2,opt,name=y0,proto3" json:"y0,omitempty"`
+	Dx            []int32                `protobuf:"zigzag32,3,rep,packed,name=dx,proto3" json:"dx,omitempty"`
+	Dy            []int32                `protobuf:"zigzag32,4,rep,packed,name=dy,proto3" json:"dy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Ring) Reset() {
+	*x = Ring{}
+	mi := &file_ink_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Ring) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Ring) ProtoMessage() {}
+
+func (x *Ring) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Ring.ProtoReflect.Descriptor instead.
+func (*Ring) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *Ring) GetX0() int32 {
+	if x != nil {
+		return x.X0
+	}
+	return 0
+}
+
+func (x *Ring) GetY0() int32 {
+	if x != nil {
+		return x.Y0
+	}
+	return 0
+}
+
+func (x *Ring) GetDx() []int32 {
+	if x != nil {
+		return x.Dx
+	}
+	return nil
+}
+
+func (x *Ring) GetDy() []int32 {
+	if x != nil {
+		return x.Dy
+	}
+	return nil
+}
+
+type FillSet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Color         uint32                 `protobuf:"varint,1,opt,name=color,proto3" json:"color,omitempty"` // 0xAARRGGBB as on a light page
+	Rings         []*Ring                `protobuf:"bytes,2,rep,name=rings,proto3" json:"rings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FillSet) Reset() {
+	*x = FillSet{}
+	mi := &file_ink_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FillSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FillSet) ProtoMessage() {}
+
+func (x *FillSet) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FillSet.ProtoReflect.Descriptor instead.
+func (*FillSet) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *FillSet) GetColor() uint32 {
+	if x != nil {
+		return x.Color
+	}
+	return 0
+}
+
+func (x *FillSet) GetRings() []*Ring {
+	if x != nil {
+		return x.Rings
+	}
+	return nil
+}
+
+type FillRemoved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FillRemoved) Reset() {
+	*x = FillRemoved{}
+	mi := &file_ink_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FillRemoved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FillRemoved) ProtoMessage() {}
+
+func (x *FillRemoved) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FillRemoved.ProtoReflect.Descriptor instead.
+func (*FillRemoved) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{19}
+}
+
 var File_ink_proto protoreflect.FileDescriptor
 
 const file_ink_proto_rawDesc = "" +
@@ -1160,7 +1986,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x05event\x18\x02 \x01(\v2\x13.styli.ink.v1.EventH\x00R\x05eventB\x06\n" +
 	"\x04body\"\"\n" +
 	"\x06Header\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\"\x87\x05\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\"\x87\b\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\tR\x06device\x12\x10\n" +
@@ -1176,7 +2002,13 @@ const file_ink_proto_rawDesc = "" +
 	"\bpage_set\x18\x0f \x01(\v2\x15.styli.ink.v1.PageSetH\x00R\apageSet\x125\n" +
 	"\ttable_set\x18\x10 \x01(\v2\x16.styli.ink.v1.TableSetH\x00R\btableSet\x12A\n" +
 	"\rtable_removed\x18\x11 \x01(\v2\x1a.styli.ink.v1.TableRemovedH\x00R\ftableRemoved\x12/\n" +
-	"\az_moved\x18\x12 \x01(\v2\x14.styli.ink.v1.ZMovedH\x00R\x06zMovedB\x06\n" +
+	"\az_moved\x18\x12 \x01(\v2\x14.styli.ink.v1.ZMovedH\x00R\x06zMoved\x125\n" +
+	"\tshape_set\x18\x13 \x01(\v2\x16.styli.ink.v1.ShapeSetH\x00R\bshapeSet\x12A\n" +
+	"\rshape_removed\x18\x14 \x01(\v2\x1a.styli.ink.v1.ShapeRemovedH\x00R\fshapeRemoved\x12A\n" +
+	"\rconnector_set\x18\x15 \x01(\v2\x1a.styli.ink.v1.ConnectorSetH\x00R\fconnectorSet\x12M\n" +
+	"\x11connector_removed\x18\x16 \x01(\v2\x1e.styli.ink.v1.ConnectorRemovedH\x00R\x10connectorRemoved\x122\n" +
+	"\bfill_set\x18\x17 \x01(\v2\x15.styli.ink.v1.FillSetH\x00R\afillSet\x12>\n" +
+	"\ffill_removed\x18\x18 \x01(\v2\x19.styli.ink.v1.FillRemovedH\x00R\vfillRemovedB\x06\n" +
 	"\x04kind\"\xd9\x01\n" +
 	"\vStrokeAdded\x12&\n" +
 	"\x04tool\x18\x01 \x01(\x0e2\x12.styli.ink.v1.ToolR\x04tool\x12\x14\n" +
@@ -1207,7 +2039,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x05color\x18\x06 \x01(\rR\x05color\x12\x1c\n" +
 	"\thighlight\x18\a \x01(\rR\thighlight\x12\x14\n" +
 	"\x05angle\x18\b \x01(\x11R\x05angle\"\x10\n" +
-	"\x0eTextBoxRemoved\"\xb7\x01\n" +
+	"\x0eTextBoxRemoved\"\xda\x01\n" +
 	"\bTableSet\x12\f\n" +
 	"\x01x\x18\x01 \x01(\x11R\x01x\x12\f\n" +
 	"\x01y\x18\x02 \x01(\x11R\x01y\x12!\n" +
@@ -1218,7 +2050,9 @@ const file_ink_proto_rawDesc = "" +
 	"\n" +
 	"line_width\x18\x05 \x01(\rR\tlineWidth\x12\x14\n" +
 	"\x05color\x18\x06 \x01(\rR\x05color\x12\x12\n" +
-	"\x04fill\x18\a \x01(\rR\x04fill\"\x0e\n" +
+	"\x04fill\x18\a \x01(\rR\x04fill\x12!\n" +
+	"\n" +
+	"cell_fills\x18\b \x03(\rB\x02\x10\x01R\tcellFills\"\x0e\n" +
 	"\fTableRemoved\"\x1e\n" +
 	"\x06ZMoved\x12\x14\n" +
 	"\x05above\x18\x01 \x01(\fR\x05above\"\xab\x01\n" +
@@ -1228,14 +2062,76 @@ const file_ink_proto_rawDesc = "" +
 	"\btemplate\x18\x03 \x01(\x0e2\x16.styli.ink.v1.TemplateR\btemplate\x12\x1a\n" +
 	"\binfinite\x18\x04 \x01(\bR\binfinite\x12\x10\n" +
 	"\x03col\x18\x05 \x01(\x11R\x03col\x12\x10\n" +
-	"\x03row\x18\x06 \x01(\x11R\x03row**\n" +
+	"\x03row\x18\x06 \x01(\x11R\x03row\"\xa0\x03\n" +
+	"\bShapeSet\x12+\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x17.styli.ink.v1.ShapeKindR\x04kind\x12\f\n" +
+	"\x01x\x18\x02 \x01(\x11R\x01x\x12\f\n" +
+	"\x01y\x18\x03 \x01(\x11R\x01y\x12\x14\n" +
+	"\x05width\x18\x04 \x01(\rR\x05width\x12\x16\n" +
+	"\x06height\x18\x05 \x01(\rR\x06height\x12\x14\n" +
+	"\x05angle\x18\x06 \x01(\x11R\x05angle\x12\x14\n" +
+	"\x05color\x18\a \x01(\rR\x05color\x12\x1d\n" +
+	"\n" +
+	"line_width\x18\b \x01(\rR\tlineWidth\x126\n" +
+	"\n" +
+	"line_style\x18\t \x01(\x0e2\x17.styli.ink.v1.LineStyleR\tlineStyle\x12\x12\n" +
+	"\x04fill\x18\n" +
+	" \x01(\rR\x04fill\x12\x16\n" +
+	"\x06corner\x18\v \x01(\rR\x06corner\x12\x1e\n" +
+	"\bvertices\x18\f \x03(\rB\x02\x10\x01R\bvertices\x12\x12\n" +
+	"\x04text\x18\r \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"text_color\x18\x0e \x01(\rR\ttextColor\x12\x1b\n" +
+	"\tfont_size\x18\x0f \x01(\rR\bfontSize\"\x0e\n" +
+	"\fShapeRemoved\"X\n" +
+	"\fConnectorEnd\x12\x14\n" +
+	"\x05shape\x18\x01 \x01(\fR\x05shape\x12\x16\n" +
+	"\x06anchor\x18\x02 \x01(\rR\x06anchor\x12\f\n" +
+	"\x01x\x18\x03 \x01(\x11R\x01x\x12\f\n" +
+	"\x01y\x18\x04 \x01(\x11R\x01y\"\xbf\x02\n" +
+	"\fConnectorSet\x12.\n" +
+	"\x04from\x18\x01 \x01(\v2\x1a.styli.ink.v1.ConnectorEndR\x04from\x12*\n" +
+	"\x02to\x18\x02 \x01(\v2\x1a.styli.ink.v1.ConnectorEndR\x02to\x124\n" +
+	"\tfrom_head\x18\x03 \x01(\x0e2\x17.styli.ink.v1.ArrowheadR\bfromHead\x120\n" +
+	"\ato_head\x18\x04 \x01(\x0e2\x17.styli.ink.v1.ArrowheadR\x06toHead\x12\x14\n" +
+	"\x05color\x18\x05 \x01(\rR\x05color\x12\x1d\n" +
+	"\n" +
+	"line_width\x18\x06 \x01(\rR\tlineWidth\x126\n" +
+	"\n" +
+	"line_style\x18\a \x01(\x0e2\x17.styli.ink.v1.LineStyleR\tlineStyle\"\x12\n" +
+	"\x10ConnectorRemoved\"N\n" +
+	"\x04Ring\x12\x0e\n" +
+	"\x02x0\x18\x01 \x01(\x11R\x02x0\x12\x0e\n" +
+	"\x02y0\x18\x02 \x01(\x11R\x02y0\x12\x12\n" +
+	"\x02dx\x18\x03 \x03(\x11B\x02\x10\x01R\x02dx\x12\x12\n" +
+	"\x02dy\x18\x04 \x03(\x11B\x02\x10\x01R\x02dy\"I\n" +
+	"\aFillSet\x12\x14\n" +
+	"\x05color\x18\x01 \x01(\rR\x05color\x12(\n" +
+	"\x05rings\x18\x02 \x03(\v2\x12.styli.ink.v1.RingR\x05rings\"\r\n" +
+	"\vFillRemoved**\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
 	"\x10TOOL_HIGHLIGHTER\x10\x01*E\n" +
 	"\bTemplate\x12\x12\n" +
 	"\x0eTEMPLATE_BLANK\x10\x00\x12\x12\n" +
 	"\x0eTEMPLATE_LINED\x10\x01\x12\x11\n" +
-	"\rTEMPLATE_GRID\x10\x02B6\n" +
+	"\rTEMPLATE_GRID\x10\x02*,\n" +
+	"\tLineStyle\x12\x0e\n" +
+	"\n" +
+	"LINE_SOLID\x10\x00\x12\x0f\n" +
+	"\vLINE_DASHED\x10\x01*A\n" +
+	"\tShapeKind\x12\x0e\n" +
+	"\n" +
+	"SHAPE_RECT\x10\x00\x12\x11\n" +
+	"\rSHAPE_ELLIPSE\x10\x01\x12\x11\n" +
+	"\rSHAPE_POLYGON\x10\x02*L\n" +
+	"\tArrowhead\x12\x0e\n" +
+	"\n" +
+	"ARROW_NONE\x10\x00\x12\x0e\n" +
+	"\n" +
+	"ARROW_OPEN\x10\x01\x12\x10\n" +
+	"\fARROW_FILLED\x10\x02\x12\r\n" +
+	"\tARROW_DOT\x10\x03B6\n" +
 	"\x13app.styli.ink.protoP\x01Z\x1dstyli/core/internal/ink/inkpbb\x06proto3"
 
 var (
@@ -1250,43 +2146,68 @@ func file_ink_proto_rawDescGZIP() []byte {
 	return file_ink_proto_rawDescData
 }
 
-var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_ink_proto_goTypes = []any{
-	(Tool)(0),              // 0: styli.ink.v1.Tool
-	(Template)(0),          // 1: styli.ink.v1.Template
-	(*Record)(nil),         // 2: styli.ink.v1.Record
-	(*Header)(nil),         // 3: styli.ink.v1.Header
-	(*Event)(nil),          // 4: styli.ink.v1.Event
-	(*StrokeAdded)(nil),    // 5: styli.ink.v1.StrokeAdded
-	(*StrokeErased)(nil),   // 6: styli.ink.v1.StrokeErased
-	(*Transformed)(nil),    // 7: styli.ink.v1.Transformed
-	(*TextBoxSet)(nil),     // 8: styli.ink.v1.TextBoxSet
-	(*TextBoxRemoved)(nil), // 9: styli.ink.v1.TextBoxRemoved
-	(*TableSet)(nil),       // 10: styli.ink.v1.TableSet
-	(*TableRemoved)(nil),   // 11: styli.ink.v1.TableRemoved
-	(*ZMoved)(nil),         // 12: styli.ink.v1.ZMoved
-	(*PageSet)(nil),        // 13: styli.ink.v1.PageSet
+	(Tool)(0),                // 0: styli.ink.v1.Tool
+	(Template)(0),            // 1: styli.ink.v1.Template
+	(LineStyle)(0),           // 2: styli.ink.v1.LineStyle
+	(ShapeKind)(0),           // 3: styli.ink.v1.ShapeKind
+	(Arrowhead)(0),           // 4: styli.ink.v1.Arrowhead
+	(*Record)(nil),           // 5: styli.ink.v1.Record
+	(*Header)(nil),           // 6: styli.ink.v1.Header
+	(*Event)(nil),            // 7: styli.ink.v1.Event
+	(*StrokeAdded)(nil),      // 8: styli.ink.v1.StrokeAdded
+	(*StrokeErased)(nil),     // 9: styli.ink.v1.StrokeErased
+	(*Transformed)(nil),      // 10: styli.ink.v1.Transformed
+	(*TextBoxSet)(nil),       // 11: styli.ink.v1.TextBoxSet
+	(*TextBoxRemoved)(nil),   // 12: styli.ink.v1.TextBoxRemoved
+	(*TableSet)(nil),         // 13: styli.ink.v1.TableSet
+	(*TableRemoved)(nil),     // 14: styli.ink.v1.TableRemoved
+	(*ZMoved)(nil),           // 15: styli.ink.v1.ZMoved
+	(*PageSet)(nil),          // 16: styli.ink.v1.PageSet
+	(*ShapeSet)(nil),         // 17: styli.ink.v1.ShapeSet
+	(*ShapeRemoved)(nil),     // 18: styli.ink.v1.ShapeRemoved
+	(*ConnectorEnd)(nil),     // 19: styli.ink.v1.ConnectorEnd
+	(*ConnectorSet)(nil),     // 20: styli.ink.v1.ConnectorSet
+	(*ConnectorRemoved)(nil), // 21: styli.ink.v1.ConnectorRemoved
+	(*Ring)(nil),             // 22: styli.ink.v1.Ring
+	(*FillSet)(nil),          // 23: styli.ink.v1.FillSet
+	(*FillRemoved)(nil),      // 24: styli.ink.v1.FillRemoved
 }
 var file_ink_proto_depIdxs = []int32{
-	3,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
-	4,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
-	5,  // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
-	6,  // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
-	7,  // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
-	8,  // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
-	9,  // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
-	13, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
-	10, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
-	11, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
-	12, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
-	0,  // 11: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
-	1,  // 12: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	6,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
+	7,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
+	8,  // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
+	9,  // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
+	10, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
+	11, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
+	12, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
+	16, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
+	13, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
+	14, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
+	15, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
+	17, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
+	18, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
+	20, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
+	21, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
+	23, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
+	24, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
+	0,  // 17: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
+	1,  // 18: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
+	3,  // 19: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
+	2,  // 20: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
+	19, // 21: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
+	19, // 22: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
+	4,  // 23: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
+	4,  // 24: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
+	2,  // 25: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
+	22, // 26: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_ink_proto_init() }
@@ -1308,14 +2229,20 @@ func file_ink_proto_init() {
 		(*Event_TableSet)(nil),
 		(*Event_TableRemoved)(nil),
 		(*Event_ZMoved)(nil),
+		(*Event_ShapeSet)(nil),
+		(*Event_ShapeRemoved)(nil),
+		(*Event_ConnectorSet)(nil),
+		(*Event_ConnectorRemoved)(nil),
+		(*Event_FillSet)(nil),
+		(*Event_FillRemoved)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ink_proto_rawDesc), len(file_ink_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   12,
+			NumEnums:      5,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

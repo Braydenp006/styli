@@ -49,6 +49,12 @@ message Event {
     TableSet table_set = 16;
     TableRemoved table_removed = 17;
     ZMoved z_moved = 18;
+    ShapeSet shape_set = 19;
+    ShapeRemoved shape_removed = 20;
+    ConnectorSet connector_set = 21;
+    ConnectorRemoved connector_removed = 22;
+    FillSet fill_set = 23;
+    FillRemoved fill_removed = 24;
   }
 }
 
@@ -126,13 +132,19 @@ message TableSet {
   // zero alpha (so zero, and so absent in a log written before this was added)
   // means no fill.
   uint32 fill = 7;
+  // One colour per cell, row by row from the top left (rows times columns of
+  // them), drawn over the table's own fill: 0xAARRGGBB, and a zero alpha means
+  // no fill for that cell. Empty (as in a log written before this was added)
+  // means no cell has one.
+  repeated uint32 cell_fills = 8 [packed = true];
 }
 
 message TableRemoved {}
 
-// Layers. A page's objects (strokes, text boxes, tables, and later shapes) sit
-// in one order, bottom to top. A reader keeps a list: a new stroke or text box
-// goes on top, a new table goes at the bottom, a removed one leaves the list.
+// Layers. A page's objects (strokes, text boxes, tables, shapes, connectors, fills) sit
+// in one order, bottom to top. A reader keeps a list: a new stroke, text box,
+// shape or connector goes on top, a new table or fill goes at the bottom, a
+// removed one leaves the list.
 // ZMoved then puts the object named by Event.id just above the object `above`,
 // or at the very bottom if `above` is empty. A writer emits one wherever the
 // list it means differs from what those rules give (a bring-to-front, a piece
@@ -161,3 +173,100 @@ message PageSet {
   sint32 col = 5;
   sint32 row = 6;
 }
+
+enum LineStyle {
+  LINE_SOLID = 0;
+  LINE_DASHED = 1;
+}
+
+enum ShapeKind {
+  SHAPE_RECT = 0;
+  SHAPE_ELLIPSE = 1;
+  // A closed outline through `vertices`; a triangle, diamond, star and the
+  // other premade shapes are all this.
+  SHAPE_POLYGON = 2;
+}
+
+// The whole state of a shape: adding, moving, resizing, turning, restyling or
+// editing it is this event; the last one wins. The shape fills a box with its
+// top-left corner at (x, y), `width` by `height`, turned clockwise about (x, y)
+// by `angle` (0.01 degrees, like a text box). Drawn in the page's layers.
+message ShapeSet {
+  ShapeKind kind = 1;
+  sint32 x = 2;
+  sint32 y = 3;
+  uint32 width = 4;
+  uint32 height = 5;
+  sint32 angle = 6;
+  // The outline: 0xAARRGGBB as on a light page (a zero alpha, so zero, means the
+  // page's ordinary ink colour), its width and its style.
+  uint32 color = 7;
+  uint32 line_width = 8;
+  LineStyle line_style = 9;
+  // The colour inside, 0xAARRGGBB; a zero alpha means none.
+  uint32 fill = 10;
+  // SHAPE_RECT: the corner radius. Zero is square corners.
+  uint32 corner = 11;
+  // SHAPE_POLYGON: x and y of each corner in turn, as a whole number of
+  // 1/10000 of the box's width and height (0 to 10000), clockwise.
+  repeated uint32 vertices = 12 [packed = true];
+  // Text inside, centred and wrapped to the box; colour as above.
+  string text = 13;
+  uint32 text_color = 14;
+  uint32 font_size = 15;
+}
+
+message ShapeRemoved {}
+
+enum Arrowhead {
+  ARROW_NONE = 0;
+  ARROW_OPEN = 1;    // two strokes, like >
+  ARROW_FILLED = 2;  // a solid triangle
+  ARROW_DOT = 3;
+}
+
+// One end of a connector. With a `shape` the end sits on that shape's outline:
+// where the line from the shape's centre towards `anchor` crosses it (1 top,
+// 2 right, 3 bottom, 4 left: the middle of that side of the box), or towards
+// the connector's other end if `anchor` is 0. Without one it is the free point
+// (x, y). (x, y) is also where the end was when last written, for a reader
+// that cannot find the shape.
+message ConnectorEnd {
+  bytes shape = 1;
+  uint32 anchor = 2;
+  sint32 x = 3;
+  sint32 y = 4;
+}
+
+// The whole state of a connector, a straight line between two ends with an
+// optional arrowhead at each; the last event wins. It follows the shapes it is
+// attached to. Drawn in the page's layers.
+message ConnectorSet {
+  ConnectorEnd from = 1;
+  ConnectorEnd to = 2;
+  Arrowhead from_head = 3;
+  Arrowhead to_head = 4;
+  uint32 color = 5;  // as a shape's outline colour
+  uint32 line_width = 6;
+  LineStyle line_style = 7;
+}
+
+message ConnectorRemoved {}
+
+// Paint poured into a closed area: filled rings (the first is the outside, any
+// others are holes, even-odd), delta-coded like a stroke. A fill is only
+// colour, it does not follow the lines that closed the area. New ones go at
+// the bottom of the layers.
+message Ring {
+  sint32 x0 = 1;
+  sint32 y0 = 2;
+  repeated sint32 dx = 3 [packed = true];
+  repeated sint32 dy = 4 [packed = true];
+}
+
+message FillSet {
+  uint32 color = 1;  // 0xAARRGGBB as on a light page
+  repeated Ring rings = 2;
+}
+
+message FillRemoved {}

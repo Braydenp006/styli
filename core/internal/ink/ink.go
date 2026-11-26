@@ -154,6 +154,18 @@ func kind(e *inkpb.Event) string {
 		return "table-removed"
 	case *inkpb.Event_ZMoved:
 		return "z-moved"
+	case *inkpb.Event_ShapeSet:
+		return "shape-set"
+	case *inkpb.Event_ShapeRemoved:
+		return "shape-removed"
+	case *inkpb.Event_ConnectorSet:
+		return "connector-set"
+	case *inkpb.Event_ConnectorRemoved:
+		return "connector-removed"
+	case *inkpb.Event_FillSet:
+		return "fill-set"
+	case *inkpb.Event_FillRemoved:
+		return "fill-removed"
 	case *inkpb.Event_PageSet:
 		return "page-set"
 	}
@@ -173,7 +185,24 @@ func detail(e *inkpb.Event) string {
 		return fmt.Sprintf("at=(%d,%d) width=%d size=%d color=%08x highlight=%08x angle=%d %q", t.X, t.Y, t.Width, t.FontSize, t.Color, t.Highlight, t.Angle, t.Text)
 	case *inkpb.Event_TableSet:
 		t := k.TableSet
-		return fmt.Sprintf("at=(%d,%d) cols=%v rows=%v line=%d color=%08x fill=%08x", t.X, t.Y, t.ColWidths, t.RowHeights, t.LineWidth, t.Color, t.Fill)
+		return fmt.Sprintf("at=(%d,%d) cols=%v rows=%v line=%d color=%08x fill=%08x cells=%d", t.X, t.Y, t.ColWidths, t.RowHeights, t.LineWidth, t.Color, t.Fill, len(t.CellFills))
+	case *inkpb.Event_ShapeSet:
+		h := k.ShapeSet
+		return fmt.Sprintf("%s at=(%d,%d) size=%dx%d angle=%d line=%08x/%d/%s fill=%08x corner=%d vertices=%d %q", strings.ToLower(strings.TrimPrefix(h.Kind.String(), "SHAPE_")), h.X, h.Y, h.Width, h.Height, h.Angle, h.Color, h.LineWidth, strings.ToLower(strings.TrimPrefix(h.LineStyle.String(), "LINE_")), h.Fill, h.Corner, len(h.Vertices)/2, h.Text)
+	case *inkpb.Event_ConnectorSet:
+		c := k.ConnectorSet
+		end := func(e *inkpb.ConnectorEnd) string {
+			if e == nil {
+				return "(none)"
+			}
+			if len(e.Shape) > 0 {
+				return fmt.Sprintf("%x/%d@(%d,%d)", e.Shape, e.Anchor, e.X, e.Y)
+			}
+			return fmt.Sprintf("(%d,%d)", e.X, e.Y)
+		}
+		return fmt.Sprintf("%s -> %s heads=%s,%s line=%08x/%d/%s", end(c.From), end(c.To), strings.ToLower(strings.TrimPrefix(c.FromHead.String(), "ARROW_")), strings.ToLower(strings.TrimPrefix(c.ToHead.String(), "ARROW_")), c.Color, c.LineWidth, strings.ToLower(strings.TrimPrefix(c.LineStyle.String(), "LINE_")))
+	case *inkpb.Event_FillSet:
+		return fmt.Sprintf("color=%08x rings=%d", k.FillSet.Color, len(k.FillSet.Rings))
 	case *inkpb.Event_ZMoved:
 		if len(k.ZMoved.Above) == 0 {
 			return "to the bottom"
