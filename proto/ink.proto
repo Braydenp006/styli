@@ -118,4 +118,9 @@ message PageSet {
   uint32 height = 2;
   Template template = 3;
   bool infinite = 4;
+  // Where the page sits in its notebook's grid: column and row, counted from
+  // the first page at (0, 0), rows downward and columns to the right. Zero, and
+  // so absent in a log written before these were added, is that first cell.
+  sint32 col = 5;
+  sint32 row = 6;
 }

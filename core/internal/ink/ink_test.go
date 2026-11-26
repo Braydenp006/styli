@@ -195,3 +195,26 @@ func TestTextBoxColours(t *testing.T) {
 		t.Errorf("dump:\n%s", out.String())
 	}
 }
+
+// A page's place in the notebook's grid survives the log, and a page from before it existed sits at the first cell.
+func TestPageCell(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	set := func(seq uint64, ps *inkpb.PageSet) *inkpb.Event {
+		return &inkpb.Event{Device: "tab", Seq: seq, Kind: &inkpb.Event_PageSet{PageSet: ps}}
+	}
+	if err := Append(p, set(1, &inkpb.PageSet{Width: 21000, Height: 29700}), set(2, &inkpb.PageSet{Width: 21000, Height: 29700, Col: -1, Row: 3})); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 2 {
+		t.Fatal(l, err)
+	}
+	if a, b := l.Events[0].GetPageSet(), l.Events[1].GetPageSet(); a.Col != 0 || a.Row != 0 || b.Col != -1 || b.Row != 3 {
+		t.Errorf("cells: %v %v", a, b)
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	if !strings.Contains(out.String(), "infinite=false cell=(-1,3)") || strings.Count(out.String(), "cell=") != 1 {
+		t.Errorf("dump:\n%s", out.String())
+	}
+}

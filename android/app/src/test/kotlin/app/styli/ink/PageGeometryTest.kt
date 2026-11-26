@@ -108,4 +108,18 @@ class PageGeometryTest {
         assertTrue(PageGeometry.lines(t, b, 500, 0, g.scale).size < 700 / 6 + 2)
         assertTrue(PageGeometry.lines(l, r, 500, 0, g.scale).size < 1000 / 6 + 2)
     }
+
+    @Test
+    fun panByReportsWhatTheEdgesWouldNotLetMove() {
+        val g = a4() // fitted to the width, at the top: the sides have no room, the top is at its limit
+        val (leftX, leftY) = g.panBy(30.0, 100.0)
+        assertEquals(30.0, leftX, 1e-9) // no room sideways: all of it is left over
+        assertEquals(100.0, leftY, 1e-9) // already at the top edge
+        val ty = g.ty
+        val (_, within) = g.panBy(0.0, -50.0) // down the page is allowed
+        assertEquals(0.0, within, 1e-9)
+        assertEquals(ty - 50.0, g.ty, 1e-9)
+        val (_, partly) = g.panBy(0.0, 80.0) // 50 back up to the top, 30 beyond it
+        assertEquals(30.0, partly, 1e-9)
+    }
 }

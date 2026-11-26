@@ -1,5 +1,7 @@
 package app.styli.ink
 
+import app.styli.ink.proto.PageSet
+import app.styli.ink.proto.Template
 import app.styli.ink.proto.Tool
 import java.security.SecureRandom
 import kotlin.math.abs
@@ -61,6 +63,8 @@ sealed interface Ev {
     data class Erased(val id: String) : Ev
     data class TextSet(val box: TextBox) : Ev
     data class TextRemoved(val id: String) : Ev
+    /** The page's size, template or fixed-or-infinite changed; the whole new state. */
+    data class PageChanged(val page: PageSet) : Ev
     /** The strokes [ids] were moved or resized by [map]. */
     data class Transformed(val ids: List<String>, val map: Affine) : Ev
 }
@@ -75,7 +79,11 @@ sealed interface Ev {
  * written as the opposite events, never as a deletion, because the log only grows. Erased strokes come back
  * under their old ID.
  */
-class PageModel {
+class PageModel(page: PageSet = A4_LINED) {
+    /** The page's size and look. Changing it is one undo step; the strokes and text boxes are not touched. */
+    var page: PageSet = page
+        private set
+
     var items: List<Item> = emptyList()
         private set
 
@@ -89,6 +97,7 @@ class PageModel {
     private class Step(
         val before: List<Item>, val after: List<Item>,
         val textsBefore: List<TextBox>, val textsAfter: List<TextBox>,
+        val pageBefore: PageSet, val pageAfter: PageSet,
         val tf: Tf? = null,
     )
 
@@ -104,6 +113,18 @@ class PageModel {
         val item = Item(newId(), tool, color, width, pts)
         commit(items, items + item)
         return item
+    }
+
+    /**
+     * Sets the page's size, template or fixed-or-infinite. One undo step; false if nothing changes or the size is
+     * not a real one (a side of zero). Ink and text boxes stay where they are, even if they now fall off the
+     * sheet: nothing is lost, and the old size brings them back.
+     */
+    fun setPage(p: PageSet): Boolean {
+        endErase()
+        if (p.width == 0 || p.height == 0 || p == page) return false
+        commit(items, items, null, texts, p)
+        return true
     }
 
     /** A new text box. One undo step. */
@@ -193,7 +214,7 @@ class PageModel {
         endErase()
         val s = undoStack.removeLastOrNull() ?: return false
         redoStack.addLast(s)
-        move(items, s.before, texts, s.textsBefore, s.tf?.let { Tf(it.ids, it.map.inverse()) })
+        move(items, s.before, texts, s.textsBefore, page, s.pageBefore, s.tf?.let { Tf(it.ids, it.map.inverse()) })
         return true
     }
 
@@ -201,18 +222,21 @@ class PageModel {
         endErase()
         val s = redoStack.removeLastOrNull() ?: return false
         undoStack.addLast(s)
-        move(items, s.after, texts, s.textsAfter, s.tf)
+        move(items, s.after, texts, s.textsAfter, page, s.pageAfter, s.tf)
         return true
     }
 
-    private fun commit(before: List<Item>, after: List<Item>, tf: Tf? = null, textsAfter: List<TextBox> = texts) {
-        if (before === after && textsAfter === texts) return
-        undoStack.addLast(Step(before, after, texts, textsAfter, tf))
+    private fun commit(before: List<Item>, after: List<Item>, tf: Tf? = null, textsAfter: List<TextBox> = texts, pageAfter: PageSet = page) {
+        if (before === after && textsAfter === texts && pageAfter == page) return
+        undoStack.addLast(Step(before, after, texts, textsAfter, page, pageAfter, tf))
         redoStack.clear()
-        move(before, after, texts, textsAfter, tf)
+        move(before, after, texts, textsAfter, page, pageAfter, tf)
     }
 
-    private fun move(from: List<Item>, to: List<Item>, textsFrom: List<TextBox>, textsTo: List<TextBox>, tf: Tf? = null) {
+    private fun move(
+        from: List<Item>, to: List<Item>, textsFrom: List<TextBox>, textsTo: List<TextBox>,
+        pageFrom: PageSet, pageTo: PageSet, tf: Tf? = null,
+    ) {
         val now = to.mapTo(HashSet()) { it.id }
         val was = from.mapTo(HashSet()) { it.id }
         from.filter { it.id !in now }.forEach { log.add(Ev.Erased(it.id)) }
@@ -222,12 +246,17 @@ class PageModel {
         val textWas = textsFrom.associateBy { it.id }
         textsFrom.filter { it.id !in textNow }.forEach { log.add(Ev.TextRemoved(it.id)) }
         textsTo.filter { textWas[it.id] !== it }.forEach { log.add(Ev.TextSet(it)) }
+        if (pageTo != pageFrom) log.add(Ev.PageChanged(pageTo))
         items = to
         texts = textsTo
+        page = pageTo
     }
 
-    private companion object {
-        val random = SecureRandom()
-        fun newId(): String = ByteArray(16).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
+    companion object {
+        /** A new page: A4 portrait, lined, fixed. */
+        val A4_LINED: PageSet = PageSet.newBuilder().setWidth(21000).setHeight(29700).setTemplate(Template.TEMPLATE_LINED).build()
+
+        private val random = SecureRandom()
+        private fun newId(): String = ByteArray(16).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
     }
 }

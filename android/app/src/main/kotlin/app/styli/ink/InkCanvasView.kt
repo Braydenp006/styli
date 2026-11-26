@@ -57,7 +57,18 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** What the pen in your hand does. */
     enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, TEXT }
 
-    private val model = PageModel()
+    /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
+    val notebook = Notebook()
+    private val model get() = notebook.current
+
+    /** The page being shown. */
+    val page get() = model.page
+
+    /** Called when another page is shown (turned to, added, or taken back by an undo). */
+    var onPageChanged: (() -> Unit)? = null
+
+    /** Which finger pulls past a page's edge may add a page (see [PageTurn]). */
+    var flow = Flow.DOWN
     private val placed = HashMap<String, Placed>() // drawn strokes by ID, built once (pruned after every change)
     private val renderer = CanvasStrokeRenderer.create()
 
@@ -104,6 +115,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             override fun onDraw(canvas: Canvas) {
                 val g = geometry
                 positionEditor()
+                canvas.save()
+                canvas.translate((pullX * PULL_SHIFT).toFloat(), (pullY * PULL_SHIFT).toFloat()) // the page follows a pull a little
                 canvas.drawColor(if (g.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
                 canvas.save()
                 if (!g.infinite) {
@@ -146,6 +159,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawSnapPreview(canvas)
                 drawTextDragPreview(canvas)
                 canvas.restore()
+                canvas.restore() // the pull's shift
+                drawPullHint(canvas)
             }
         }
 
@@ -181,13 +196,25 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
     }
 
-    /** Shows this page: its size, template and whether it is fixed or an infinite canvas. */
+    private var shown: PageSet? = null
+
+    /** Changes this page's size, template or fixed-or-infinite (one undo step) and shows it. */
     fun setPage(page: PageSet) {
+        // A page's place in the grid is not part of its size and look: keep it.
+        if (model.setPage(page.toBuilder().setCol(model.page.col).setRow(model.page.row).build())) showPage()
+    }
+
+    /** Draws the model's page: its size, template and whether it is fixed or an infinite canvas. */
+    private fun showPage() {
+        val page = model.page
+        shown = page
         geometry = PageGeometry(page.width, page.height, page.infinite, pxPerUnit)
         template = page.template
         geometry.fit(width, height)
         pageLayer.invalidate()
     }
+
+    init { showPage() } // the model starts on its own default page
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         geometry.fit(w, h)
@@ -249,7 +276,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
     }
 
-    fun undo() { finishText(); changed(model.undo()) }
+    fun undo() {
+        finishText()
+        // A page added by a pull and left untouched goes away with the undo; anything else undoes a step.
+        if (!model.canUndo && notebook.removeMade()) pageChanged() else changed(model.undo())
+    }
     fun redo() { finishText(); changed(model.redo()) }
 
     private fun changed(did: Boolean) {
@@ -259,6 +290,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         placed.keys.retainAll(ids)
         layouts.keys.retainAll(textIds)
         selection.retainAll(ids + textIds)
+        if (model.page != shown) showPage() // an undo or redo of a page change
         pageLayer.invalidate()
     }
 
@@ -384,6 +416,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             val i = event.actionIndex
             if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !textTapping) {
                 gestureActive = false // a pen landing after a palm takes over
+                pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
                 // The back end of the S Pen always erases whole strokes.
@@ -905,13 +938,76 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
         if (n > 0) { cx /= n; cy /= n }
         if (action == MotionEvent.ACTION_MOVE) {
-            geometry.panBy((cx - lastX).toDouble(), (cy - lastY).toDouble())
+            val dx = (cx - lastX).toDouble()
+            val dy = (cy - lastY).toDouble()
+            val (leftX, leftY) = geometry.panBy(dx, dy)
+            if (!geometry.infinite && n == 1) { // one finger pulls at an edge; two fingers pinch
+                pullX = PageTurn.pull(pullX, dx, leftX)
+                pullY = PageTurn.pull(pullY, dy, leftY)
+            }
             pageLayer.invalidate()
         }
         lastX = cx
         lastY = cy
+        if (action == MotionEvent.ACTION_UP) endPull()
+        if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; pageLayer.invalidate() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) gestureActive = false
         return true
+    }
+
+    // ---- Pages: pull a fixed page past its edge with a finger to go to the page there, or add one. ----
+
+    private var pullX = 0.0 // how far the finger has pulled past an edge, in screen pixels
+    private var pullY = 0.0
+
+    private fun endPull() {
+        val pull = PageTurn.direction(pullX, pullY)
+        pullX = 0.0
+        pullY = 0.0
+        if (pull != null) {
+            val (dir, px) = pull
+            val next = notebook.neighbour(model, dir)
+            when (PageTurn.decide(px / pxPerUnit, dir, next != null, flow)) {
+                Turn.GO -> { finishText(); notebook.go(next!!); pageChanged() }
+                Turn.ADD -> { finishText(); notebook.add(model, dir); pageChanged() }
+                Turn.NONE -> {}
+            }
+        }
+        pageLayer.invalidate()
+    }
+
+    /** Another page is current: drop what belonged to the old one and show the new one. */
+    private fun pageChanged() {
+        selection.clear()
+        loop.clear()
+        dragMap = null
+        placed.clear()
+        layouts.clear()
+        showPage()
+        onPageChanged?.invoke()
+    }
+
+    private val hintBg = Paint().apply { color = 0xE6322B3A.toInt(); isAntiAlias = true }
+    private val hintText = Paint().apply { color = Color.WHITE; textSize = 40f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+
+    /** Once the pull is long enough to count, say what letting go will do. */
+    private fun drawPullHint(canvas: Canvas) {
+        val (dir, px) = PageTurn.direction(pullX, pullY) ?: return
+        val next = notebook.neighbour(model, dir)
+        val text = when (PageTurn.decide(px / pxPerUnit, dir, next != null, flow)) {
+            Turn.ADD -> "Release to add a page"
+            Turn.GO -> if (dir == Dir.UP || dir == Dir.LEFT) "Release for the previous page" else "Release for the next page"
+            Turn.NONE -> return
+        }
+        val w = hintText.measureText(text) + 56f
+        val h = 80f
+        val cx = when (dir) { Dir.LEFT -> w / 2 + 16f; Dir.RIGHT -> width - w / 2 - 16f; else -> width / 2f }
+        // Clear of the system bars (the view runs under them); the top also has the throwaway button row.
+        @Suppress("DEPRECATION") val bottom = rootWindowInsets?.systemWindowInsetBottom ?: 0
+        @Suppress("DEPRECATION") val top = rootWindowInsets?.systemWindowInsetTop ?: 0
+        val cy = when (dir) { Dir.UP -> top + 200f + h / 2; Dir.DOWN -> height - bottom - h / 2 - 24f; else -> height / 2f }
+        canvas.drawRoundRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, 40f, 40f, hintBg)
+        canvas.drawText(text, cx, cy + 14f, hintText)
     }
 
     private companion object {
@@ -920,6 +1016,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val GRID_STEP = 500 // 5 mm
         const val HANDLE_PX = 36f
         const val ROTATE_STEM_PX = 56f
+        const val PULL_SHIFT = 0.4f // how much of a pull the page follows
         const val TEXT_MIN_WIDTH = 1000f // a dragged box narrower than 10 mm is not a box
         const val TEXT_SIZE = 400f // text 4 mm high
     }

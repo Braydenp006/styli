@@ -1,5 +1,6 @@
 package app.styli.ink
 
+import app.styli.ink.proto.PageSet
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -7,9 +8,34 @@ import kotlin.math.min
 
 /** Page sizes in the format's unit, 0.01 mm. */
 object PageSizes {
+    private const val A4_SHORT = 21000
+    private const val A4_LONG = 29700
+    private const val LETTER_SHORT = 21590
+    private const val LETTER_LONG = 27940
+
     fun of(letter: Boolean, landscape: Boolean): Pair<Int, Int> {
-        val (w, h) = if (letter) 21590 to 27940 else 21000 to 29700
+        val (w, h) = if (letter) LETTER_SHORT to LETTER_LONG else A4_SHORT to A4_LONG
         return if (landscape) h to w else w to h
+    }
+
+    /** A page's orientation is not stored: it is whether the width is larger than the height (a square is portrait). */
+    fun isLandscape(p: PageSet) = p.width > p.height
+
+    /** Letter, A4, or null for any other size (a PDF's own, say). */
+    fun isLetter(p: PageSet): Boolean? = when (minOf(p.width, p.height) to maxOf(p.width, p.height)) {
+        LETTER_SHORT to LETTER_LONG -> true
+        A4_SHORT to A4_LONG -> false
+        else -> null
+    }
+
+    /** The same page turned to [landscape] or portrait: the sides swap, the paper stays the same. */
+    fun withOrientation(p: PageSet, landscape: Boolean): PageSet =
+        if (isLandscape(p) == landscape) p else p.toBuilder().setWidth(p.height).setHeight(p.width).build()
+
+    /** The same page on Letter or A4 paper, keeping its orientation. */
+    fun withPaper(p: PageSet, letter: Boolean): PageSet {
+        val (w, h) = of(letter, isLandscape(p))
+        return p.toBuilder().setWidth(w).setHeight(h).build()
     }
 }
 
@@ -70,10 +96,14 @@ class PageGeometry(
         clamp()
     }
 
-    fun panBy(dx: Double, dy: Double) {
+    /** Pans, as far as the page's edges allow; returns the part of (dx, dy) that could not be applied. */
+    fun panBy(dx: Double, dy: Double): Pair<Double, Double> {
+        val x0 = tx
+        val y0 = ty
         tx += dx
         ty += dy
         clamp()
+        return (dx - (tx - x0)) to (dy - (ty - y0))
     }
 
     private fun clamp() {

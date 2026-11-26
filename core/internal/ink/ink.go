@@ -167,7 +167,11 @@ func detail(e *inkpb.Event) string {
 		return fmt.Sprintf("at=(%d,%d) width=%d size=%d color=%08x highlight=%08x angle=%d %q", t.X, t.Y, t.Width, t.FontSize, t.Color, t.Highlight, t.Angle, t.Text)
 	case *inkpb.Event_PageSet:
 		p := k.PageSet
-		return fmt.Sprintf("%dx%d %s infinite=%v", p.Width, p.Height, strings.ToLower(strings.TrimPrefix(p.Template.String(), "TEMPLATE_")), p.Infinite)
+		out := fmt.Sprintf("%dx%d %s infinite=%v", p.Width, p.Height, strings.ToLower(strings.TrimPrefix(p.Template.String(), "TEMPLATE_")), p.Infinite)
+		if p.Col != 0 || p.Row != 0 {
+			out += fmt.Sprintf(" cell=(%d,%d)", p.Col, p.Row)
+		}
+		return out
 	}
 	return ""
 }

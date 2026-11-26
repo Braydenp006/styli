@@ -826,11 +826,16 @@ func (*TextBoxRemoved) Descriptor() ([]byte, []int) {
 // The page's size and look. A page's orientation is whether width is larger
 // than height. With infinite set the size is only the starting view.
 type PageSet struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Width         uint32                 `protobuf:"varint,1,opt,name=width,proto3" json:"width,omitempty"`
-	Height        uint32                 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
-	Template      Template               `protobuf:"varint,3,opt,name=template,proto3,enum=styli.ink.v1.Template" json:"template,omitempty"`
-	Infinite      bool                   `protobuf:"varint,4,opt,name=infinite,proto3" json:"infinite,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Width    uint32                 `protobuf:"varint,1,opt,name=width,proto3" json:"width,omitempty"`
+	Height   uint32                 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	Template Template               `protobuf:"varint,3,opt,name=template,proto3,enum=styli.ink.v1.Template" json:"template,omitempty"`
+	Infinite bool                   `protobuf:"varint,4,opt,name=infinite,proto3" json:"infinite,omitempty"`
+	// Where the page sits in its notebook's grid: column and row, counted from
+	// the first page at (0, 0), rows downward and columns to the right. Zero, and
+	// so absent in a log written before these were added, is that first cell.
+	Col           int32 `protobuf:"zigzag32,5,opt,name=col,proto3" json:"col,omitempty"`
+	Row           int32 `protobuf:"zigzag32,6,opt,name=row,proto3" json:"row,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -893,6 +898,20 @@ func (x *PageSet) GetInfinite() bool {
 	return false
 }
 
+func (x *PageSet) GetCol() int32 {
+	if x != nil {
+		return x.Col
+	}
+	return 0
+}
+
+func (x *PageSet) GetRow() int32 {
+	if x != nil {
+		return x.Row
+	}
+	return 0
+}
+
 var File_ink_proto protoreflect.FileDescriptor
 
 const file_ink_proto_rawDesc = "" +
@@ -947,12 +966,14 @@ const file_ink_proto_rawDesc = "" +
 	"\x05color\x18\x06 \x01(\rR\x05color\x12\x1c\n" +
 	"\thighlight\x18\a \x01(\rR\thighlight\x12\x14\n" +
 	"\x05angle\x18\b \x01(\x11R\x05angle\"\x10\n" +
-	"\x0eTextBoxRemoved\"\x87\x01\n" +
+	"\x0eTextBoxRemoved\"\xab\x01\n" +
 	"\aPageSet\x12\x14\n" +
 	"\x05width\x18\x01 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x122\n" +
 	"\btemplate\x18\x03 \x01(\x0e2\x16.styli.ink.v1.TemplateR\btemplate\x12\x1a\n" +
-	"\binfinite\x18\x04 \x01(\bR\binfinite**\n" +
+	"\binfinite\x18\x04 \x01(\bR\binfinite\x12\x10\n" +
+	"\x03col\x18\x05 \x01(\x11R\x03col\x12\x10\n" +
+	"\x03row\x18\x06 \x01(\x11R\x03row**\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
 	"\x10TOOL_HIGHLIGHTER\x10\x01*E\n" +
