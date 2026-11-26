@@ -80,38 +80,61 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     var onZoom: ((Int) -> Unit)? = null
     private var shownZoom = -1
 
-    /** Zooms into [p]: fitted to the width of the screen with its top left at the corner, in one smooth movement. It becomes the page being worked on. */
+    /** Flies into [p]: fitted to the screen and in the middle of it, as one camera move. It becomes the page being worked on. */
     private fun zoomIntoPage(p: PageModel) {
+        if (p !== work) becomeWork(p)
+        flyTo(p)
+    }
+
+    /**
+     * Moves the view to show [p] fitted to the width of the screen, in one smooth "fly" (the zoom changes by the same
+     * factor each moment, so it feels even, while the page glides to its place and lands with a small overshoot). A
+     * page shorter than the screen is centred up and down; a taller one has its top at the margin.
+     */
+    private fun flyTo(p: PageModel) {
         val l = layout ?: return
         stopGlide()
-        if (p !== work) becomeWork(p)
         val s1 = vp.fitScale(maxOf(1, p.page.width))
         val (ox, oy) = l.origin(p)
-        val tx1 = PageGeometry.MARGIN - ox * s1
-        val ty1 = PageGeometry.MARGIN - oy * s1
-        val s0 = vp.scale; val tx0 = vp.tx; val ty0 = vp.ty
+        val pw = p.page.width.toDouble(); val ph = p.page.height.toDouble()
+        fun place(size: Double, view: Int, origin: Double): Double =
+            if (size * s1 + 2 * PageGeometry.MARGIN <= view) (view - size * s1) / 2 - origin * s1 else PageGeometry.MARGIN - origin * s1
+        val tx1 = place(pw, width, ox)
+        val ty1 = place(ph, height, oy)
+        // The page's own middle travels from where it is on the screen to the middle of where it will be.
+        val cx = ox + pw / 2; val cy = oy + ph / 2
+        val s0 = vp.scale
+        val px0 = vp.tx + cx * s0; val py0 = vp.ty + cy * s0
+        val px1 = tx1 + cx * s1; val py1 = ty1 + cy * s1
+        val ease = android.view.animation.AccelerateDecelerateInterpolator()
+        val land = android.view.animation.OvershootInterpolator(0.9f)
         snapAnim?.cancel()
         snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 320
-            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            duration = 520
             addUpdateListener {
-                val f = it.animatedFraction.toDouble()
-                vp.viewTo(s0 + (s1 - s0) * f, tx0 + (tx1 - tx0) * f, ty0 + (ty1 - ty0) * f)
+                val f = it.animatedFraction
+                val e = land.getInterpolation(ease.getInterpolation(f)).toDouble()
+                val s = s0 * Math.pow(s1 / s0, e)
+                vp.viewTo(s, px0 + (px1 - px0) * e - cx * s, py0 + (py1 - py0) * e - cy * s)
                 pageLayer.invalidate()
             }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { vp.viewTo(s1, tx1, ty1); pageLayer.invalidate() }
+            })
             start()
         }
     }
 
-    /** Zooms back to the page fitted to the width of the screen, showing the page being worked on (a canvas goes back to real size, about the middle of the screen). */
+    /**
+     * Fits the page in the middle of the screen to its width and centres it, in one smooth fly (a canvas goes back to
+     * real size, about the middle of the screen). It is the page you are looking at, not the one last tapped or drawn on.
+     */
     fun fitToScreen() {
         stopGlide()
-        if (vp.infinite) vp.zoomBy(vp.fitScale() / vp.scale, width / 2.0, height / 2.0)
-        else {
-            vp.fit(width, height, maxOf(1, work.page.width))
-            layout?.origin(work)?.let { vp.scrollTo(it.first, it.second) }
-        }
-        pageLayer.invalidate()
+        if (vp.infinite) { vp.zoomBy(vp.fitScale() / vp.scale, width / 2.0, height / 2.0); pageLayer.invalidate(); return }
+        val p = centrePage() ?: return
+        if (p !== work) becomeWork(p)
+        flyTo(p)
     }
 
     /** How scrolling goes over several pages: free across them, or locked to the grid (see [ScrollMode]). */
@@ -322,7 +345,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         } else {
             val l = NotebookLayout(pages)
             layout = l
-            vp = PageGeometry(l.worldW, l.worldH, false, pxPerUnit)
+            vp = PageGeometry(l.worldW, l.worldH, false, pxPerUnit, l.firstColW, l.lastColW, l.firstRowH, l.lastRowH)
         }
         vp.fit(width, height, maxOf(1, work.page.width))
         if (!reset && old.infinite == vp.infinite) vp.restore(old)
@@ -1477,6 +1500,31 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             selection.clear()
             changed(true)
         }
+    }
+
+    /** The clips saved so far (in memory only for now). */
+    val shelf = ClipShelf()
+
+    /** Saves the selection as a clip; false if nothing is selected. */
+    fun saveSelection(): Clip? {
+        val c = Clip.of("", model, selection, ::boxOf) ?: return null
+        return shelf.add(c)
+    }
+
+    /** Puts a copy of [clip] in the middle of what the view shows (kept on the sheet), selected, so it can be moved at once. One undo step. */
+    fun placeClip(clip: Clip) {
+        tool = Tool.LASSO // a selection only lives while the lasso is the tool
+        val g = geometry
+        val (vl, vt, vr, vb) = g.visible()
+        var x = ((vl + vr) / 2).toFloat() - clip.width / 2
+        var y = ((vt + vb) / 2).toFloat() - clip.height / 2
+        if (!g.infinite) {
+            x = x.coerceIn(0f, maxOf(0f, g.pageW - clip.width))
+            y = y.coerceIn(0f, maxOf(0f, g.pageH - clip.height))
+        }
+        val ids = model.paste(clip, x, y)
+        selection.addAll(ids)
+        changed(ids.isNotEmpty())
     }
 
     /** Moves the selected things in the layers (front, back, or one step). */

@@ -419,6 +419,22 @@ class PageModel(page: PageSet = A4_LINED) {
     }
 
     /**
+     * Puts a copy of [clip] on the page with its top-left corner at (x, y). Everything gets a new ID; the layers keep
+     * the clip's order, all above what is already there. One undo step. Returns the new IDs (none if the clip is empty).
+     */
+    fun paste(clip: Clip, x: Float, y: Float): Set<String> {
+        endErase()
+        if (clip.isEmpty) return emptySet()
+        val ids = HashMap<String, String>()
+        val c = clip.moved(x, y) { ids.getOrPut(it) { newId() } }
+        commit(now().copy(
+            items = items + c.items, texts = texts + c.texts, tables = tables + c.tables,
+            shapes = shapes + c.shapes, connectors = connectors + c.connectors, fills = fills + c.fills, order = order + c.order,
+        ))
+        return ids.values.toSet()
+    }
+
+    /**
      * Deletes the strokes, text boxes, tables, shapes, connectors and fills [ids] (whole). A connector left
      * attached to a deleted shape stays, its end now free where it was. One undo step.
      */

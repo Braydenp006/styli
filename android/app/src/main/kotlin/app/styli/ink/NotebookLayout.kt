@@ -18,6 +18,12 @@ class NotebookLayout(private val pages: List<PageModel>, private val gap: Int = 
     val worldW: Int = max(1, cols.sumOf { colW.getValue(it) } + gap * (cols.size - 1))
     val worldH: Int = max(1, rows.sumOf { rowH.getValue(it) } + gap * (rows.size - 1))
 
+    /** The width of the first and last column and the height of the first and last row: how far the ends of the surface can scroll. */
+    val firstColW: Int = colW.getValue(cols.first())
+    val lastColW: Int = colW.getValue(cols.last())
+    val firstRowH: Int = rowH.getValue(rows.first())
+    val lastRowH: Int = rowH.getValue(rows.last())
+
     /** Each column's left edge and width, for settling a horizontal scroll onto one. */
     val columns: List<Pair<Double, Double>> = cols.map { colX.getValue(it).toDouble() to colW.getValue(it).toDouble() }
 

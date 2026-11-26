@@ -173,4 +173,17 @@ class PageGeometryTest {
         g.viewTo(1e-9, 0.0, 0.0)
         assertTrue(g.scale > 1e-9)
     }
+
+    @Test
+    fun theFirstAndLastPageOfASurfaceCanScrollToTheMiddleOfTheScreen() {
+        // Two pages 29700 tall with a gap, on a 2000 px tall screen at 0.0549 px per unit: each is 1630 px, shorter than the screen.
+        val g = PageGeometry(21000, 60200, false, 0.1, 21000, 21000, 29700, 29700)
+        g.fit(1200, 2000, 21000)
+        val s = g.scale
+        g.viewTo(s, PageGeometry.MARGIN, 1e6) // as far down (towards the start) as it goes
+        assertEquals((2000 - 29700 * s) / 2, g.ty, 1e-6) // the first page in the middle of the screen
+        g.viewTo(s, PageGeometry.MARGIN, -1e6)
+        assertEquals(2000 - 29700 * s - (2000 - 29700 * s) / 2 - 30500 * s, g.ty, 1e-6) // the last page in the middle
+        assertEquals((2000 - 29700 * s) / 2, g.toScreenY(60200.0 - 29700.0), 1e-6) // its top is as far from the top as its bottom is from the bottom
+    }
 }

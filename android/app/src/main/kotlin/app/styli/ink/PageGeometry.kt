@@ -52,6 +52,14 @@ class PageGeometry(
     val infinite: Boolean,
     /** Screen pixels per unit when the page is shown at its real size. */
     private val oneToOne: Double,
+    /**
+     * For a surface of several pages: the width (or height) of the page at the start and at the end along each axis, so
+     * the first and last page can scroll to the middle of the screen. A single page is both.
+     */
+    private val startW: Int = pageW,
+    private val endW: Int = pageW,
+    private val startH: Int = pageH,
+    private val endH: Int = pageH,
 ) {
     var scale = oneToOne
         private set
@@ -165,13 +173,15 @@ class PageGeometry(
             tx = tx.coerceIn(-LIMIT * scale, LIMIT * scale)
             ty = ty.coerceIn(-LIMIT * scale, LIMIT * scale)
         } else {
-            tx = clampAxis(tx, pageW * scale, viewW)
-            ty = clampAxis(ty, pageH * scale, viewH)
+            tx = clampAxis(tx, pageW * scale, viewW, startW * scale, endW * scale)
+            ty = clampAxis(ty, pageH * scale, viewH, startH * scale, endH * scale)
         }
     }
 
-    private fun clampAxis(t: Double, size: Double, view: Int): Double =
-        if (size + 2 * MARGIN <= view) (view - size) / 2 else t.coerceIn(view - size - MARGIN, MARGIN)
+    /** A surface that fits the screen is centred; a bigger one scrolls until its first (or last) page is at the margin, or in the middle if it is smaller than the screen. */
+    private fun clampAxis(t: Double, size: Double, view: Int, startPx: Double, endPx: Double): Double =
+        if (size + 2 * MARGIN <= view) (view - size) / 2
+        else t.coerceIn(view - size - max(MARGIN, (view - endPx) / 2), max(MARGIN, (view - startPx) / 2))
 
     fun toPageX(sx: Double) = (sx - tx) / scale
     fun toPageY(sy: Double) = (sy - ty) / scale

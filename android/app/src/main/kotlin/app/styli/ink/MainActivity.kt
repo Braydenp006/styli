@@ -17,6 +17,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
@@ -96,6 +100,9 @@ private fun InkScreen() {
     var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
     var textColor by remember { mutableStateOf(0) }
     var textHighlight by remember { mutableStateOf(0) }
+    var clips by remember { mutableStateOf(emptyList<Clip>()) }
+    var naming by remember { mutableStateOf<Clip?>(null) } // the clip being named
+    var nameText by remember { mutableStateOf("") }
 
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
@@ -242,6 +249,26 @@ private fun InkScreen() {
                 }
             }
 
+            // Saved groups of things: save what the lasso has selected, then put a copy on any page.
+            Menu("Clipboard") { close ->
+                Item("Save selection") {
+                    canvas?.saveSelection()?.let { clips = canvas!!.shelf.clips; naming = it; nameText = it.name }
+                    close()
+                }
+                Heading(if (clips.isEmpty()) "Nothing saved yet (lasso something, then save it)" else "Tap to place on this page")
+                for (c in clips) DropdownMenuItem(
+                    text = { Text(c.name) },
+                    leadingIcon = { ClipPreview(c) },
+                    onClick = { canvas?.placeClip(c); close() },
+                    trailingIcon = {
+                        Row {
+                            TextButton(onClick = { naming = c; nameText = c.name; close() }) { Text("Rename") }
+                            TextButton(onClick = { canvas?.shelf?.remove(c); clips = canvas!!.shelf.clips }) { Text("Delete") }
+                        }
+                    },
+                )
+            }
+
             Menu("Ruler") { close ->
                 Choice(if (canvas?.ruler != null) "Hide ruler" else "Show ruler", false) { canvas?.toggleRuler(); close() }
                 Choice("Angle shown on lines", angleOn) { angleOn = !angleOn; canvas?.lineAngle = angleOn; close() }
@@ -327,6 +354,16 @@ private fun InkScreen() {
                         }
                     }
                 },
+            )
+        }
+        naming?.let { clip ->
+            val done = { naming = null }
+            AlertDialog(
+                onDismissRequest = done,
+                confirmButton = { TextButton(onClick = { canvas?.shelf?.rename(clip, nameText); clips = canvas!!.shelf.clips; done() }) { Text("Save") } },
+                dismissButton = { TextButton(onClick = done) { Text("Cancel") } },
+                title = { Text("Clip name") },
+                text = { OutlinedTextField(nameText, { nameText = it }, singleLine = true) },
             )
         }
         if (picking != 0) {
@@ -436,4 +473,28 @@ private fun eraseLabel(e: EraseOnly) = when (e) {
     EraseOnly.CONNECTORS -> "connectors only"
     EraseOnly.TABLES -> "tables only"
     EraseOnly.FILLS -> "fills only"
+}
+
+/**
+ * A small picture of a clip: a rough one (strokes as lines, boxes, tables and shapes as outlines), not the real
+ * drawing, which is tied to the page view. Enough to tell clips apart.
+ */
+@Composable
+private fun ClipPreview(c: Clip) {
+    Canvas(Modifier.size(48.dp)) {
+        val k = minOf(size.width / maxOf(c.width, 1f), size.height / maxOf(c.height, 1f))
+        fun p(x: Float, y: Float) = Offset(x * k, y * k)
+        fun poly(pts: List<Pair<Float, Float>>, closed: Boolean) {
+            for (i in 0 until pts.size - (if (closed) 0 else 1)) {
+                val (ax, ay) = pts[i]; val (bx, by) = pts[(i + 1) % pts.size]
+                drawLine(Color.DarkGray, p(ax, ay), p(bx, by), 2f)
+            }
+        }
+        for (i in c.items) poly(i.pts.map { it.x to it.y }, false)
+        for (t in c.tables) poly(listOf(t.x to t.y, t.x + t.width to t.y, t.x + t.width to t.y + t.height, t.x to t.y + t.height), true)
+        for (s in c.shapes) poly(s.corners(), true)
+        for (t in c.texts) poly(t.corners(t.fontSize * 1.3f), true)
+        for (f in c.fills) for (r in f.rings) poly(r, true)
+        for (n in c.connectors) poly(n.path { id -> c.shapes.firstOrNull { it.id == id } }, false)
+    }
 }
