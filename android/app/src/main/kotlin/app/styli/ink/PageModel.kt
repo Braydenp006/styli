@@ -10,6 +10,8 @@ class Item(val id: String, val tool: Tool, val color: Int, val width: Int, val p
 sealed interface Ev {
     data class Added(val item: Item) : Ev
     data class Erased(val id: String) : Ev
+    /** The strokes [ids] were moved or resized by [map]. */
+    data class Transformed(val ids: List<String>, val map: Affine) : Ev
 }
 
 /**
@@ -27,7 +29,8 @@ class PageModel {
     /** Events not yet written anywhere. */
     val log = mutableListOf<Ev>()
 
-    private class Step(val before: List<Item>, val after: List<Item>)
+    private class Tf(val ids: List<String>, val map: Affine)
+    private class Step(val before: List<Item>, val after: List<Item>, val tf: Tf? = null)
 
     private val undoStack = ArrayDeque<Step>()
     private val redoStack = ArrayDeque<Step>()
@@ -66,6 +69,23 @@ class PageModel {
         return true
     }
 
+    /** Moves or resizes the strokes [ids] by [map]. They keep their IDs. One undo step. */
+    fun transform(ids: Set<String>, map: Affine): Boolean {
+        endErase()
+        if (map.isIdentity || items.none { it.id in ids }) return false
+        val after = items.map { if (it.id in ids) Item(it.id, it.tool, it.color, it.width, it.pts.map(map::apply)) else it }
+        commit(items, after, Tf(items.filter { it.id in ids }.map { it.id }, map))
+        return true
+    }
+
+    /** Deletes the strokes [ids] (whole). One undo step. */
+    fun delete(ids: Set<String>): Boolean {
+        endErase()
+        if (items.none { it.id in ids }) return false
+        commit(items, items.filter { it.id !in ids })
+        return true
+    }
+
     /** Closes the eraser drag: it becomes one undo step. */
     fun endErase() {
         val before = openBefore ?: return
@@ -79,7 +99,7 @@ class PageModel {
         endErase()
         val s = undoStack.removeLastOrNull() ?: return false
         redoStack.addLast(s)
-        move(items, s.before)
+        move(items, s.before, s.tf?.let { Tf(it.ids, it.map.inverse()) })
         return true
     }
 
@@ -87,22 +107,23 @@ class PageModel {
         endErase()
         val s = redoStack.removeLastOrNull() ?: return false
         undoStack.addLast(s)
-        move(items, s.after)
+        move(items, s.after, s.tf)
         return true
     }
 
-    private fun commit(before: List<Item>, after: List<Item>) {
+    private fun commit(before: List<Item>, after: List<Item>, tf: Tf? = null) {
         if (before === after) return
-        undoStack.addLast(Step(before, after))
+        undoStack.addLast(Step(before, after, tf))
         redoStack.clear()
-        move(before, after)
+        move(before, after, tf)
     }
 
-    private fun move(from: List<Item>, to: List<Item>) {
+    private fun move(from: List<Item>, to: List<Item>, tf: Tf? = null) {
         val now = to.mapTo(HashSet()) { it.id }
         val was = from.mapTo(HashSet()) { it.id }
         from.filter { it.id !in now }.forEach { log.add(Ev.Erased(it.id)) }
         to.filter { it.id !in was }.forEach { log.add(Ev.Added(it)) }
+        if (tf != null) log.add(Ev.Transformed(tf.ids, tf.map))
         items = to
     }
 

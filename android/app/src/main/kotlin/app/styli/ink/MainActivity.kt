@@ -67,6 +67,7 @@ private fun InkScreen() {
         ) {
             Button(onClick = { canvas?.undo() }) { Text("Undo") }
             Button(onClick = { canvas?.redo() }, Modifier.padding(start = 8.dp)) { Text("Redo") }
+            Button(onClick = { canvas?.deleteSelection() }, Modifier.padding(start = 8.dp)) { Text("Delete") }
             Button(
                 onClick = {
                     tool = InkCanvasView.Tool.entries[(tool.ordinal + 1) % InkCanvasView.Tool.entries.size]

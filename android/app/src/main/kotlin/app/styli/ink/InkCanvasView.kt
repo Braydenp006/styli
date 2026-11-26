@@ -45,16 +45,21 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     var onLatency: ((String) -> Unit)? = null
 
     /** A finished stroke and its box in page units, so a redraw can skip the ones off screen. */
-    private class Placed(val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
+    private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO }
 
     private val model = PageModel()
     private val placed = HashMap<String, Placed>() // drawn strokes by ID, built once (pruned after every change)
     private val renderer = CanvasStrokeRenderer.create()
 
     var tool = Tool.PEN
+        set(v) {
+            field = v
+            selection.clear() // a selection only lives while the lasso is the tool
+            pageLayer.invalidate()
+        }
     var penColor = Color.BLACK
     var penWidth = 40 // 0.4 mm, in page units
     var highlighterColor = 0x99FFEB3B.toInt() // a see-through yellow, so the writing shows through
@@ -105,11 +110,17 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 canvas.save()
                 canvas.concat(toScreen)
                 for (item in model.items) {
-                    val p = placed.getOrPut(item.id) { place(buildStroke(item)) }
-                    if (p.r < vl || p.l > vr || p.b < vt || p.t > vb) continue
+                    // A transform makes a new Item under the same ID, so an old picture is not reused.
+                    val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
+                    val moved = dragMap?.takeIf { item.id in selection }
+                    if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) continue
+                    canvas.save()
+                    if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
                     renderer.draw(canvas, p.stroke, toScreen)
+                    canvas.restore()
                 }
                 canvas.restore()
+                drawLassoOverlay(canvas)
                 canvas.restore()
             }
         }
@@ -176,7 +187,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
                     strokes.values.forEach {
                         val item = model.add(liveTool, liveColor, liveWidth, pointsOf(it))
-                        placed[item.id] = place(it)
+                        placed[item.id] = place(it, item)
                     }
                     pageLayer.invalidate()
                     // Only stop drawing the live copy after the page layer has the stroke, to avoid a flicker.
@@ -219,7 +230,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private fun changed(did: Boolean) {
         if (!did) return
-        placed.keys.retainAll(model.items.mapTo(HashSet()) { it.id })
+        val ids = model.items.mapTo(HashSet()) { it.id }
+        placed.keys.retainAll(ids)
+        selection.retainAll(ids)
         pageLayer.invalidate()
     }
 
@@ -242,14 +255,14 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         return Stroke(brushFor(if (hl) highlighterFamily else penFamily, item.color, item.width), batch)
     }
 
-    private fun place(stroke: Stroke): Placed {
+    private fun place(stroke: Stroke, item: Item): Placed {
         var l = Float.MAX_VALUE; var t = Float.MAX_VALUE; var r = -Float.MAX_VALUE; var b = -Float.MAX_VALUE
         for (i in 0 until stroke.inputs.size) {
             val p = stroke.inputs[i]
             l = minOf(l, p.x); r = maxOf(r, p.x); t = minOf(t, p.y); b = maxOf(b, p.y)
         }
         val pad = stroke.brush.size // the pen is wider than the path it follows
-        return Placed(stroke, l - pad, t - pad, r + pad, b + pad)
+        return Placed(item, stroke, l - pad, t - pad, r + pad, b + pad)
     }
 
     // shortcut: the pen draws and fingers move the page; a finger resting on the glass while the pen draws is
@@ -276,7 +289,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && !erasing) {
+            if (isPen(event.getToolType(i)) && strokeId == null && !erasing && !lassoing) {
                 gestureActive = false // a pen landing after a palm takes over
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
@@ -285,6 +298,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 if (tool == Tool.ERASER_STROKE || tool == Tool.ERASER_PART || eraserEnd) {
                     erasing = true
                     eraseTo(event, i)
+                    return true
+                }
+                if (tool == Tool.LASSO) {
+                    lassoing = true
+                    startLasso(event, i)
                     return true
                 }
                 val hl = tool == Tool.HIGHLIGHTER
@@ -298,7 +316,121 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 gestureActive = true
             }
         }
-        return if (erasing) erase(event) else if (strokeId != null) drawing(event) else moving(event)
+        return if (erasing) erase(event) else if (lassoing) lasso(event) else if (strokeId != null) drawing(event) else moving(event)
+    }
+
+    // ---- Lasso: draw a loop round strokes, then drag inside the box to move or a corner to resize. ----
+
+    private val selection = HashSet<String>()
+    private var lassoing = false
+    private enum class Drag { LOOP, MOVE, RESIZE }
+    private var drag = Drag.LOOP
+    private val loop = ArrayList<Float>() // page units: x0, y0, x1, y1, ...
+    private var dragStartX = 0.0
+    private var dragStartY = 0.0
+    private var dragCorner = 0
+    private var dragBox: Box? = null // the box when the drag began
+    private var dragMap: Affine? = null // the move or resize so far; the strokes are only changed when the pen lifts
+    private val dashed = Paint().apply {
+        style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xFF1565C0.toInt()
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
+    }
+    private val handle = Paint().apply { color = 0xFF1565C0.toInt() }
+
+    fun deleteSelection() {
+        if (model.delete(selection)) {
+            selection.clear()
+            changed(true)
+        }
+    }
+
+    private fun selectionBox(): Box? {
+        val box = LassoGeometry.bounds(model.items.filter { it.id in selection }) ?: return null
+        val m = dragMap ?: return box
+        return Box(m.x(box.l.toFloat(), box.t.toFloat()).toDouble(), m.y(box.l.toFloat(), box.t.toFloat()).toDouble(),
+            m.x(box.r.toFloat(), box.b.toFloat()).toDouble(), m.y(box.r.toFloat(), box.b.toFloat()).toDouble())
+    }
+
+    private fun drawLassoOverlay(canvas: Canvas) {
+        val g = geometry
+        if (loop.size >= 4) {
+            val path = android.graphics.Path()
+            for (k in 0 until loop.size / 2) {
+                val x = g.toScreenX(loop[2 * k].toDouble()).toFloat()
+                val y = g.toScreenY(loop[2 * k + 1].toDouble()).toFloat()
+                if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            canvas.drawPath(path, dashed)
+        }
+        val box = selectionBox() ?: return
+        canvas.drawRect(g.toScreenX(box.l).toFloat(), g.toScreenY(box.t).toFloat(), g.toScreenX(box.r).toFloat(), g.toScreenY(box.b).toFloat(), dashed)
+        for (c in 0..3) {
+            val (hx, hy) = LassoGeometry.corner(box, c)
+            canvas.drawCircle(g.toScreenX(hx).toFloat(), g.toScreenY(hy).toFloat(), 9f, handle)
+        }
+    }
+
+    private fun startLasso(event: MotionEvent, i: Int) {
+        val g = geometry
+        val sx = event.getX(i)
+        val sy = event.getY(i)
+        val px = g.toPageX(sx.toDouble())
+        val py = g.toPageY(sy.toDouble())
+        val box = selectionBox()
+        dragMap = null
+        if (box != null) {
+            // Corners first (a fingertip-sized target), then anywhere inside the box.
+            for (c in 0..3) {
+                val (hx, hy) = LassoGeometry.corner(box, c)
+                if (kotlin.math.hypot(g.toScreenX(hx) - sx, g.toScreenY(hy) - sy) < HANDLE_PX) {
+                    drag = Drag.RESIZE; dragCorner = c; dragBox = box
+                    return
+                }
+            }
+            if (px in box.l..box.r && py in box.t..box.b) {
+                drag = Drag.MOVE; dragStartX = px; dragStartY = py
+                return
+            }
+        }
+        selection.clear() // touching outside lets go of the selection and starts a new loop
+        drag = Drag.LOOP
+        loop.clear()
+        loop.add(px.toFloat()); loop.add(py.toFloat())
+        pageLayer.invalidate()
+    }
+
+    private fun lasso(event: MotionEvent): Boolean {
+        val g = geometry
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) {
+                fun at(sx: Float, sy: Float) {
+                    val px = g.toPageX(sx.toDouble())
+                    val py = g.toPageY(sy.toDouble())
+                    when (drag) {
+                        Drag.LOOP -> { loop.add(px.toFloat()); loop.add(py.toFloat()) }
+                        Drag.MOVE -> dragMap = Affine.translate(px - dragStartX, py - dragStartY)
+                        Drag.RESIZE -> dragMap = LassoGeometry.scaleFromCorner(dragBox!!, dragCorner, px, py)
+                    }
+                }
+                for (h in 0 until event.historySize) at(event.getHistoricalX(i, h), event.getHistoricalY(i, h))
+                at(event.getX(i), event.getY(i))
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
+                when (drag) {
+                    Drag.LOOP -> if (!cancelled) selection.addAll(LassoGeometry.selected(model.items, loop.toFloatArray()))
+                    else -> dragMap?.takeIf { !cancelled }?.let { model.transform(selection, it) }
+                }
+                loop.clear()
+                dragMap = null
+                lassoing = false
+                changed(true)
+            }
+        }
+        return true
     }
 
     private var erasing = false
@@ -406,5 +538,6 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val LINED_TOP = 1600 // 16 mm
         const val LINED_STEP = 800 // 8 mm
         const val GRID_STEP = 500 // 5 mm
+        const val HANDLE_PX = 36f
     }
 }

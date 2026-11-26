@@ -131,6 +131,7 @@ class EraseTest {
         for (e in m.log) when (e) {
             is Ev.Added -> replay[e.item.id] = e.item
             is Ev.Erased -> replay.remove(e.id)
+            is Ev.Transformed -> {}
         }
         assertEquals(m.items.map { it.id }, replay.keys.toList())
     }
