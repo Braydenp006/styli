@@ -71,11 +71,15 @@ class PageGeometryTest {
     }
 
     @Test
-    fun smallPageIsCentred() {
+    fun smallPageStaysOnTheScreenAndMovesFreely() {
         val g = a4()
         g.zoomBy(1e-9, 500.0, 350.0)
-        assertEquals(1000.0 / 2, (g.toScreenX(0.0) + g.toScreenX(21000.0)) / 2, 1e-6)
-        assertEquals(700.0 / 2, (g.toScreenY(0.0) + g.toScreenY(29700.0)) / 2, 1e-6)
+        for ((dx, dy) in listOf(-1e9 to -1e9, 1e9 to 1e9)) {
+            g.panBy(dx, dy)
+            assertTrue(g.toScreenX(0.0) >= -1e-6 && g.toScreenX(21000.0) <= 1000.0 + 1e-6) // the page is wholly in view
+            assertTrue(g.toScreenY(0.0) >= -1e-6 && g.toScreenY(29700.0) <= 700.0 + 1e-6)
+        }
+        assertTrue(g.toScreenX(0.0) > 100.0) // and it did move off the middle
     }
 
     @Test
@@ -185,5 +189,20 @@ class PageGeometryTest {
         g.viewTo(s, PageGeometry.MARGIN, -1e6)
         assertEquals(2000 - 29700 * s - (2000 - 29700 * s) / 2 - 30500 * s, g.ty, 1e-6) // the last page in the middle
         assertEquals((2000 - 29700 * s) / 2, g.toScreenY(60200.0 - 29700.0), 1e-6) // its top is as far from the top as its bottom is from the bottom
+    }
+
+    @Test
+    fun zoomedOutTheSurfaceMovesUntilOnePageIsLeft() {
+        // Three columns of A4: the surface is three pages wide.
+        val g = PageGeometry(3 * 21000 + 2000, 29700, false, px, 21000, 21000, 29700, 29700).also { it.fit(1000, 700, 21000) }
+        g.panBy(-1e9, 0.0) // fitted: the last page stops with its edge at the margin
+        assertTrue(g.toScreenX(3 * 21000 + 2000.0) > 900.0)
+        g.zoomBy(0.1, 500.0, 350.0) // as far out as it goes
+        g.panBy(-1e9, 0.0)
+        // Only the last page is left, wholly on the screen at the left edge.
+        val lastLeft = g.toScreenX(2 * 21000 + 2000.0)
+        assertEquals(0.0, lastLeft, 1.0)
+        g.panBy(1e9, 0.0) // and the other way: only the first page, wholly on the screen at the right edge
+        assertEquals(1000.0, g.toScreenX(21000.0), 1.0)
     }
 }

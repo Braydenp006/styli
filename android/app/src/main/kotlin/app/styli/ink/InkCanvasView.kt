@@ -2625,6 +2625,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
      */
     private fun settle() {
         val l = layout ?: return
+        if (vp.percent(maxOf(1, work.page.width)) < GRID_MIN_PERCENT) return // zoomed out to see several pages: nothing to snap to, the scroll is free
         val surface = vp
         val cell = if (gridOn()) centrePage() else null
         val columns = if (cell != null) notebook.run(cell, true).map { p -> l.origin(p).first to p.page.width.toDouble() } else l.columns

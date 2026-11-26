@@ -69,6 +69,7 @@ class PageGeometry(
         private set
     private var viewW = 0
     private var viewH = 0
+    private var fitWidth = pageW // the width of the page [fit] fitted, which says what "zoomed out" means
 
     private val minScale: Double
         get() = if (infinite) oneToOne * 0.1 else min(wholePageScale(), widthScale()) * 0.8
@@ -87,6 +88,7 @@ class PageGeometry(
     fun fit(viewW: Int, viewH: Int, fitW: Int = pageW) {
         this.viewW = viewW
         this.viewH = viewH
+        this.fitWidth = fitW
         if (viewW <= 0 || viewH <= 0) return
         if (infinite) {
             scale = oneToOne
@@ -173,15 +175,37 @@ class PageGeometry(
             tx = tx.coerceIn(-LIMIT * scale, LIMIT * scale)
             ty = ty.coerceIn(-LIMIT * scale, LIMIT * scale)
         } else {
-            tx = clampAxis(tx, pageW * scale, viewW, startW * scale, endW * scale)
-            ty = clampAxis(ty, pageH * scale, viewH, startH * scale, endH * scale)
+            val free = freedom()
+            tx = clampAxis(tx, pageW * scale, viewW, startW * scale, endW * scale, free)
+            ty = clampAxis(ty, pageH * scale, viewH, startH * scale, endH * scale, free)
         }
     }
 
-    /** A surface that fits the screen is centred; a bigger one scrolls until its first (or last) page is at the margin, or in the middle if it is smaller than the screen. */
-    private fun clampAxis(t: Double, size: Double, view: Int, startPx: Double, endPx: Double): Double =
-        if (size + 2 * MARGIN <= view) (view - size) / 2
-        else t.coerceIn(view - size - max(MARGIN, (view - endPx) / 2), max(MARGIN, (view - startPx) / 2))
+    /**
+     * How loose the edges are: 0 for a page about fitted to the screen (90% or more of the zoom indicator) up to 1 when
+     * zoomed out to 82% or less, changing smoothly between so nothing jumps while pinching.
+     */
+    private fun freedom(): Double {
+        val ref = widthScale(fitWidth)
+        return if (ref <= 0.0) 0.0 else ((0.9 - scale / ref) / 0.08).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Where the offset may be. Normally: a surface that fits the screen is centred; a bigger one scrolls until its first
+     * (or last) page is at the margin, or in the middle if it is smaller than the screen. Zoomed out ([free] towards 1)
+     * it may go on until only the first (or last) page is left, wholly on the screen at the far edge: one page always
+     * stays in view, and there is room to move the pages about.
+     */
+    private fun clampAxis(t: Double, size: Double, view: Int, startPx: Double, endPx: Double, free: Double): Double {
+        val lo: Double
+        val hi: Double
+        if (size + 2 * MARGIN <= view) { lo = (view - size) / 2; hi = lo } else {
+            lo = view - size - max(MARGIN, (view - endPx) / 2); hi = max(MARGIN, (view - startPx) / 2)
+        }
+        val a = endPx - size
+        val b = view - startPx
+        return t.coerceIn(lo + (min(a, b) - lo) * free, hi + (max(a, b) - hi) * free)
+    }
 
     fun toPageX(sx: Double) = (sx - tx) / scale
     fun toPageY(sy: Double) = (sy - ty) / scale
