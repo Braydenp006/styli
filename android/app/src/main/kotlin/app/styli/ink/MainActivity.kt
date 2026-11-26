@@ -61,6 +61,7 @@ private fun InkScreen() {
     var pHold by remember { mutableStateOf(1) }
     var solid by remember { mutableStateOf(false) }
     var flow by remember { mutableStateOf(0) } // which pulls add pages: down, right, both
+    var scroll by remember { mutableStateOf(2) } // how far a scroll carries on: off, low, medium, high
     var cell by remember { mutableStateOf(0 to 0) } // the page's (column, row)
     var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
     var textColor by remember { mutableStateOf(0) }
@@ -140,9 +141,6 @@ private fun InkScreen() {
                 Button(onClick = { picking = 2 }, Modifier.padding(start = 8.dp)) { Text("Highlight") }
                 if (tool == InkCanvasView.Tool.TEXT) Button(onClick = { canvas?.finishText() }, Modifier.padding(start = 8.dp)) { Text("Done") }
             }
-            Button(onClick = { flow = (flow + 1) % 3; canvas?.flow = Flow.entries[flow] }, Modifier.padding(start = 8.dp)) {
-                Text("Pages: " + listOf("down", "right", "both")[flow], softWrap = false)
-            }
             Button(onClick = { solid = !solid; canvas?.solidOutline = solid }, Modifier.padding(start = 8.dp)) {
                 Text("Outline: " + if (solid) "solid" else "dashed", softWrap = false)
             }
@@ -163,6 +161,13 @@ private fun InkScreen() {
             Button(onClick = { letter = !letter; apply() }, Modifier.padding(start = 8.dp)) { Text(if (letter) "Letter" else "A4") }
             Button(onClick = { landscape = !landscape; apply() }, Modifier.padding(start = 8.dp)) {
                 Text(if (landscape) "Landscape" else "Portrait", softWrap = false)
+            }
+            // The rest of the page settings: which pulls add pages, and how far a scroll carries on.
+            Button(onClick = { flow = (flow + 1) % 3; canvas?.flow = Flow.entries[flow] }, Modifier.padding(start = 8.dp)) {
+                Text("Pages: " + listOf("down", "right", "both")[flow], softWrap = false)
+            }
+            Button(onClick = { scroll = (scroll + 1) % 4; canvas?.scrollIntensity = listOf(0.0, 0.5, 1.0, 2.0)[scroll] }, Modifier.padding(start = 8.dp)) {
+                Text("Scroll: " + listOf("off", "low", "medium", "high")[scroll], softWrap = false)
             }
             Text("Page row ${cell.second + 1}, column ${cell.first + 1} of ${canvas?.notebook?.pages?.size ?: 1}", Modifier.padding(start = 16.dp))
             Text(latency, Modifier.padding(start = 16.dp))

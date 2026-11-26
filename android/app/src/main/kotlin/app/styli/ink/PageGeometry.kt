@@ -70,8 +70,13 @@ class PageGeometry(
     private fun widthScale() = (viewW - 2 * MARGIN) / pageW
     private fun wholePageScale() = min(widthScale(), (viewH - 2 * MARGIN) / pageH)
 
-    /** Start position for a view of this size: a fixed page fits the width, a canvas starts at real size. */
-    fun fit(viewW: Int, viewH: Int) {
+    private fun widthScale(fitW: Int) = (viewW - 2 * MARGIN) / fitW
+
+    /**
+     * Start position for a view of this size: a fixed page fits the width, a canvas starts at real size. When
+     * this is a whole notebook's surface, [fitW] is the width of the page to fit (not the surface's).
+     */
+    fun fit(viewW: Int, viewH: Int, fitW: Int = pageW) {
         this.viewW = viewW
         this.viewH = viewH
         if (viewW <= 0 || viewH <= 0) return
@@ -80,10 +85,31 @@ class PageGeometry(
             tx = MARGIN * 2
             ty = MARGIN * 2
         } else {
-            scale = widthScale()
+            scale = widthScale(fitW)
             tx = MARGIN
             ty = MARGIN
         }
+        clamp()
+    }
+
+    /** Takes the zoom and position of [other] (the same view of a surface that has since changed). */
+    fun restore(other: PageGeometry) {
+        scale = other.scale
+        tx = other.tx
+        ty = other.ty
+        clamp()
+    }
+
+    /** Scrolls so the point (x, y) of the surface is at the top left of the screen, as far as the edges allow. */
+    fun scrollTo(x: Double, y: Double) {
+        tx = MARGIN - x * scale
+        ty = MARGIN - y * scale
+        clamp()
+    }
+
+    /** Moves by [dx] pixels sideways only, as far as the edges allow (the settling of a scroll). */
+    fun slideBy(dx: Double) {
+        tx += dx
         clamp()
     }
 

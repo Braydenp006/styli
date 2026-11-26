@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.FrameLayout
@@ -59,16 +60,25 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
     val notebook = Notebook()
-    private val model get() = notebook.current
 
-    /** The page being shown. */
-    val page get() = model.page
+    /** The page the drawing and editing code is working on: the one being drawn, or the one under the pen. */
+    private var active: PageModel = notebook.current
+    private val model get() = active
 
-    /** Called when another page is shown (turned to, added, or taken back by an undo). */
+    /** The page the pen last went down on; every gesture belongs to it until the pen goes down on another. */
+    private var work: PageModel = notebook.current
+
+    /** The page being worked on. */
+    val page get() = work.page
+
+    /** Called when the page being worked on changes (the pen went down on another, or one was added or taken back). */
     var onPageChanged: (() -> Unit)? = null
 
-    /** Which finger pulls past a page's edge may add a page (see [PageTurn]). */
+    /** Which finger pulls past the surface's edge may add a page (see [PageTurn]). */
     var flow = Flow.DOWN
+
+    /** How far a scroll carries on after the finger lets go: 1 is normal, 0 is not at all (see [Fling.start]). */
+    var scrollIntensity = 1.0
     private val placed = HashMap<String, Placed>() // drawn strokes by ID, built once (pruned after every change)
     private val renderer = CanvasStrokeRenderer.create()
 
@@ -104,8 +114,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private val eraserPx = 10f
 
     private val pxPerUnit = resources.displayMetrics.xdpi / 2540.0
-    private var geometry = PageGeometry(21000, 29700, false, pxPerUnit)
-    private var template = Template.TEMPLATE_BLANK
+
+    // All the pages are on one scrolling surface. [vp] is the surface (scroll, zoom, edges); [geometry] is the
+    // page being drawn or worked on seen through it, so the code that works on a page needs no idea where it is.
+    private var vp = PageGeometry(21000, 29700, false, pxPerUnit)
+    private var layout: NotebookLayout? = null // null while a notebook holds an infinite canvas: that page alone
+    private var geometry = PageView(vp, 0.0, 0.0, 21000, 29700, false)
+    private var shownKey: List<List<Int>> = emptyList()
     private val toScreen = Matrix()
     private val line = Paint().apply { strokeWidth = 1f }
     private val sheetEdge = Paint().apply { color = 0xFFAAAAAA.toInt(); style = Paint.Style.STROKE }
@@ -113,56 +128,71 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private val pageLayer =
         object : View(context) {
             override fun onDraw(canvas: Canvas) {
-                val g = geometry
+                activate(work)
                 positionEditor()
                 canvas.save()
-                canvas.translate((pullX * PULL_SHIFT).toFloat(), (pullY * PULL_SHIFT).toFloat()) // the page follows a pull a little
-                canvas.drawColor(if (g.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
-                canvas.save()
-                if (!g.infinite) {
-                    val sheet = RectF(
-                        g.toScreenX(0.0).toFloat(), g.toScreenY(0.0).toFloat(),
-                        g.toScreenX(g.pageW.toDouble()).toFloat(), g.toScreenY(g.pageH.toDouble()).toFloat(),
-                    )
-                    canvas.drawRect(sheet, Paint().apply { color = Color.WHITE })
-                    canvas.drawRect(sheet, sheetEdge)
-                    canvas.clipRect(sheet)
+                val (shiftX, shiftY) = PageTurn.dominant(pullX, pullY)
+                canvas.translate((shiftX * PULL_SHIFT).toFloat(), (shiftY * PULL_SHIFT).toFloat()) // the surface follows a pull a little
+                canvas.drawColor(if (vp.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
+                val l = layout
+                val pages = if (l == null) listOf(work) else vp.visible().let { l.visible(it[0], it[1], it[2], it[3]) }
+                for (p in pages) {
+                    activate(p)
+                    drawPage(canvas)
                 }
-                drawTemplate(canvas)
-                toScreen.setScale(g.scale.toFloat(), g.scale.toFloat())
-                toScreen.postTranslate(g.tx.toFloat(), g.ty.toFloat())
-                val (vl, vt, vr, vb) = g.visible().map { it.toFloat() }
-                // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
-                canvas.save()
-                canvas.concat(toScreen)
-                for (item in model.items) {
-                    // A transform makes a new Item under the same ID, so an old picture is not reused.
-                    val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
-                    val moved = dragMap?.takeIf { item.id in selection }
-                    if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) continue
-                    canvas.save()
-                    if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
-                    renderer.draw(canvas, p.stroke, toScreen)
-                    canvas.restore()
-                }
-                for (box in model.texts) {
-                    if (box.id == editBox?.id) continue // the editor shows it
-                    val moved = dragMap?.takeIf { box.id in selection }
-                    canvas.save()
-                    if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
-                    TextRender.draw(canvas, box, layoutOf(box))
-                    canvas.restore()
-                }
-                canvas.restore()
+                activate(work)
                 drawLassoOverlay(canvas)
                 drawLinePreview(canvas)
                 drawSnapPreview(canvas)
                 drawTextDragPreview(canvas)
-                canvas.restore()
                 canvas.restore() // the pull's shift
                 drawPullHint(canvas)
             }
         }
+
+    /** Draws the active page: its sheet, template, strokes and text boxes, clipped to the sheet. */
+    private fun drawPage(canvas: Canvas) {
+        val g = geometry
+        canvas.save()
+        if (!g.infinite) {
+            val sheet = RectF(
+                g.toScreenX(0.0).toFloat(), g.toScreenY(0.0).toFloat(),
+                g.toScreenX(g.pageW.toDouble()).toFloat(), g.toScreenY(g.pageH.toDouble()).toFloat(),
+            )
+            canvas.drawRect(sheet, sheetFill)
+            canvas.drawRect(sheet, sheetEdge)
+            canvas.clipRect(sheet)
+        }
+        drawTemplate(canvas)
+        toScreen.setScale(g.scale.toFloat(), g.scale.toFloat())
+        toScreen.postTranslate(g.tx.toFloat(), g.ty.toFloat())
+        val (vl, vt, vr, vb) = g.visible().map { it.toFloat() }
+        // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
+        canvas.save()
+        canvas.concat(toScreen)
+        for (item in model.items) {
+            // A transform makes a new Item under the same ID, so an old picture is not reused.
+            val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
+            val moved = dragMap?.takeIf { item.id in selection }
+            if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) continue
+            canvas.save()
+            if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+            renderer.draw(canvas, p.stroke, toScreen)
+            canvas.restore()
+        }
+        for (box in model.texts) {
+            if (box.id == editBox?.id) continue // the editor shows it
+            val moved = dragMap?.takeIf { box.id in selection }
+            canvas.save()
+            if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+            TextRender.draw(canvas, box, layoutOf(box))
+            canvas.restore()
+        }
+        canvas.restore()
+        canvas.restore()
+    }
+
+    private val sheetFill = Paint().apply { color = Color.WHITE }
 
     private fun drawTemplate(canvas: Canvas) {
         val g = geometry
@@ -172,7 +202,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val bottom = if (g.infinite) vb else minOf(vb, g.pageH.toDouble())
         val left = if (g.infinite) vl else maxOf(vl, 0.0)
         val right = if (g.infinite) vr else minOf(vr, g.pageW.toDouble())
-        when (template) {
+        when (model.page.template) {
             Template.TEMPLATE_LINED -> {
                 line.color = 0xFFC3D3EA.toInt()
                 val first = if (g.infinite) Int.MIN_VALUE.toDouble() else LINED_TOP.toDouble()
@@ -196,28 +226,69 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
     }
 
-    private var shown: PageSet? = null
-
-    /** Changes this page's size, template or fixed-or-infinite (one undo step) and shows it. */
+    /** Changes the working page's size, template or fixed-or-infinite (one undo step). */
     fun setPage(page: PageSet) {
         // A page's place in the grid is not part of its size and look: keep it.
-        if (model.setPage(page.toBuilder().setCol(model.page.col).setRow(model.page.row).build())) showPage()
+        if (work.setPage(page.toBuilder().setCol(work.page.col).setRow(work.page.row).build())) rebuildLayout(false)
     }
 
-    /** Draws the model's page: its size, template and whether it is fixed or an infinite canvas. */
-    private fun showPage() {
-        val page = model.page
-        shown = page
-        geometry = PageGeometry(page.width, page.height, page.infinite, pxPerUnit)
-        template = page.template
-        geometry.fit(width, height)
+    private fun layoutKey() = notebook.pages.map { listOf(it.page.col, it.page.row, it.page.width, it.page.height, if (it.page.infinite) 1 else 0) }
+
+    /** Makes [p] the page the code works on, with its place on the surface. */
+    private fun activate(p: PageModel) {
+        active = p
+        val (ox, oy) = layout?.origin(p) ?: (0.0 to 0.0)
+        geometry = PageView(vp, ox, oy, p.page.width, p.page.height, p.page.infinite)
+    }
+
+    /**
+     * Lays the pages out again (a page was added, taken back, or changed size). The view stays where it was
+     * unless [reset] (the screen's size changed): then the working page is fitted to the width.
+     */
+    private fun rebuildLayout(reset: Boolean) {
+        stopGlide()
+        val old = vp
+        val pages = notebook.pages
+        if (pages.any { it.page.infinite }) {
+            // An infinite canvas has no edges to lay pages beside: it is shown alone.
+            layout = null
+            vp = PageGeometry(work.page.width, work.page.height, work.page.infinite, pxPerUnit)
+        } else {
+            val l = NotebookLayout(pages)
+            layout = l
+            vp = PageGeometry(l.worldW, l.worldH, false, pxPerUnit)
+        }
+        vp.fit(width, height, maxOf(1, work.page.width))
+        if (!reset && old.infinite == vp.infinite) vp.restore(old)
+        shownKey = layoutKey()
+        activate(work)
         pageLayer.invalidate()
     }
 
-    init { showPage() } // the model starts on its own default page
+    init { rebuildLayout(true) }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        geometry.fit(w, h)
+        rebuildLayout(true)
+    }
+
+    /** The pen went down on [p]: it is the working page now, and what belonged to the last one is let go. */
+    private fun becomeWork(p: PageModel) {
+        selection.clear()
+        loop.clear()
+        dragMap = null
+        work = p
+        notebook.go(p)
+        if (layoutKey() != shownKey) rebuildLayout(false) else activate(p) // a page was added or taken back
+        onPageChanged?.invoke()
+    }
+
+    /** The page under the pen (or the closest one, in a gap) becomes the working page, unless text is being edited. */
+    private fun pickPage(sx: Float, sy: Float) {
+        val l = layout ?: return
+        val wx = vp.toPageX(sx.toDouble())
+        val wy = vp.toPageY(sy.toDouble())
+        val p = l.pageAt(wx, wy) ?: l.nearest(wx, wy)
+        if (p !== work) becomeWork(p)
     }
 
     private val liveLayer = InProgressStrokesView(context)
@@ -236,8 +307,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         liveLayer.addFinishedStrokesListener(
             object : InProgressStrokesFinishedListener {
                 override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                    strokes.values.forEach {
-                        val item = model.add(liveTool, liveColor, liveWidth, pointsOf(it))
+                    strokes.forEach { (id, it) ->
+                        // The stroke belongs to the page it started on, even if the pen has gone to another since.
+                        val item = (strokePage.remove(id) ?: model).add(liveTool, liveColor, liveWidth, pointsOf(it))
                         placed[item.id] = place(it, item)
                     }
                     pageLayer.invalidate()
@@ -279,22 +351,22 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     fun undo() {
         finishText()
         // A page added by a pull and left untouched goes away with the undo; anything else undoes a step.
-        if (!model.canUndo && notebook.removeMade()) pageChanged() else changed(model.undo())
+        if (!model.canUndo && notebook.removeMade()) becomeWork(notebook.current) else changed(model.undo())
     }
     fun redo() { finishText(); changed(model.redo()) }
 
     private fun changed(did: Boolean) {
         if (!did) return
-        val ids = model.items.mapTo(HashSet()) { it.id }
-        val textIds = model.texts.mapTo(HashSet()) { it.id }
-        placed.keys.retainAll(ids)
-        layouts.keys.retainAll(textIds)
-        selection.retainAll(ids + textIds)
-        if (model.page != shown) showPage() // an undo or redo of a page change
+        val all = notebook.pages
+        placed.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
+        layouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.texts.map { it.id } })
+        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id })
+        if (layoutKey() != shownKey) rebuildLayout(false) // an undo or redo of a size change
         pageLayer.invalidate()
     }
 
     // What the stroke being drawn was made with, in case the tool is changed before the pen lifts.
+    private val strokePage = HashMap<InProgressStrokeId, PageModel>()
     private var liveTool = StrokeTool.TOOL_PEN
     private var liveColor = Color.BLACK
     private var liveWidth = 40
@@ -312,6 +384,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (!autoStraighten || liveTool != StrokeTool.TOOL_PEN) return@Runnable
         val clean = ShapeGeometry.snap(drawn, penmanship) ?: return@Runnable
         liveLayer.cancelStroke(id, null)
+        strokePage.remove(id)
         strokeId = null
         snapped = clean
         pageLayer.invalidate()
@@ -412,6 +485,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) stopGlide() // a touch catches the page
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
             if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !textTapping) {
@@ -419,6 +493,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
+                if (editor == null) pickPage(event.getX(i), event.getY(i)) // else the pen finishes the text on its page first
                 // The back end of the S Pen always erases whole strokes.
                 eraserEnd = event.getToolType(i) == MotionEvent.TOOL_TYPE_ERASER
                 if (tool == Tool.ERASER_STROKE || tool == Tool.ERASER_PART || eraserEnd) {
@@ -449,6 +524,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 liveColor = if (hl) highlighterColor else penColor
                 liveWidth = if (hl) highlighterWidth else penWidth
                 strokeId = liveLayer.startStroke(event, pointerId, brush, screenToPage())
+                strokeId?.let { strokePage[it] = work }
                 drawn.clear()
                 drawStartMs = event.eventTime
                 hold.start(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
@@ -458,6 +534,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 return true
             }
             if (!isPen(event.getToolType(i)) && strokeId == null && (action == MotionEvent.ACTION_DOWN || gestureActive)) {
+                if (action == MotionEvent.ACTION_DOWN) { slid = 0.0; pinched = false; velocity?.recycle(); velocity = VelocityTracker.obtain() }
                 gestureActive = true
             }
         }
@@ -913,7 +990,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     removeCallbacks(holdCheck)
-                    strokeId?.let { liveLayer.cancelStroke(it, event) }
+                    strokeId?.let { liveLayer.cancelStroke(it, event); strokePage.remove(it) }
                     strokeId = null
                 }
             }
@@ -927,6 +1004,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private fun moving(event: MotionEvent): Boolean {
         if (!gestureActive) return true
         scaleDetector.onTouchEvent(event)
+        velocity?.addMovement(event)
         val action = event.actionMasked
         val skip = if (action == MotionEvent.ACTION_POINTER_UP) event.actionIndex else -1
         var cx = 0f
@@ -941,6 +1019,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             val dx = (cx - lastX).toDouble()
             val dy = (cy - lastY).toDouble()
             val (leftX, leftY) = geometry.panBy(dx, dy)
+            slid += Math.abs(dx)
+            if (n > 1) pinched = true
             if (!geometry.infinite && n == 1) { // one finger pulls at an edge; two fingers pinch
                 pullX = PageTurn.pull(pullX, dx, leftX)
                 pullY = PageTurn.pull(pullY, dy, leftY)
@@ -949,42 +1029,112 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
         lastX = cx
         lastY = cy
-        if (action == MotionEvent.ACTION_UP) endPull()
-        if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; pageLayer.invalidate() }
+        if (action == MotionEvent.ACTION_UP) {
+            val pulled = endPull()
+            val tracker = velocity
+            velocity = null
+            var glides = false
+            if (!pulled && !pinched && tracker != null) {
+                tracker.computeCurrentVelocity(1000)
+                val id = event.getPointerId(0)
+                glides = startGlide(tracker.getXVelocity(id).toDouble(), tracker.getYVelocity(id).toDouble())
+            }
+            tracker?.recycle()
+            if (!glides && !pulled && !pinched && slid > SLIDE_MIN_PX) settle() // otherwise it settles when the glide ends
+        }
+        if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; velocity?.recycle(); velocity = null; pageLayer.invalidate() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) gestureActive = false
         return true
     }
 
-    // ---- Pages: pull a fixed page past its edge with a finger to go to the page there, or add one. ----
+    // ---- Pages: all on one surface. Scroll across them; pull past the surface's end to add a page there. ----
 
     private var pullX = 0.0 // how far the finger has pulled past an edge, in screen pixels
     private var pullY = 0.0
+    private var slid = 0.0 // how far this finger gesture moved sideways, in pixels
+    private var pinched = false // this gesture used two fingers
+    private var snapAnim: android.animation.ValueAnimator? = null
 
-    private fun endPull() {
+    /** Lets go of a pull: adds a page if it was long enough and the setting allows it. True if there was a pull. */
+    private fun endPull(): Boolean {
         val pull = PageTurn.direction(pullX, pullY)
         pullX = 0.0
         pullY = 0.0
-        if (pull != null) {
+        val l = layout
+        if (pull != null && l != null) {
             val (dir, px) = pull
-            val next = notebook.neighbour(model, dir)
-            when (PageTurn.decide(px / pxPerUnit, dir, next != null, flow)) {
-                Turn.GO -> { finishText(); notebook.go(next!!); pageChanged() }
-                Turn.ADD -> { finishText(); notebook.add(model, dir); pageChanged() }
-                Turn.NONE -> {}
+            if (PageTurn.decide(px / pxPerUnit, dir, flow) == Turn.ADD) {
+                // Beside the page the middle of the screen is over: below the lowest of its column, or right of the
+                // right-most of its row.
+                val from = if (dir == Dir.DOWN) l.bottomOfColumnAt(vp.toPageX(width / 2.0)) else l.rightOfRowAt(vp.toPageY(height / 2.0))
+                finishText()
+                val made = notebook.add(from, dir)
+                if (made != null) {
+                    becomeWork(made)
+                    layout?.origin(made)?.let { vp.scrollTo(it.first, it.second) } // show it
+                }
             }
         }
         pageLayer.invalidate()
+        // Only a real pull (as long as it needs to be to add a page) ends the scroll there and then; the little a
+        // finger drifts sideways during a vertical flick is not one, and must not stop the glide.
+        return pull != null && pull.second / pxPerUnit >= PageTurn.PULL
     }
 
-    /** Another page is current: drop what belonged to the old one and show the new one. */
-    private fun pageChanged() {
-        selection.clear()
-        loop.clear()
-        dragMap = null
-        placed.clear()
-        layouts.clear()
-        showPage()
-        onPageChanged?.invoke()
+    private var velocity: VelocityTracker? = null
+    private var glide: Fling? = null
+    private var glideAt = 0L
+
+    private val glideStep = object : Runnable {
+        override fun run() {
+            val f = glide ?: return
+            val now = System.nanoTime()
+            val dt = ((now - glideAt) / 1e9).coerceIn(0.0, 0.1)
+            glideAt = now
+            val (dx, dy) = f.step(dt)
+            val (leftX, leftY) = geometry.panBy(dx, dy)
+            if (Math.abs(leftX) > Math.abs(dx) * 0.5 + 0.01) f.stopX() // the page met an edge (or has no room that way)
+            if (Math.abs(leftY) > Math.abs(dy) * 0.5 + 0.01) f.stopY()
+            pageLayer.invalidate()
+            if (f.done) {
+                glide = null
+                if (slid > SLIDE_MIN_PX && !pinched) settle()
+            } else postOnAnimation(this)
+        }
+    }
+
+    /** Lets the scroll carry on after the finger lets go, at the speed it had. False if it was too slow. */
+    private fun startGlide(vx: Double, vy: Double): Boolean {
+        val f = Fling.start(vx, vy, scrollIntensity) ?: return false
+        glide = f
+        glideAt = System.nanoTime()
+        postOnAnimation(glideStep)
+        return true
+    }
+
+    /** Stops any glide or settle in progress (a touch catches the page; a new layout makes them stale). */
+    private fun stopGlide() {
+        glide = null
+        removeCallbacks(glideStep)
+        snapAnim?.cancel()
+    }
+
+    /** After a sideways scroll, a page slides the last bit into place if one is close (see [PageSnap]). */
+    private fun settle() {
+        val l = layout ?: return
+        val surface = vp
+        val target = PageSnap.target(surface.tx, surface.scale, width, l.columns, PageGeometry.MARGIN, PageSnap.RANGE * width) ?: return
+        val from = surface.tx
+        snapAnim?.cancel()
+        snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 180
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener {
+                surface.slideBy(from + (target - from) * it.animatedFraction - surface.tx)
+                pageLayer.invalidate()
+            }
+            start()
+        }
     }
 
     private val hintBg = Paint().apply { color = 0xE6322B3A.toInt(); isAntiAlias = true }
@@ -993,12 +1143,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** Once the pull is long enough to count, say what letting go will do. */
     private fun drawPullHint(canvas: Canvas) {
         val (dir, px) = PageTurn.direction(pullX, pullY) ?: return
-        val next = notebook.neighbour(model, dir)
-        val text = when (PageTurn.decide(px / pxPerUnit, dir, next != null, flow)) {
-            Turn.ADD -> "Release to add a page"
-            Turn.GO -> if (dir == Dir.UP || dir == Dir.LEFT) "Release for the previous page" else "Release for the next page"
-            Turn.NONE -> return
-        }
+        if (layout == null || PageTurn.decide(px / pxPerUnit, dir, flow) != Turn.ADD) return
+        val text = "Release to add a page"
         val w = hintText.measureText(text) + 56f
         val h = 80f
         val cx = when (dir) { Dir.LEFT -> w / 2 + 16f; Dir.RIGHT -> width - w / 2 - 16f; else -> width / 2f }
@@ -1016,7 +1162,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val GRID_STEP = 500 // 5 mm
         const val HANDLE_PX = 36f
         const val ROTATE_STEM_PX = 56f
-        const val PULL_SHIFT = 0.4f // how much of a pull the page follows
+        const val PULL_SHIFT = 0.4f // how much of a pull the surface follows
+        const val SLIDE_MIN_PX = 8.0 // a finger gesture that moved sideways less than this does not settle onto a page
         const val TEXT_MIN_WIDTH = 1000f // a dragged box narrower than 10 mm is not a box
         const val TEXT_SIZE = 400f // text 4 mm high
     }

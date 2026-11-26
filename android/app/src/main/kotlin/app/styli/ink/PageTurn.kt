@@ -3,25 +3,24 @@ package app.styli.ink
 import kotlin.math.abs
 import kotlin.math.sign
 
-/** Which pulls past a page's edge may make a new page (a setting). Moving to a page that exists always works. */
+/** Which pulls past the end of the surface may make a new page (a setting). */
 enum class Flow { DOWN, RIGHT, BOTH }
 
 /** What a finished pull does. */
-enum class Turn { NONE, GO, ADD }
+enum class Turn { NONE, ADD }
 
-/** Pure rules for pulling a page past its edge with a finger. */
+/** Pure rules for pulling the surface past its end with a finger. */
 object PageTurn {
     /** How far a pull must go: 25 mm, in page units. */
     const val PULL = 2500.0
 
     /**
-     * What happens when a pull of [pull] page units past the edge in direction [dir] is let go. A short pull
-     * does nothing. A long one goes to the neighbouring page if there is one; if not, it adds one, but only
-     * downward or to the right and only if [flow] allows that direction (going back up or left never adds).
+     * What happens when a pull of [pull] page units past the end of the surface in direction [dir] is let go. A
+     * short pull does nothing. A long one adds a page, but only below or to the right and only if [flow] allows that
+     * direction (the surface's top and left have no room for one).
      */
-    fun decide(pull: Double, dir: Dir, hasNeighbour: Boolean, flow: Flow): Turn = when {
+    fun decide(pull: Double, dir: Dir, flow: Flow): Turn = when {
         pull < PULL -> Turn.NONE
-        hasNeighbour -> Turn.GO
         dir == Dir.DOWN && flow != Flow.RIGHT -> Turn.ADD
         dir == Dir.RIGHT && flow != Flow.DOWN -> Turn.ADD
         else -> Turn.NONE
@@ -38,6 +37,12 @@ object PageTurn {
         }
         return old + leftover
     }
+
+    /**
+     * The part of a pull to show and to act on: only the longer axis. A little sideways drift in a vertical scroll
+     * (a finger is never straight) must neither move the page sideways nor count as a pull.
+     */
+    fun dominant(x: Double, y: Double): Pair<Double, Double> = if (abs(y) >= abs(x)) 0.0 to y else x to 0.0
 
     /**
      * Which page a pull is for and how far: the finger offsets (x, y) past the edges, as screen distances. The

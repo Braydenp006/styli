@@ -6,30 +6,24 @@ import org.junit.Test
 
 class PageTurnTest {
     private val far = PageTurn.PULL
-    private fun d(dir: Dir, neighbour: Boolean, flow: Flow, pull: Double = far) = PageTurn.decide(pull, dir, neighbour, flow)
+    private fun d(dir: Dir, flow: Flow, pull: Double = far) = PageTurn.decide(pull, dir, flow)
 
     @Test
     fun aShortPullDoesNothing() {
-        for (flow in Flow.entries) for (dir in Dir.entries) for (n in listOf(true, false))
-            assertEquals(Turn.NONE, d(dir, n, flow, far - 1))
+        for (flow in Flow.entries) for (dir in Dir.entries) assertEquals(Turn.NONE, d(dir, flow, far - 1))
     }
 
     @Test
-    fun aLongPullGoesToAnExistingPageInAnyDirectionWhateverTheFlow() {
-        for (flow in Flow.entries) for (dir in Dir.entries) assertEquals(Turn.GO, d(dir, true, flow))
-    }
-
-    @Test
-    fun withNoPageThereAPullAddsOnlyDownOrRightAsTheFlowAllows() {
-        assertEquals(Turn.ADD, d(Dir.DOWN, false, Flow.DOWN))
-        assertEquals(Turn.NONE, d(Dir.RIGHT, false, Flow.DOWN))
-        assertEquals(Turn.ADD, d(Dir.RIGHT, false, Flow.RIGHT))
-        assertEquals(Turn.NONE, d(Dir.DOWN, false, Flow.RIGHT))
-        assertEquals(Turn.ADD, d(Dir.DOWN, false, Flow.BOTH))
-        assertEquals(Turn.ADD, d(Dir.RIGHT, false, Flow.BOTH))
-        for (flow in Flow.entries) { // going back never makes a page
-            assertEquals(Turn.NONE, d(Dir.UP, false, flow))
-            assertEquals(Turn.NONE, d(Dir.LEFT, false, flow))
+    fun aLongPullAddsOnlyDownOrRightAsTheFlowAllows() {
+        assertEquals(Turn.ADD, d(Dir.DOWN, Flow.DOWN))
+        assertEquals(Turn.NONE, d(Dir.RIGHT, Flow.DOWN))
+        assertEquals(Turn.ADD, d(Dir.RIGHT, Flow.RIGHT))
+        assertEquals(Turn.NONE, d(Dir.DOWN, Flow.RIGHT))
+        assertEquals(Turn.ADD, d(Dir.DOWN, Flow.BOTH))
+        assertEquals(Turn.ADD, d(Dir.RIGHT, Flow.BOTH))
+        for (flow in Flow.entries) { // the top and left of the surface never add
+            assertEquals(Turn.NONE, d(Dir.UP, flow))
+            assertEquals(Turn.NONE, d(Dir.LEFT, flow))
         }
     }
 
@@ -54,5 +48,13 @@ class PageTurnTest {
         p = PageTurn.pull(p, 40.0, 0.0) // more than the pull: stops at zero
         assertEquals(0.0, p, 0.0)
         assertEquals(0.0, PageTurn.pull(0.0, 5.0, 0.0), 0.0) // an ordinary pan with no pull stays at zero
+    }
+
+    @Test
+    fun onlyTheLongerAxisOfAPullCounts() {
+        assertEquals(0.0 to -40.0, PageTurn.dominant(6.0, -40.0)) // a vertical scroll with sideways drift: the drift is dropped
+        assertEquals(30.0 to 0.0, PageTurn.dominant(30.0, -5.0))
+        assertEquals(0.0 to 12.0, PageTurn.dominant(-12.0, 12.0)) // a tie goes to the vertical, as direction() does
+        assertEquals(0.0 to 0.0, PageTurn.dominant(0.0, 0.0))
     }
 }
