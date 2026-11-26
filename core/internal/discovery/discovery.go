@@ -82,12 +82,12 @@ func announceOn(ctx context.Context, ifs []iface, id string, port int, logf func
 		return errors.New("discovery: no atrium key ID to announce")
 	}
 	name := "styli-" + id[:8]
-	var servers []*mdns.Server
+	var servers []*responder
 	for _, f := range ifs {
 		svc, err := mdns.NewMDNSService(name, Service, "", name+".local.", port, f.ips, []string{"v=1", "id=" + id})
 		if err == nil {
-			var srv *mdns.Server
-			if srv, err = mdns.NewServer(&mdns.Config{Zone: svc, Iface: &f.Interface, Logger: quiet}); err == nil {
+			var srv *responder
+			if srv, err = newResponder(svc, &f.Interface); err == nil {
 				servers = append(servers, srv)
 				continue
 			}

@@ -54,6 +54,11 @@ func Open(dir string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func openDB(dir string) (*sql.DB, string, error) {
+	// Absolute, or the file: URL below reads a relative path's first folder as a host.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, "", err
+	}
 	// The index holds the full text of every note, so only this user may read
 	// it. Folders and files that already exist are tightened too.
 	if err := os.MkdirAll(dir, 0o700); err != nil {

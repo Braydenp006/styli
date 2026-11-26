@@ -314,3 +314,17 @@ func TestDataDirIsStablePerVault(t *testing.T) {
 		t.Fatalf("%q %q %q", a1, a2, b)
 	}
 }
+
+// A relative data folder (as from --data data) opens, in the current folder.
+func TestRelativeDataDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	s, err := Open("data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := os.Stat(filepath.Join(dir, "data", "index.db")); err != nil {
+		t.Fatal(err)
+	}
+}
