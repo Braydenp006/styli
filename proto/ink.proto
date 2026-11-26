@@ -61,6 +61,10 @@ message Event {
 enum Tool {
   TOOL_PEN = 0;
   TOOL_HIGHLIGHTER = 1;
+  // The same path as a pen stroke, drawn as a row of round dots along it: a dot
+  // 1.5 pen widths across every 3.5 pen widths. A reader that does not know it
+  // can draw it as a pen stroke.
+  TOOL_DOTTED = 2;
 }
 
 message StrokeAdded {

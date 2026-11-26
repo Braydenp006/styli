@@ -38,3 +38,22 @@ object LineGeometry {
     /** The angle as shown, one decimal: "37.5°". */
     fun angleLabel(deg: Double) = String.format(java.util.Locale.US, "%.1f\u00B0", deg)
 }
+
+/** How a dotted stroke is drawn: round dots along the path. Sizes are in terms of the pen width. */
+object Dotted {
+    /** The dot's diameter. */
+    fun dot(width: Float) = width * 1.5f
+
+    /** From one dot's middle to the next. */
+    fun spacing(width: Float) = width * 3.5f
+
+    /** [pts] without the points closer than [minGap] to the last one kept (the last point always stays), so a long drag is not thousands of points. */
+    fun thinned(pts: List<Pt>, minGap: Float = 15f): List<Pt> {
+        if (pts.size < 3) return pts
+        val out = ArrayList<Pt>()
+        out.add(pts[0])
+        for (k in 1 until pts.size - 1) if (Math.hypot((pts[k].x - out.last().x).toDouble(), (pts[k].y - out.last().y).toDouble()) >= minGap) out.add(pts[k])
+        out.add(pts.last())
+        return out
+    }
+}

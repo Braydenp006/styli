@@ -80,4 +80,21 @@ class FlingTest {
         assertNull(Fling.start(5000.0, 0.0, 0.0))
         assertNull(Fling.start(5000.0, 0.0, -1.0))
     }
+
+    @Test
+    fun aGlideCanBeBentToEndOnATarget() {
+        val tau = Fling.TAU
+        // A release at 1000 px/s would carry 350 px; the page edge is 300 px that way.
+        val v = Fling.landing(0.0, 1000.0, tau, 300.0)
+        assertEquals(300.0, v * tau, 1e-9)
+        assertEquals(-1000.0, Fling.landing(0.0, -1000.0, tau, 300.0), 0.0) // the other way: left alone
+        assertEquals(1000.0, Fling.landing(0.0, 1000.0, tau, null), 0.0) // no target
+        assertEquals(1000.0, Fling.landing(0.0, 1000.0, tau, 50.0), 0.0) // would need less than 0.4 of the speed: left alone
+        assertEquals(1000.0, Fling.landing(0.0, 1000.0, tau, 1500.0), 0.0) // or more than 2.2 times
+        // Played through the real glide, it ends where it was aimed.
+        val f = Fling.start(v, 0.0)!!
+        var x = 0.0
+        while (!f.done) x += f.step(1.0 / 60).first
+        assertEquals(300.0, x, 15.0) // within the last bit that dies below the stop speed
+    }
 }

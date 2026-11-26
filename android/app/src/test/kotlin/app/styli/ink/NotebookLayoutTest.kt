@@ -135,4 +135,28 @@ class NotebookLayoutTest {
         rebuilt.slideBy(1e9) // as far as the edges allow
         assertTrue(rebuilt.tx <= PageGeometry.MARGIN + 1e-9 || rebuilt.tx == (1000 - 60000 * rebuilt.scale) / 2)
     }
+
+    @Test
+    fun aLockedScrollKeepsToTheFirstAndLastPageOfItsRun() {
+        // Two pages 21000 wide with an 800 gap, on a 1100 px screen at 0.05 px per unit: each is 1050 px, centred when at 25.
+        val spans = listOf(0.0 to 21000.0, 21800.0 to 21000.0)
+        val (lo, hi) = PageSnap.range(1100, 0.05, spans, 24.0)
+        assertEquals(25.0, hi, 1e-9) // the first page, centred
+        assertEquals(25.0 - 21800.0 * 0.05, lo, 1e-9) // the last page, centred
+        // One page taller than the screen: it scrolls freely from its top at the margin to its bottom at the margin.
+        val (bottom, top) = PageSnap.range(800, 0.05, listOf(0.0 to 29700.0), 24.0)
+        assertEquals(24.0, top, 1e-9)
+        assertEquals(800 - 24.0 - 29700.0 * 0.05, bottom, 1e-9)
+        // Pages out of order, and nothing at all.
+        assertEquals(PageSnap.range(1100, 0.05, spans, 24.0), PageSnap.range(1100, 0.05, spans.reversed(), 24.0))
+        assertEquals(0.0 to 0.0, PageSnap.range(1100, 0.05, emptyList(), 24.0))
+    }
+
+    @Test
+    fun aVerticalScrollSettlesOnARowTheSameWayAsASidewaysOneOnAColumn() {
+        val rows = listOf(0.0 to 29700.0, 30500.0 to 29700.0) // two tall pages, taller than a 800 px screen at 0.05
+        // A little short of the first page's bottom edge at the margin (-709): settles there.
+        assertEquals(-709.0, PageSnap.target(-739.0, 0.05, 800, rows, 24.0, 200.0)!!, 1e-9)
+        assertNull(PageSnap.target(-600.0, 0.05, 800, rows, 24.0, 20.0)) // in the middle of the first page: free
+    }
 }

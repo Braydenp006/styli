@@ -19,6 +19,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.Button
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlinx.coroutines.delay
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
@@ -65,7 +70,7 @@ private fun InkScreen() {
     var pLevel by remember { mutableStateOf(2) }
     var pHold by remember { mutableStateOf(1) }
     var solid by remember { mutableStateOf(false) }
-    var flow by remember { mutableStateOf(0) } // which pulls add pages: down, right, both
+    var gridScroll by remember { mutableStateOf(true) } // scrolling over pages: locked to the grid, or seamless
     var tableDialog by remember { mutableStateOf(false) }
     var tRows by remember { mutableStateOf(3) }
     var tCols by remember { mutableStateOf(3) }
@@ -77,6 +82,9 @@ private fun InkScreen() {
     var sLine by remember { mutableStateOf(1) }
     var sDashed by remember { mutableStateOf(false) }
     var bColor by remember { mutableStateOf(0x99FFEB3B.toInt()) }
+    var zoom by remember { mutableStateOf(100) }
+    var zoomShown by remember { mutableStateOf(false) }
+    var firstZoom by remember { mutableStateOf(true) }
     var angleOn by remember { mutableStateOf(false) }
     var route by remember { mutableStateOf(Route.STRAIGHT) }
     var auto by remember { mutableStateOf(false) }
@@ -100,6 +108,7 @@ private fun InkScreen() {
             factory = { context ->
                 InkCanvasView(context).also {
                     it.onLatency = { text -> latency = text }
+                    it.onZoom = { percent -> zoom = percent }
                     it.onPageChanged = {
                         // The page buttons show the page that is now current.
                         val p = it.page
@@ -142,7 +151,7 @@ private fun InkScreen() {
             if (tool == InkCanvasView.Tool.TABLE) {
                 Button(onClick = { tableDialog = true }, gap) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
             }
-            if (tool == InkCanvasView.Tool.LINE || tool == InkCanvasView.Tool.LINE_HIGHLIGHTER) {
+            if (tool == InkCanvasView.Tool.LINE || tool == InkCanvasView.Tool.LINE_HIGHLIGHTER || tool == InkCanvasView.Tool.LINE_DOTTED) {
                 Button(onClick = { angleOn = !angleOn; canvas?.lineAngle = angleOn }, gap) { Text("Angle: " + if (angleOn) "shown, no snap" else "off", softWrap = false) }
             }
             if (tool == InkCanvasView.Tool.CONNECTOR) {
@@ -267,7 +276,9 @@ private fun InkScreen() {
                 }
                 Item("Size: " + if (letter) "Letter" else "A4") { letter = !letter; apply() }
                 Item("Orientation: " + if (landscape) "landscape" else "portrait") { landscape = !landscape; apply() }
-                Item("Pages added: " + listOf("down", "right", "both")[flow]) { flow = (flow + 1) % 3; canvas?.flow = Flow.entries[flow] }
+                Item("Scrolling: " + if (gridScroll) "grid (pull past the end to add a page)" else "seamless (no adding pages)") {
+                    gridScroll = !gridScroll; canvas?.scrollMode = if (gridScroll) ScrollMode.GRID else ScrollMode.SEAMLESS
+                }
                 Item("Scroll glide: " + listOf("off", "low", "medium", "high")[scroll]) {
                     scroll = (scroll + 1) % 4; canvas?.scrollIntensity = listOf(0.0, 0.5, 1.0, 2.0)[scroll]
                 }
@@ -275,6 +286,25 @@ private fun InkScreen() {
             }
             Text("Page row ${cell.second + 1}, column ${cell.first + 1} of ${canvas?.notebook?.pages?.size ?: 1}", Modifier.padding(start = 16.dp))
             Text(latency, Modifier.padding(start = 16.dp))
+        }
+        // The zoom, as a percentage of a page fitted to the screen, with a button to fit it. It shows while the zoom
+        // changes and a moment after, and stays while it is not 100.
+        LaunchedEffect(zoom) {
+            if (firstZoom) { firstZoom = false; return@LaunchedEffect }
+            zoomShown = true
+            delay(2500)
+            zoomShown = false
+        }
+        if (zoomShown || zoom != 100) {
+            Surface(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+                shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp,
+            ) {
+                Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("$zoom%")
+                    TextButton(onClick = { canvas?.fitToScreen() }, Modifier.padding(start = 8.dp)) { Text("Fit to screen") }
+                }
+            }
         }
         if (tableDialog) {
             AlertDialog(
@@ -363,6 +393,8 @@ private fun toolName(t: InkCanvasView.Tool) = when (t) {
     InkCanvasView.Tool.LASSO -> "Lasso"
     InkCanvasView.Tool.LINE -> "Line"
     InkCanvasView.Tool.LINE_HIGHLIGHTER -> "Line highlighter"
+    InkCanvasView.Tool.DOTTED -> "Dotted pen"
+    InkCanvasView.Tool.LINE_DOTTED -> "Dotted line"
     InkCanvasView.Tool.LASER -> "Laser pointer"
     InkCanvasView.Tool.TEXT -> "Text"
     InkCanvasView.Tool.TABLE -> "Table"

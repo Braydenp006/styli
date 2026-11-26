@@ -34,6 +34,10 @@ type Tool int32
 const (
 	Tool_TOOL_PEN         Tool = 0
 	Tool_TOOL_HIGHLIGHTER Tool = 1
+	// The same path as a pen stroke, drawn as a row of round dots along it: a dot
+	// 1.5 pen widths across every 3.5 pen widths. A reader that does not know it
+	// can draw it as a pen stroke.
+	Tool_TOOL_DOTTED Tool = 2
 )
 
 // Enum value maps for Tool.
@@ -41,10 +45,12 @@ var (
 	Tool_name = map[int32]string{
 		0: "TOOL_PEN",
 		1: "TOOL_HIGHLIGHTER",
+		2: "TOOL_DOTTED",
 	}
 	Tool_value = map[string]int32{
 		"TOOL_PEN":         0,
 		"TOOL_HIGHLIGHTER": 1,
+		"TOOL_DOTTED":      2,
 	}
 )
 
@@ -2215,10 +2221,11 @@ const file_ink_proto_rawDesc = "" +
 	"\aFillSet\x12\x14\n" +
 	"\x05color\x18\x01 \x01(\rR\x05color\x12(\n" +
 	"\x05rings\x18\x02 \x03(\v2\x12.styli.ink.v1.RingR\x05rings\"\r\n" +
-	"\vFillRemoved**\n" +
+	"\vFillRemoved*;\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
-	"\x10TOOL_HIGHLIGHTER\x10\x01*E\n" +
+	"\x10TOOL_HIGHLIGHTER\x10\x01\x12\x0f\n" +
+	"\vTOOL_DOTTED\x10\x02*E\n" +
 	"\bTemplate\x12\x12\n" +
 	"\x0eTEMPLATE_BLANK\x10\x00\x12\x12\n" +
 	"\x0eTEMPLATE_LINED\x10\x01\x12\x11\n" +

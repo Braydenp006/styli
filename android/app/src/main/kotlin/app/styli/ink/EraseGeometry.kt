@@ -17,7 +17,7 @@ enum class EraseOnly {
     /** May this stroke be erased? */
     fun matches(item: Item) = when (this) {
         ALL -> true
-        INK -> item.tool == Tool.TOOL_PEN
+        INK -> item.tool == Tool.TOOL_PEN || item.tool == Tool.TOOL_DOTTED
         HIGHLIGHTS -> item.tool == Tool.TOOL_HIGHLIGHTER
         LINES -> item.pts.size == 2
         else -> false

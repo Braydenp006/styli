@@ -92,6 +92,16 @@ class PageGeometry(
         clamp()
     }
 
+    /** The scale that [fit] gives: 100% in the zoom indicator. A fixed page fits its width, a canvas shows real size. */
+    fun fitScale(fitW: Int = pageW): Double = if (infinite) oneToOne else widthScale(fitW)
+
+    /** How far in the view is, as a percentage of [fitScale]: 100 is the page fitted to the width of the screen. */
+    fun percent(fitW: Int = pageW): Int {
+        if (viewW <= 0 || viewH <= 0) return 100
+        val ref = fitScale(fitW)
+        return if (ref <= 0.0) 100 else Math.round(scale / ref * 100).toInt()
+    }
+
     /** Takes the zoom and position of [other] (the same view of a surface that has since changed). */
     fun restore(other: PageGeometry) {
         scale = other.scale
@@ -107,9 +117,25 @@ class PageGeometry(
         clamp()
     }
 
-    /** Moves by [dx] pixels sideways only, as far as the edges allow (the settling of a scroll). */
-    fun slideBy(dx: Double) {
+    /** Sets the zoom and offset together, as far as the zoom limits and the edges allow (the zoom into a page animates through this). */
+    fun viewTo(scale: Double, tx: Double, ty: Double) {
+        this.scale = scale
+        this.tx = tx
+        this.ty = ty
+        clamp()
+    }
+
+    /** Puts the surface's offset at ([tx], [ty]), as far as the edges allow (keeping a place on the screen when pages come or go). */
+    fun offsetTo(tx: Double, ty: Double) {
+        this.tx = tx
+        this.ty = ty
+        clamp()
+    }
+
+    /** Moves by [dx] pixels sideways and [dy] down, as far as the edges allow (the settling of a scroll). */
+    fun slideBy(dx: Double, dy: Double = 0.0) {
         tx += dx
+        ty += dy
         clamp()
     }
 

@@ -99,6 +99,12 @@ object PageSnap {
     /** The pull of a column reaches this share of the screen's width. */
     const val RANGE = 0.18
 
+    /** Up and down the pull reaches this share of the screen's height (a page is tall, so a little more). */
+    const val RANGE_Y = 0.22
+
+    /** A glide that would stop within this share of the screen of a page is bent to stop on it. */
+    const val LAND = 0.35
+
     /**
      * The horizontal offset to settle at, or null to stay. A column narrower than the screen settles centred;
      * a wider one settles with its left or right edge at the [margin]. Only a column within [range] pixels
@@ -115,5 +121,21 @@ object PageSnap {
         val b = best ?: return null
         val d = Math.abs(b - tx)
         return if (d < 0.5 || d > range) null else b
+    }
+
+    /**
+     * The offsets a locked scroll along these [spans] (each a start and a size on the surface, along one axis) may
+     * reach: from the first one at the top (or centred, if it fits) to the last one at the bottom (or centred).
+     * Between them a span longer than the screen scrolls freely. Works for either axis ([viewSize] is its length).
+     */
+    fun range(viewSize: Int, scale: Double, spans: List<Pair<Double, Double>>, margin: Double): Pair<Double, Double> {
+        if (spans.isEmpty()) return 0.0 to 0.0
+        val sorted = spans.sortedBy { it.first }
+        fun fits(size: Double) = size * scale + 2 * margin <= viewSize
+        val (firstStart, firstSize) = sorted.first()
+        val (lastStart, lastSize) = sorted.last()
+        val a = if (fits(firstSize)) (viewSize - firstSize * scale) / 2 - firstStart * scale else margin - firstStart * scale
+        val b = if (fits(lastSize)) (viewSize - lastSize * scale) / 2 - lastStart * scale else viewSize - margin - lastSize * scale - lastStart * scale
+        return minOf(a, b) to maxOf(a, b)
     }
 }

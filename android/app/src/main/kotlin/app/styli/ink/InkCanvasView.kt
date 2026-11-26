@@ -58,7 +58,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, LASER, TEXT, TABLE, SHAPE, BUCKET, CONNECTOR }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, DOTTED, LINE_DOTTED, LASER, TEXT, TABLE, SHAPE, BUCKET, CONNECTOR }
 
     /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
     val notebook = Notebook()
@@ -76,8 +76,47 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** Called when the page being worked on changes (the pen went down on another, or one was added or taken back). */
     var onPageChanged: (() -> Unit)? = null
 
-    /** Which finger pulls past the surface's edge may add a page (see [PageTurn]). */
-    var flow = Flow.DOWN
+    /** Called with the zoom as a percentage of a page fitted to the screen (100 is fitted) whenever it changes. */
+    var onZoom: ((Int) -> Unit)? = null
+    private var shownZoom = -1
+
+    /** Zooms into [p]: fitted to the width of the screen with its top left at the corner, in one smooth movement. It becomes the page being worked on. */
+    private fun zoomIntoPage(p: PageModel) {
+        val l = layout ?: return
+        stopGlide()
+        if (p !== work) becomeWork(p)
+        val s1 = vp.fitScale(maxOf(1, p.page.width))
+        val (ox, oy) = l.origin(p)
+        val tx1 = PageGeometry.MARGIN - ox * s1
+        val ty1 = PageGeometry.MARGIN - oy * s1
+        val s0 = vp.scale; val tx0 = vp.tx; val ty0 = vp.ty
+        snapAnim?.cancel()
+        snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 320
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            addUpdateListener {
+                val f = it.animatedFraction.toDouble()
+                vp.viewTo(s0 + (s1 - s0) * f, tx0 + (tx1 - tx0) * f, ty0 + (ty1 - ty0) * f)
+                pageLayer.invalidate()
+            }
+            start()
+        }
+    }
+
+    /** Zooms back to the page fitted to the width of the screen, showing the page being worked on (a canvas goes back to real size, about the middle of the screen). */
+    fun fitToScreen() {
+        stopGlide()
+        if (vp.infinite) vp.zoomBy(vp.fitScale() / vp.scale, width / 2.0, height / 2.0)
+        else {
+            vp.fit(width, height, maxOf(1, work.page.width))
+            layout?.origin(work)?.let { vp.scrollTo(it.first, it.second) }
+        }
+        pageLayer.invalidate()
+    }
+
+    /** How scrolling goes over several pages: free across them, or locked to the grid (see [ScrollMode]). */
+    var scrollMode = ScrollMode.GRID
+        set(v) { field = v; stopGlide(); gridCell = null; settle(); pageLayer.invalidate() }
 
     /** How far a scroll carries on after the finger lets go: 1 is normal, 0 is not at all (see [Fling.start]). */
     var scrollIntensity = 1.0
@@ -136,10 +175,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         object : View(context) {
             override fun onDraw(canvas: Canvas) {
                 activate(work)
+                vp.percent(maxOf(1, work.page.width)).let { if (it != shownZoom) { shownZoom = it; onZoom?.invoke(it) } }
                 positionEditor()
                 canvas.save()
-                val (shiftX, shiftY) = PageTurn.dominant(pullX, pullY)
-                canvas.translate((shiftX * PULL_SHIFT).toFloat(), (shiftY * PULL_SHIFT).toFloat()) // the surface follows a pull a little
+                canvas.translate((pullDrawX * PULL_SHIFT).toFloat(), (pullDrawY * PULL_SHIFT).toFloat()) // the surface follows a pull a little
                 canvas.drawColor(if (vp.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
                 val l = layout
                 val pages = if (l == null) listOf(work) else vp.visible().let { l.visible(it[0], it[1], it[2], it[3]) }
@@ -151,6 +190,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawLassoOverlay(canvas)
                 drawGuides(canvas)
                 drawLinePreview(canvas)
+                drawDottedPreview(canvas)
                 drawSnapPreview(canvas)
                 drawTextDragPreview(canvas)
                 drawShapeDragPreview(canvas)
@@ -188,6 +228,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             val table = model.tableOf(id)
             if (table != null) { drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb); continue }
             val item = model.itemOf(id)
+            if (item != null && item.tool == StrokeTool.TOOL_DOTTED) { drawDotted(canvas, item, vl, vt, vr, vb); continue }
             if (item != null) {
                 // A transform makes a new Item under the same ID, so an old picture is not reused.
                 val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
@@ -377,13 +418,28 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     fun undo() {
         finishText()
         // A page added by a pull and left untouched goes away with the undo; anything else undoes a step.
-        if (!model.canUndo && notebook.removeMade()) becomeWork(notebook.current) else changed(model.undo())
+        val keep = centrePage()
+        val before = keep?.let { layout?.origin(it) }
+        val (tx, ty) = vp.tx to vp.ty
+        if (!model.canUndo && notebook.removeMade()) {
+            if (work !in notebook.pages) { becomeWork(notebook.current); layout?.origin(work)?.let { vp.scrollTo(it.first, it.second) } }
+            else { notebook.go(work); rebuildLayout(false); keepView(keep, before, tx, ty) }
+            pageLayer.invalidate()
+        } else changed(model.undo())
+    }
+
+    /** After pages came or went, puts the view back where [keep] was on the screen ([before] is its place on the old surface, ([tx], [ty]) the old offset). */
+    private fun keepView(keep: PageModel?, before: Pair<Double, Double>?, tx: Double, ty: Double, extraX: Double = 0.0, extraY: Double = 0.0) {
+        val after = keep?.takeIf { it in notebook.pages }?.let { layout?.origin(it) }
+        if (before == null || after == null) return
+        vp.offsetTo(tx - (after.first - before.first) * vp.scale + extraX, ty - (after.second - before.second) * vp.scale + extraY)
     }
     fun redo() { finishText(); changed(model.redo()) }
 
     private fun changed(did: Boolean) {
         if (!did) return
         val all = notebook.pages
+        dottedPaths.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         placed.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         layouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.texts.map { it.id } })
         selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id } + model.shapes.map { it.id } + model.fills.map { it.id } + model.connectors.map { it.id })
@@ -518,7 +574,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (rulerGrab(event)) return true
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !shaping && !bucketing && !connecting && !textTapping && !tabling) {
+            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !shaping && !bucketing && !connecting && !dotting && !textTapping && !tabling) {
                 gestureActive = false // a pen landing after a palm takes over
                 pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
@@ -566,13 +622,14 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     return true
                 }
                 val rl = ruler
-                if (rl != null && (tool == Tool.PEN || tool == Tool.HIGHLIGHTER)) {
+                if (rl != null && (tool == Tool.PEN || tool == Tool.HIGHLIGHTER || tool == Tool.DOTTED)) {
                     val side = rl.edgeNear(event.getX(i), event.getY(i), rulerReachPx)
                     if (side != 0) { // the pen is at the ruler's edge: it draws a line along it
                         val (sx, sy) = rl.onEdge(event.getX(i), event.getY(i), side)
                         ruling = true
                         rulerSide = side
                         lineHl = tool == Tool.HIGHLIGHTER
+                        lineDotted = tool == Tool.DOTTED
                         lining = true
                         lineStartX = geometry.toPageX(sx.toDouble()).toFloat()
                         lineStartY = geometry.toPageY(sy.toDouble()).toFloat()
@@ -581,8 +638,17 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         return true
                     }
                 }
-                if (tool == Tool.LINE || tool == Tool.LINE_HIGHLIGHTER) {
+                if (tool == Tool.DOTTED) {
+                    dotting = true
+                    drawn.clear()
+                    drawStartMs = event.eventTime
+                    collect(event, i)
+                    pageLayer.invalidate()
+                    return true
+                }
+                if (tool == Tool.LINE || tool == Tool.LINE_HIGHLIGHTER || tool == Tool.LINE_DOTTED) {
                     lineHl = tool == Tool.LINE_HIGHLIGHTER
+                    lineDotted = tool == Tool.LINE_DOTTED
                     lining = true
                     lineStartX = geometry.toPageX(event.getX(i).toDouble()).toFloat()
                     lineStartY = geometry.toPageY(event.getY(i).toDouble()).toFloat()
@@ -610,7 +676,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 return true
             }
             if (!isPen(event.getToolType(i)) && strokeId == null && (action == MotionEvent.ACTION_DOWN || gestureActive)) {
-                if (action == MotionEvent.ACTION_DOWN) { slid = 0.0; pinched = false; velocity?.recycle(); velocity = VelocityTracker.obtain() }
+                if (action == MotionEvent.ACTION_DOWN) { slid = 0.0; moveTotal = 0.0; pinched = false; velocity?.recycle(); velocity = VelocityTracker.obtain(); beginGrid() }
                 gestureActive = true
             }
         }
@@ -621,6 +687,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (shaping) return shapeGesture(event)
         if (bucketing) return bucketGesture(event)
         if (connecting) return connectGesture(event)
+        if (dotting) return dotGesture(event)
         return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (snapped != null) snapping(event) else if (strokeId != null) drawing(event) else moving(event)
     }
 
@@ -1787,6 +1854,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private var lining = false
     private var lineHl = false // the line being dragged is a highlighter stroke
+    private var lineDotted = false // ...or a dotted one
     private var ruling = false // ...and it runs along the ruler's edge
     private var rulerSide = 0
     private var lineStartX = 0f
@@ -1824,6 +1892,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val g = geometry
         linePaint.color = if (lineHl) highlighterColor else penColor
         linePaint.strokeWidth = maxOf(1.5f, ((if (lineHl) highlighterWidth else penWidth) * g.scale).toFloat())
+        linePaint.pathEffect = null
+        if (lineDotted && !lineHl) {
+            linePaint.strokeWidth = maxOf(1.5f, (Dotted.dot(penWidth.toFloat()) * g.scale).toFloat())
+            linePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(0.01f, (Dotted.spacing(penWidth.toFloat()) * g.scale).toFloat()), 0f)
+        }
         canvas.drawLine(
             g.toScreenX(lineStartX.toDouble()).toFloat(), g.toScreenY(lineStartY.toDouble()).toFloat(),
             g.toScreenX(lineEnd.first.toDouble()).toFloat(), g.toScreenY(lineEnd.second.toDouble()).toFloat(), linePaint,
@@ -1856,12 +1929,82 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 ruling = false
                 if (pts != null) {
                     if (lineHl) model.add(StrokeTool.TOOL_HIGHLIGHTER, highlighterColor, highlighterWidth, pts)
-                    else model.add(StrokeTool.TOOL_PEN, penColor, penWidth, pts)
+                    else model.add(if (lineDotted) StrokeTool.TOOL_DOTTED else StrokeTool.TOOL_PEN, penColor, penWidth, pts)
                 }
                 changed(true)
             }
         }
         return true
+    }
+
+    // ---- Dotted pen: the pen draws a row of dots. It is drawn here (not by the ink library's live layer) and stored as
+    // an ordinary stroke with the dotted tool when the pen lifts. ----
+
+    private var dotting = false
+    private val dotPaint = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; isAntiAlias = true }
+    private val dotFillPaint = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val dottedPaths = HashMap<String, Triple<Item, android.graphics.Path, FloatArray>>() // each finished one's path and its box
+
+    private fun dotGesture(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) { collect(event, i); pageLayer.invalidate() }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                dotting = false
+                if (event.actionMasked != MotionEvent.ACTION_CANCEL && drawn.isNotEmpty()) model.add(StrokeTool.TOOL_DOTTED, penColor, penWidth, Dotted.thinned(drawn.toList()))
+                drawn.clear()
+                changed(true)
+            }
+        }
+        return true
+    }
+
+    /** The dots as the pen draws them, on the screen. */
+    private fun drawDottedPreview(canvas: Canvas) {
+        if (!dotting || drawn.isEmpty()) return
+        val g = geometry
+        val w = penWidth.toFloat()
+        dotPaint.color = penColor
+        dotPaint.strokeWidth = maxOf(1.5f, (Dotted.dot(w) * g.scale).toFloat())
+        dotPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(0.01f, (Dotted.spacing(w) * g.scale).toFloat()), 0f)
+        val path = android.graphics.Path()
+        drawn.forEachIndexed { k, p ->
+            val x = g.toScreenX(p.x.toDouble()).toFloat(); val y = g.toScreenY(p.y.toDouble()).toFloat()
+            if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        if (drawn.size == 1) {
+            dotFillPaint.color = penColor
+            canvas.drawCircle(g.toScreenX(drawn[0].x.toDouble()).toFloat(), g.toScreenY(drawn[0].y.toDouble()).toFloat(), dotPaint.strokeWidth / 2, dotFillPaint)
+        } else canvas.drawPath(path, dotPaint)
+    }
+
+    /** Draws a finished dotted stroke in page units (the canvas has the page matrix). */
+    private fun drawDotted(canvas: Canvas, item: Item, vl: Float, vt: Float, vr: Float, vb: Float) {
+        val moved = dragMap?.takeIf { item.id in selection }
+        val cached = dottedPaths[item.id]?.takeIf { it.first === item } ?: run {
+            val p = android.graphics.Path()
+            item.pts.forEachIndexed { k, pt -> if (k == 0) p.moveTo(pt.x, pt.y) else p.lineTo(pt.x, pt.y) }
+            val pad = Dotted.dot(item.width.toFloat())
+            Triple(item, p, floatArrayOf(item.pts.minOf { it.x } - pad, item.pts.minOf { it.y } - pad, item.pts.maxOf { it.x } + pad, item.pts.maxOf { it.y } + pad))
+                .also { dottedPaths[item.id] = it }
+        }
+        val (l, t, r, b) = cached.third.toList()
+        if (moved == null && (r < vl || l > vr || b < vt || t > vb)) return
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        val w = item.width.toFloat()
+        val dot = maxOf(Dotted.dot(w), (1.5 / geometry.scale).toFloat())
+        if (item.pts.size == 1) {
+            dotFillPaint.color = item.color
+            canvas.drawCircle(item.pts[0].x, item.pts[0].y, dot / 2, dotFillPaint)
+        } else {
+            dotPaint.color = item.color
+            dotPaint.strokeWidth = dot
+            dotPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(0.01f, Dotted.spacing(w)), 0f)
+            canvas.drawPath(cached.second, dotPaint)
+        }
+        canvas.restore()
     }
 
     // ---- Laser pointer: a red dot that follows the pen and fades. Nothing is stored. ----
@@ -2102,14 +2245,28 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
         if (n > 0) { cx /= n; cy /= n }
         if (action == MotionEvent.ACTION_MOVE) {
-            val dx = (cx - lastX).toDouble()
-            val dy = (cy - lastY).toDouble()
-            val (leftX, leftY) = geometry.panBy(dx, dy)
-            slid += Math.abs(dx)
-            if (n > 1) pinched = true
-            if (!geometry.infinite && n == 1) { // one finger pulls at an edge; two fingers pinch
-                pullX = PageTurn.pull(pullX, dx, leftX)
-                pullY = PageTurn.pull(pullY, dy, leftY)
+            var dx = (cx - lastX).toDouble()
+            var dy = (cy - lastY).toDouble()
+            moveTotal += Math.hypot(dx, dy)
+            if (n > 1) { pinched = true; gridCell = null } // two fingers pinch: the grid's lock is for one
+            var held = false
+            if (gridCell != null && gridAxis == null) { // locked scrolling picks its direction from the first few pixels
+                gridDx += dx; gridDy += dy
+                if (maxOf(Math.abs(gridDx), Math.abs(gridDy)) < AXIS_SLOP_PX) held = true
+                else { gridAxis = if (Math.abs(gridDy) >= Math.abs(gridDx)) Axis.V else Axis.H; dx = gridDx; dy = gridDy }
+            }
+            if (!held) {
+                val (leftX, leftY) = pan(dx, dy)
+                slid += Math.abs(dx) + (if (gridCell != null) Math.abs(dy) else 0.0)
+                if (gridCell != null && n == 1) { // one finger pulls at the end of a row or column
+                    pullX = PageTurn.pull(pullX, dx, leftX)
+                    pullY = PageTurn.pull(pullY, dy, leftY)
+                    PageTurn.dominant(pullX, pullY).let { pullDrawX = it.first; pullDrawY = it.second }
+                    // A pull counts only once it has gone far enough and been held there for a moment.
+                    val reached = PageTurn.direction(pullX, pullY)?.let { (_, px) -> PageTurn.decide(px / pxPerUnit) == Turn.ADD } == true
+                    if (!reached) pullReachedAt = 0L
+                    else if (pullReachedAt == 0L) { pullReachedAt = android.os.SystemClock.uptimeMillis(); postDelayed({ pageLayer.invalidate() }, PULL_HOLD_MS + 20) }
+                }
             }
             pageLayer.invalidate()
         }
@@ -2127,8 +2284,12 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             }
             tracker?.recycle()
             if (!glides && !pulled && !pinched && slid > SLIDE_MIN_PX) settle() // otherwise it settles when the glide ends
+            // A tap on a page, seen from afar, zooms into it.
+            if (!pinched && moveTotal < TAP_PX * 1.5 && layout != null && !vp.infinite && vp.percent(maxOf(1, work.page.width)) < ZOOMED_OUT_PERCENT) {
+                layout?.pageAt(vp.toPageX(lastX.toDouble()), vp.toPageY(lastY.toDouble()))?.let { zoomIntoPage(it) }
+            }
         }
-        if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; velocity?.recycle(); velocity = null; pageLayer.invalidate() }
+        if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; pullDrawX = 0.0; pullDrawY = 0.0; pullReachedAt = 0L; velocity?.recycle(); velocity = null; pageLayer.invalidate() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) gestureActive = false
         return true
     }
@@ -2137,34 +2298,155 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private var pullX = 0.0 // how far the finger has pulled past an edge, in screen pixels
     private var pullY = 0.0
+    private var pullDrawX = 0.0 // how far the surface is drawn displaced by the pull (it eases back when the finger lets go)
+    private var pullDrawY = 0.0
+    private var pullAnim: android.animation.ValueAnimator? = null
+    private var pullReachedAt = 0L // when the pull got far enough to add a page (0 if it has not)
+
+    /** Has the pull gone far enough, and been held there long enough, to add a page on letting go? */
+    private fun pullArmed() = pullReachedAt != 0L && android.os.SystemClock.uptimeMillis() - pullReachedAt >= PULL_HOLD_MS
     private var slid = 0.0 // how far this finger gesture moved sideways, in pixels
+    private var moveTotal = 0.0 // how far the finger has moved in all, in pixels (a tap barely moves)
     private var pinched = false // this gesture used two fingers
     private var snapAnim: android.animation.ValueAnimator? = null
 
-    /** Lets go of a pull: adds a page if it was long enough and the setting allows it. True if there was a pull. */
+    /**
+     * Lets go of a pull: adds a page if it was long enough, beside the last page of the row or column being scrolled,
+     * on the side that was pulled. True if there was a pull.
+     */
     private fun endPull(): Boolean {
         val pull = PageTurn.direction(pullX, pullY)
+        val (shiftX, shiftY) = PageTurn.dominant(pullX, pullY)
         pullX = 0.0
         pullY = 0.0
-        val l = layout
-        if (pull != null && l != null) {
+        var added = false
+        val cell = gridCell
+        val armed = pullArmed()
+        pullReachedAt = 0L
+        if (pull != null && cell != null && layout != null) {
             val (dir, px) = pull
-            if (PageTurn.decide(px / pxPerUnit, dir, flow) == Turn.ADD) {
-                // Beside the page the middle of the screen is over: below the lowest of its column, or right of the
-                // right-most of its row.
-                val from = if (dir == Dir.DOWN) l.bottomOfColumnAt(vp.toPageX(width / 2.0)) else l.rightOfRowAt(vp.toPageY(height / 2.0))
+            if (armed && PageTurn.decide(px / pxPerUnit) == Turn.ADD) {
                 finishText()
-                val made = notebook.add(from, dir)
+                val before = layout?.origin(cell)
+                val (tx, ty) = vp.tx to vp.ty
+                val current = notebook.current
+                val made = notebook.add(notebook.end(cell, dir), dir)
                 if (made != null) {
-                    becomeWork(made)
-                    layout?.origin(made)?.let { vp.scrollTo(it.first, it.second) } // show it
+                    // The view stays on the page it was on, as the pull left it, then slides to show the edge of the new one.
+                    notebook.go(current)
+                    rebuildLayout(false)
+                    keepView(cell, before, tx, ty, shiftX * PULL_SHIFT, shiftY * PULL_SHIFT)
+                    peek(cell, before, tx, ty, dir)
+                    added = true
                 }
+            }
+        }
+        // The displacement the pull showed goes away smoothly (when a page was added it moved into the scroll itself).
+        pullAnim?.cancel()
+        if (added || (pullDrawX == 0.0 && pullDrawY == 0.0)) { pullDrawX = 0.0; pullDrawY = 0.0 }
+        else {
+            val fx = pullDrawX; val fy = pullDrawY
+            pullAnim = android.animation.ValueAnimator.ofFloat(1f, 0f).apply {
+                duration = 220
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener { pullDrawX = fx * it.animatedValue as Float; pullDrawY = fy * it.animatedValue as Float; pageLayer.invalidate() }
+                start()
             }
         }
         pageLayer.invalidate()
         // Only a real pull (as long as it needs to be to add a page) ends the scroll there and then; the little a
         // finger drifts sideways during a vertical flick is not one, and must not stop the glide.
         return pull != null && pull.second / pxPerUnit >= PageTurn.PULL
+    }
+
+    /** Slides the view a little towards the page just added in direction [dir], so the edge of it shows. [cell] is the page the view is on. */
+    private fun peek(cell: PageModel, before: Pair<Double, Double>?, tx: Double, ty: Double, dir: Dir) {
+        val after = layout?.origin(cell) ?: return
+        if (before == null) return
+        val s = vp.scale
+        // Where the page's own spot on the screen is now (the pull's shift already applied by the caller).
+        val baseX = tx - (after.first - before.first) * s
+        val baseY = ty - (after.second - before.second) * s
+        val gap = NotebookLayout.GAP * s
+        val toX = baseX - dir.dCol * (gap + PEEK * width)
+        val toY = baseY - dir.dRow * (gap + PEEK * height)
+        val fromX = vp.tx
+        val fromY = vp.ty
+        snapAnim?.cancel()
+        snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 320
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener {
+                val f = it.animatedFraction
+                vp.offsetTo(fromX + (toX - fromX) * f, fromY + (toY - fromY) * f)
+                pageLayer.invalidate()
+            }
+            start()
+        }
+    }
+
+    // ---- Grid scrolling: while a page is fitted to the screen, a drag goes one way only (the first few pixels say
+    // which), keeps to the row or column of the page it started on, and settles onto pages. ----
+
+    private enum class Axis { H, V }
+
+    private var gridCell: PageModel? = null // the page nearest the middle when the finger came down; null when scrolling is free
+    private var gridAxis: Axis? = null
+    private var gridDx = 0.0
+    private var gridDy = 0.0
+
+    /** Is locked scrolling in force: the grid mode, several pages, and zoomed out to about a fitted page. */
+    private fun gridOn() = scrollMode == ScrollMode.GRID && layout != null && !vp.infinite &&
+        vp.percent(maxOf(1, work.page.width)) in GRID_MIN_PERCENT..GRID_MAX_PERCENT
+
+    /** The page nearest the middle of the screen. */
+    private fun centrePage(): PageModel? = layout?.nearest(vp.toPageX(width / 2.0), vp.toPageY(height / 2.0))
+
+    private fun beginGrid() {
+        pullAnim?.cancel()
+        pullDrawX = 0.0; pullDrawY = 0.0
+        pullReachedAt = 0L
+        gridCell = if (gridOn()) centrePage() else null
+        gridAxis = null
+        gridDx = 0.0
+        gridDy = 0.0
+    }
+
+    /** How far the surface may be scrolled (its offset) along an axis for the row or column through [cell]. */
+    private fun gridRange(cell: PageModel, horizontal: Boolean): Pair<Double, Double> {
+        val l = layout ?: return 0.0 to 0.0
+        val spans = notebook.run(cell, horizontal).map { p ->
+            l.origin(p).let { o -> if (horizontal) o.first to p.page.width.toDouble() else o.second to p.page.height.toDouble() }
+        }
+        return PageSnap.range(if (horizontal) width else height, vp.scale, spans, PageGeometry.MARGIN)
+    }
+
+    /**
+     * [t] moved by [d] but kept within [lo] to [hi]. If it is already outside (the view is between rows, say), it is
+     * never pulled back in with a jump: it may only move towards the range, and no further out.
+     */
+    private fun softClamp(t: Double, d: Double, lo: Double, hi: Double): Double = when {
+        t < lo -> if (d > 0) minOf(t + d, hi) else t
+        t > hi -> if (d < 0) maxOf(t + d, lo) else t
+        else -> (t + d).coerceIn(lo, hi)
+    }
+
+    /** Scrolls by (dx, dy) pixels and returns what could not be applied. Locked: one direction, within the row or column. */
+    private fun pan(dx: Double, dy: Double): Pair<Double, Double> {
+        val cell = gridCell ?: return geometry.panBy(dx, dy)
+        val axis = gridAxis ?: return 0.0 to 0.0
+        val ax = if (axis == Axis.H) dx else 0.0
+        val ay = if (axis == Axis.V) dy else 0.0
+        val (x0, x1) = gridRange(cell, true)
+        val (y0, y1) = gridRange(cell, false)
+        val nx = softClamp(vp.tx, ax, x0, x1)
+        val ny = softClamp(vp.ty, ay, y0, y1)
+        val fromX = vp.tx
+        val fromY = vp.ty
+        vp.slideBy(nx - fromX, ny - fromY)
+        // What is left over is what the surface really did not move: its own edges can be tighter than the row's or
+        // column's range (a page shorter than the screen cannot be centred at the very end), and that counts as a pull too.
+        return (ax - (vp.tx - fromX)) to (ay - (vp.ty - fromY))
     }
 
     private var velocity: VelocityTracker? = null
@@ -2178,19 +2460,47 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             val dt = ((now - glideAt) / 1e9).coerceIn(0.0, 0.1)
             glideAt = now
             val (dx, dy) = f.step(dt)
-            val (leftX, leftY) = geometry.panBy(dx, dy)
+            val (leftX, leftY) = pan(dx, dy)
             if (Math.abs(leftX) > Math.abs(dx) * 0.5 + 0.01) f.stopX() // the page met an edge (or has no room that way)
             if (Math.abs(leftY) > Math.abs(dy) * 0.5 + 0.01) f.stopY()
             pageLayer.invalidate()
             if (f.done) {
                 glide = null
-                if (slid > SLIDE_MIN_PX && !pinched) settle()
+                if (slid > SLIDE_MIN_PX && !pinched && !glideLanded) settle()
             } else postOnAnimation(this)
         }
     }
 
     /** Lets the scroll carry on after the finger lets go, at the speed it had. False if it was too slow. */
-    private fun startGlide(vx: Double, vy: Double): Boolean {
+    private var glideLanded = false // the glide was bent to end on a page, so nothing needs to settle it after
+
+    private fun startGlide(vx0: Double, vy0: Double): Boolean {
+        var vx = vx0; var vy = vy0
+        glideLanded = false
+        val cell = gridCell
+        if (cell != null) { // locked: it carries on in the direction it was going, and only that, and comes to rest on a page
+            val l = layout
+            val tau = Fling.TAU * scrollIntensity
+            when (gridAxis) {
+                Axis.H -> {
+                    vy = 0.0
+                    if (l != null) {
+                        val spans = notebook.run(centrePage() ?: cell, true).map { p -> l.origin(p).first to p.page.width.toDouble() }
+                        val to = PageSnap.target(vp.tx + vx * tau, vp.scale, width, spans, PageGeometry.MARGIN, PageSnap.LAND * width)
+                        vx = Fling.landing(vp.tx, vx, tau, to).also { glideLanded = it != vx }
+                    }
+                }
+                Axis.V -> {
+                    vx = 0.0
+                    if (l != null) {
+                        val spans = notebook.run(centrePage() ?: cell, false).map { p -> l.origin(p).second to p.page.height.toDouble() }
+                        val to = PageSnap.target(vp.ty + vy * tau, vp.scale, height, spans, PageGeometry.MARGIN, PageSnap.LAND * height)
+                        vy = Fling.landing(vp.ty, vy, tau, to).also { glideLanded = it != vy }
+                    }
+                }
+                null -> return false
+            }
+        }
         val f = Fling.start(vx, vy, scrollIntensity) ?: return false
         glide = f
         glideAt = System.nanoTime()
@@ -2205,18 +2515,30 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         snapAnim?.cancel()
     }
 
-    /** After a sideways scroll, a page slides the last bit into place if one is close (see [PageSnap]). */
+    /**
+     * After a scroll, a page slides the last bit into place if one is close (see [PageSnap]): sideways in either mode
+     * (with the grid, along the row of the page in the middle), and up or down too with the grid.
+     */
     private fun settle() {
         val l = layout ?: return
         val surface = vp
-        val target = PageSnap.target(surface.tx, surface.scale, width, l.columns, PageGeometry.MARGIN, PageSnap.RANGE * width) ?: return
-        val from = surface.tx
+        val cell = if (gridOn()) centrePage() else null
+        val columns = if (cell != null) notebook.run(cell, true).map { p -> l.origin(p).first to p.page.width.toDouble() } else l.columns
+        val toX = PageSnap.target(surface.tx, surface.scale, width, columns, PageGeometry.MARGIN, PageSnap.RANGE * width)
+        val toY = if (cell == null) null else PageSnap.target(
+            surface.ty, surface.scale, height, notebook.run(cell, false).map { p -> l.origin(p).second to p.page.height.toDouble() },
+            PageGeometry.MARGIN, PageSnap.RANGE_Y * height,
+        )
+        if (toX == null && toY == null) return
+        val fromX = surface.tx
+        val fromY = surface.ty
         snapAnim?.cancel()
         snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 180
-            interpolator = android.view.animation.DecelerateInterpolator()
+            duration = 280
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
             addUpdateListener {
-                surface.slideBy(from + (target - from) * it.animatedFraction - surface.tx)
+                val f = it.animatedFraction
+                surface.slideBy(if (toX == null) 0.0 else fromX + (toX - fromX) * f - surface.tx, if (toY == null) 0.0 else fromY + (toY - fromY) * f - surface.ty)
                 pageLayer.invalidate()
             }
             start()
@@ -2229,8 +2551,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** Once the pull is long enough to count, say what letting go will do. */
     private fun drawPullHint(canvas: Canvas) {
         val (dir, px) = PageTurn.direction(pullX, pullY) ?: return
-        if (layout == null || PageTurn.decide(px / pxPerUnit, dir, flow) != Turn.ADD) return
-        val text = "Release to add a page"
+        if (layout == null || gridCell == null || PageTurn.decide(px / pxPerUnit) != Turn.ADD) return
+        val text = if (pullArmed()) "Release to add a page" else "Keep holding to add a page"
         val w = hintText.measureText(text) + 56f
         val h = 80f
         val cx = when (dir) { Dir.LEFT -> w / 2 + 16f; Dir.RIGHT -> width - w / 2 - 16f; else -> width / 2f }
@@ -2250,6 +2572,12 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val ROTATE_STEM_PX = 56f
         const val PULL_SHIFT = 0.4f // how much of a pull the surface follows
         const val TAP_PX = 10.0 // a touch that moved less than this on screen is a tap
+        const val PULL_HOLD_MS = 400L // a pull must be held this long past its distance before letting go adds a page
+        const val PEEK = 0.12 // after a page is added the view slides this share of the screen past the gap towards it
+        const val AXIS_SLOP_PX = 6.0 // a locked drag picks its direction once it has moved this far
+        const val GRID_MIN_PERCENT = 90 // locked scrolling is for a page about fitted to the screen (90 to 105%); zoomed out or in further, the scroll is free
+        const val GRID_MAX_PERCENT = 105
+        const val ZOOMED_OUT_PERCENT = 90 // below this the pages are seen from afar, and a tap on one zooms into it
         const val SLIDE_MIN_PX = 8.0 // a finger gesture that moved sideways less than this does not settle onto a page
         const val TEXT_MIN_WIDTH = 1000f // a dragged box narrower than 10 mm is not a box
         const val TEXT_SIZE = 400f // text 4 mm high

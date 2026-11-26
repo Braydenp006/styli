@@ -94,4 +94,50 @@ class NotebookTest {
         try { nb.go(PageModel()); throw AssertionError("accepted") } catch (e: IllegalArgumentException) { }
         try { nb.add(PageModel(), Dir.DOWN); throw AssertionError("accepted") } catch (e: IllegalArgumentException) { }
     }
+
+    @Test
+    fun aRunIsTheUnbrokenLineOfPagesThroughAPage() {
+        val nb = Notebook()
+        val a = nb.pages[0]
+        val b = nb.add(a, Dir.RIGHT)!!
+        val c = nb.add(b, Dir.RIGHT)!!
+        val d = nb.add(b, Dir.DOWN)!!
+        val e = nb.add(a, Dir.UP)!! // above the first
+        assertEquals(listOf(a, b, c), nb.run(b, horizontal = true))
+        assertEquals(listOf(b, d), nb.run(d, horizontal = false).takeLast(2))
+        assertEquals(listOf(e, a), nb.run(a, horizontal = false))
+        assertEquals(listOf(d), nb.run(d, horizontal = true))
+        assertEquals(c, nb.end(a, Dir.RIGHT))
+        assertEquals(d, nb.end(b, Dir.DOWN))
+        assertEquals(e, nb.end(a, Dir.UP))
+        assertEquals(a, nb.end(a, Dir.LEFT))
+    }
+
+    @Test
+    fun pagesCanBeAddedAboveAndLeftOfTheFirst() {
+        val nb = Notebook()
+        val a = nb.pages[0]
+        val up = nb.add(a, Dir.UP)!!
+        val left = nb.add(a, Dir.LEFT)!!
+        assertEquals(0, up.page.col); assertEquals(-1, up.page.row)
+        assertEquals(-1, left.page.col); assertEquals(0, left.page.row)
+        assertEquals(listOf(up, left, a).toSet(), nb.pages.toSet())
+    }
+
+    @Test
+    fun theLastAddedPageGoesEvenIfYouStayedOnAnother() {
+        val nb = Notebook()
+        val first = nb.current
+        val a = nb.add(first, Dir.RIGHT)!!
+        val b = nb.add(first, Dir.DOWN)!!
+        nb.go(first) // the view stays where it was after an add
+        assertTrue(nb.removeMade()) // takes back b, the last
+        assertSame(first, nb.current)
+        assertNull(nb.at(0, 1))
+        assertSame(a, nb.at(1, 0))
+        assertTrue(nb.removeMade()) // then a
+        assertFalse(nb.removeMade()) // and never the first page
+        assertEquals(listOf(first), nb.pages)
+        assertTrue(b !== a)
+    }
 }

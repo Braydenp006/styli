@@ -322,3 +322,22 @@ func TestShapesConnectorsFills(t *testing.T) {
 		}
 	}
 }
+
+// A dotted stroke is an ordinary stroke event with its own tool; it reads back and dumps by name.
+func TestDottedStroke(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	in := &inkpb.StrokeAdded{Tool: inkpb.Tool_TOOL_DOTTED, Color: 0xff000000, Width: 40, X0: 5, Y0: 6, Dx: []int32{100}, Dy: []int32{0}}
+	e := &inkpb.Event{Id: []byte("0123456789abcdef"), Device: "d", Seq: 1, Kind: &inkpb.Event_StrokeAdded{StrokeAdded: in}}
+	if err := Append(p, e); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 1 || l.Events[0].GetStrokeAdded().Tool != inkpb.Tool_TOOL_DOTTED {
+		t.Fatal(l, err)
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	if !strings.Contains(out.String(), "dotted color=ff000000 width=40 points=2") {
+		t.Errorf("dump:\n%s", out.String())
+	}
+}

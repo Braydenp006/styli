@@ -3,28 +3,23 @@ package app.styli.ink
 import kotlin.math.abs
 import kotlin.math.sign
 
-/** Which pulls past the end of the surface may make a new page (a setting). */
-enum class Flow { DOWN, RIGHT, BOTH }
+/**
+ * How scrolling works over several pages. SEAMLESS: one surface you scroll freely across, and no pulling to add pages.
+ * GRID: while a page is fitted to the screen the scroll is locked to one direction at a time and keeps to the row or
+ * column of the page you are on, snapping to pages; pulling past the end of that row or column adds a page.
+ */
+enum class ScrollMode { SEAMLESS, GRID }
 
 /** What a finished pull does. */
 enum class Turn { NONE, ADD }
 
-/** Pure rules for pulling the surface past its end with a finger. */
+/** Pure rules for pulling past the end of a row or column of pages with a finger. */
 object PageTurn {
-    /** How far a pull must go: 25 mm, in page units. */
-    const val PULL = 2500.0
+    /** How far a pull must go: 40 mm, in page units (and then it is held for a moment: see the view). */
+    const val PULL = 4000.0
 
-    /**
-     * What happens when a pull of [pull] page units past the end of the surface in direction [dir] is let go. A
-     * short pull does nothing. A long one adds a page, but only below or to the right and only if [flow] allows that
-     * direction (the surface's top and left have no room for one).
-     */
-    fun decide(pull: Double, dir: Dir, flow: Flow): Turn = when {
-        pull < PULL -> Turn.NONE
-        dir == Dir.DOWN && flow != Flow.RIGHT -> Turn.ADD
-        dir == Dir.RIGHT && flow != Flow.DOWN -> Turn.ADD
-        else -> Turn.NONE
-    }
+    /** What happens when a pull of [pull] page units past the end of a row or column is let go: a short one nothing, a long one adds a page. */
+    fun decide(pull: Double): Turn = if (pull >= PULL) Turn.ADD else Turn.NONE
 
     /**
      * The pull on one axis after a finger move of [d] along it, of which [leftover] could not move the page (it

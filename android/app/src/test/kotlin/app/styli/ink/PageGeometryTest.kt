@@ -122,4 +122,55 @@ class PageGeometryTest {
         val (_, partly) = g.panBy(0.0, 80.0) // 50 back up to the top, 30 beyond it
         assertEquals(30.0, partly, 1e-9)
     }
+
+    @Test
+    fun zoomIsAPercentageOfTheFittedPage() {
+        val g = PageGeometry(21000, 29700, false, 0.1)
+        assertEquals(100, g.percent()) // nothing laid out yet
+        g.fit(1000, 1600)
+        assertEquals(100, g.percent())
+        g.zoomBy(2.0, 500.0, 800.0)
+        assertEquals(200, g.percent())
+        g.zoomBy(0.5, 500.0, 800.0)
+        assertEquals(100, g.percent())
+        g.zoomBy(0.1, 500.0, 800.0) // the zoom-out limit: a bit under the whole page in view
+        assertEquals(80, g.percent())
+    }
+
+    @Test
+    fun aSurfaceIsMeasuredAgainstThePageToFit() {
+        // The surface is wide (two pages and a gap); 100% is still one page's width across the screen.
+        val g = PageGeometry(50000, 29700, false, 0.1)
+        g.fit(1000, 1600, 21000)
+        assertEquals(100, g.percent(21000))
+        assertTrue(g.percent(50000) != 100) // measured against the whole surface it would not be
+    }
+
+    @Test
+    fun aCanvasIsAtOneHundredAtRealSize() {
+        val g = PageGeometry(21000, 29700, true, 0.1)
+        g.fit(1000, 1600)
+        assertEquals(100, g.percent())
+        g.zoomBy(3.0, 500.0, 800.0)
+        assertEquals(300, g.percent())
+    }
+
+    @Test
+    fun theViewCanBeSetToAZoomAndOffsetInOneGo() {
+        val g = PageGeometry(21000, 60200, false, 0.1) // two pages tall
+        g.fit(1000, 1600, 21000)
+        val fit = g.fitScale(21000)
+        g.zoomBy(0.8, 500.0, 800.0) // seen from afar
+        assertTrue(g.percent(21000) < 90)
+        // Into the first page: fitted, its top left at the corner.
+        g.viewTo(fit, PageGeometry.MARGIN, PageGeometry.MARGIN)
+        assertEquals(100, g.percent(21000))
+        assertEquals(PageGeometry.MARGIN, g.toScreenY(0.0), 1e-6)
+        // Into the last page, which is shorter than the screen: the surface's own end keeps it from sitting at the top.
+        g.viewTo(fit, PageGeometry.MARGIN, PageGeometry.MARGIN - 30500 * fit)
+        assertEquals(1600 - PageGeometry.MARGIN, g.toScreenY(60200.0), 1e-6) // its bottom at the margin
+        // The zoom limit still applies.
+        g.viewTo(1e-9, 0.0, 0.0)
+        assertTrue(g.scale > 1e-9)
+    }
 }

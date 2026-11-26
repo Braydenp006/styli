@@ -37,6 +37,19 @@ class Fling private constructor(private var vx: Double, private var vy: Double, 
         const val STOP = 30.0
 
         /**
+         * The release speed that makes a glide from [from] end on [target] instead of wherever it would have: the glide
+         * covers its speed times [tau] in all. Unchanged if there is no target, it lies the other way, or it would need
+         * a very different speed (then the glide is left to end where it ends).
+         */
+        fun landing(from: Double, v: Double, tau: Double, target: Double?): Double {
+            if (target == null || v == 0.0 || tau <= 0.0) return v
+            val d = target - from
+            if (d * v <= 0.0) return v
+            val k = d / (v * tau)
+            return if (k in 0.4..2.2) v * k else v
+        }
+
+        /**
          * The glide for a release at (vx, vy) pixels per second, or null if too slow to glide. [intensity] scales how
          * far it carries (1 is normal, 2 twice as far, 0 or less does not glide at all).
          */

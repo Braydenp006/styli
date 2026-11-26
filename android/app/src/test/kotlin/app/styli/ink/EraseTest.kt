@@ -170,4 +170,28 @@ class EraseTest {
         val clean = ShapeGeometry.snap(rough)!!
         assertTrue(EraseOnly.LINES.matches(Item("a", Tool.TOOL_PEN, 0, 40, clean)))
     }
+
+    @Test
+    fun dottedStrokesAreInkAndKeepTheirStyleWhenCut() {
+        val m = PageModel()
+        val d = m.add(Tool.TOOL_DOTTED, 0xFF000000.toInt(), 40, line())
+        assertTrue(EraseOnly.INK.matches(d))
+        assertFalse(EraseOnly.HIGHLIGHTS.matches(d))
+        assertTrue(m.erase(500f, 0f, 20f, partial = true, only = EraseOnly.INK))
+        m.endErase()
+        assertEquals(2, m.items.size)
+        assertTrue(m.items.all { it.tool == Tool.TOOL_DOTTED })
+        // A dotted straight line is a line, too.
+        assertTrue(EraseOnly.LINES.matches(Item("x", Tool.TOOL_DOTTED, 0, 40, listOf(Pt(0f, 0f, 0, 1f), Pt(9f, 0f, 1, 1f)))))
+    }
+
+    @Test
+    fun dottedSizesAndThinning() {
+        assertEquals(60f, Dotted.dot(40f), 0.001f)
+        assertEquals(140f, Dotted.spacing(40f), 0.001f)
+        val long = (0..100).map { Pt(it * 2f, 0f, it.toLong(), 1f) } // 2 units apart: 200 long
+        val thin = Dotted.thinned(long, 15f)
+        assertTrue(thin.size < 30 && thin.first() == long.first() && thin.last() == long.last())
+        assertEquals(2, Dotted.thinned(listOf(long[0], long[1])).size) // short ones are left alone
+    }
 }

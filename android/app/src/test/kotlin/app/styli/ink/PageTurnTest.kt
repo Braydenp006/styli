@@ -6,25 +6,12 @@ import org.junit.Test
 
 class PageTurnTest {
     private val far = PageTurn.PULL
-    private fun d(dir: Dir, flow: Flow, pull: Double = far) = PageTurn.decide(pull, dir, flow)
 
     @Test
-    fun aShortPullDoesNothing() {
-        for (flow in Flow.entries) for (dir in Dir.entries) assertEquals(Turn.NONE, d(dir, flow, far - 1))
-    }
-
-    @Test
-    fun aLongPullAddsOnlyDownOrRightAsTheFlowAllows() {
-        assertEquals(Turn.ADD, d(Dir.DOWN, Flow.DOWN))
-        assertEquals(Turn.NONE, d(Dir.RIGHT, Flow.DOWN))
-        assertEquals(Turn.ADD, d(Dir.RIGHT, Flow.RIGHT))
-        assertEquals(Turn.NONE, d(Dir.DOWN, Flow.RIGHT))
-        assertEquals(Turn.ADD, d(Dir.DOWN, Flow.BOTH))
-        assertEquals(Turn.ADD, d(Dir.RIGHT, Flow.BOTH))
-        for (flow in Flow.entries) { // the top and left of the surface never add
-            assertEquals(Turn.NONE, d(Dir.UP, flow))
-            assertEquals(Turn.NONE, d(Dir.LEFT, flow))
-        }
+    fun aShortPullDoesNothingAndALongOneAdds() {
+        assertEquals(Turn.NONE, PageTurn.decide(far - 1))
+        assertEquals(Turn.ADD, PageTurn.decide(far))
+        assertEquals(Turn.ADD, PageTurn.decide(far * 3))
     }
 
     @Test
