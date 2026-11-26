@@ -333,22 +333,89 @@ func (ConnectorRoute) EnumDescriptor() ([]byte, []int) {
 type ChartKind int32
 
 const (
-	ChartKind_CHART_BAR  ChartKind = 0
-	ChartKind_CHART_LINE ChartKind = 1
-	ChartKind_CHART_PIE  ChartKind = 2
+	ChartKind_CHART_BAR   ChartKind = 0
+	ChartKind_CHART_LINE  ChartKind = 1
+	ChartKind_CHART_PIE   ChartKind = 2
+	ChartKind_CHART_AREA  ChartKind = 3
+	ChartKind_CHART_DONUT ChartKind = 4
+	ChartKind_CHART_RADAR ChartKind = 5
+	// Like a radar, but each category is a wedge with the same angle and the value is its radius.
+	ChartKind_CHART_POLAR ChartKind = 6
+	// The first series, one centred bar per category, widest value first as given.
+	ChartKind_CHART_FUNNEL ChartKind = 7
+	// The first series are the steps (changes), running on from each other; the
+	// categories listed in `totals` instead show the running total so far.
+	ChartKind_CHART_WATERFALL ChartKind = 8
+	// Each series has its own kind (bar, line or area) and may use a second axis on the right.
+	ChartKind_CHART_COMBO ChartKind = 9
+	// One value (the first series, first category) on a dial between gauge_min and
+	// gauge_max; a second category, if there is one, is a target mark.
+	ChartKind_CHART_GAUGE ChartKind = 10
+	// A small line with no axes, labels or legend.
+	ChartKind_CHART_SPARKLINE ChartKind = 11
+	// Four series in order: open, high, low, close.
+	ChartKind_CHART_CANDLESTICK ChartKind = 12
+	// Each series is a set of points: `xs` and `values` (y) pairs, and, for a
+	// bubble chart, `sizes`. Categories, if there are any, label the points.
+	ChartKind_CHART_SCATTER ChartKind = 13
+	ChartKind_CHART_BUBBLE  ChartKind = 14
+	// The first series' values are raw samples, counted into bins (see `bins`, `bin_width`).
+	ChartKind_CHART_HISTOGRAM ChartKind = 15
+	// Each series' values are samples; one box each (median, quartiles, whiskers, outliers).
+	ChartKind_CHART_BOXPLOT ChartKind = 16
+	// Categories are the rows, series the columns, values the cells, shaded from `heat_low` to `heat_high`.
+	ChartKind_CHART_HEATMAP ChartKind = 17
+	// The first series are the sizes, categories the tiles; `groups` (one per category, if any) nests them.
+	ChartKind_CHART_TREEMAP ChartKind = 18
+	// Categories are the tasks; the first series are the starts, the second the ends and the third (optional) the percent done.
+	ChartKind_CHART_GANTT ChartKind = 19
 )
 
 // Enum value maps for ChartKind.
 var (
 	ChartKind_name = map[int32]string{
-		0: "CHART_BAR",
-		1: "CHART_LINE",
-		2: "CHART_PIE",
+		0:  "CHART_BAR",
+		1:  "CHART_LINE",
+		2:  "CHART_PIE",
+		3:  "CHART_AREA",
+		4:  "CHART_DONUT",
+		5:  "CHART_RADAR",
+		6:  "CHART_POLAR",
+		7:  "CHART_FUNNEL",
+		8:  "CHART_WATERFALL",
+		9:  "CHART_COMBO",
+		10: "CHART_GAUGE",
+		11: "CHART_SPARKLINE",
+		12: "CHART_CANDLESTICK",
+		13: "CHART_SCATTER",
+		14: "CHART_BUBBLE",
+		15: "CHART_HISTOGRAM",
+		16: "CHART_BOXPLOT",
+		17: "CHART_HEATMAP",
+		18: "CHART_TREEMAP",
+		19: "CHART_GANTT",
 	}
 	ChartKind_value = map[string]int32{
-		"CHART_BAR":  0,
-		"CHART_LINE": 1,
-		"CHART_PIE":  2,
+		"CHART_BAR":         0,
+		"CHART_LINE":        1,
+		"CHART_PIE":         2,
+		"CHART_AREA":        3,
+		"CHART_DONUT":       4,
+		"CHART_RADAR":       5,
+		"CHART_POLAR":       6,
+		"CHART_FUNNEL":      7,
+		"CHART_WATERFALL":   8,
+		"CHART_COMBO":       9,
+		"CHART_GAUGE":       10,
+		"CHART_SPARKLINE":   11,
+		"CHART_CANDLESTICK": 12,
+		"CHART_SCATTER":     13,
+		"CHART_BUBBLE":      14,
+		"CHART_HISTOGRAM":   15,
+		"CHART_BOXPLOT":     16,
+		"CHART_HEATMAP":     17,
+		"CHART_TREEMAP":     18,
+		"CHART_GANTT":       19,
 	}
 )
 
@@ -377,6 +444,56 @@ func (x ChartKind) Number() protoreflect.EnumNumber {
 // Deprecated: Use ChartKind.Descriptor instead.
 func (ChartKind) EnumDescriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{6}
+}
+
+// How a line (or the top of an area) joins its points.
+type ChartCurve int32
+
+const (
+	ChartCurve_CURVE_STRAIGHT ChartCurve = 0
+	ChartCurve_CURVE_SMOOTH   ChartCurve = 1
+	ChartCurve_CURVE_STEP     ChartCurve = 2
+)
+
+// Enum value maps for ChartCurve.
+var (
+	ChartCurve_name = map[int32]string{
+		0: "CURVE_STRAIGHT",
+		1: "CURVE_SMOOTH",
+		2: "CURVE_STEP",
+	}
+	ChartCurve_value = map[string]int32{
+		"CURVE_STRAIGHT": 0,
+		"CURVE_SMOOTH":   1,
+		"CURVE_STEP":     2,
+	}
+)
+
+func (x ChartCurve) Enum() *ChartCurve {
+	p := new(ChartCurve)
+	*p = x
+	return p
+}
+
+func (x ChartCurve) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ChartCurve) Descriptor() protoreflect.EnumDescriptor {
+	return file_ink_proto_enumTypes[7].Descriptor()
+}
+
+func (ChartCurve) Type() protoreflect.EnumType {
+	return &file_ink_proto_enumTypes[7]
+}
+
+func (x ChartCurve) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ChartCurve.Descriptor instead.
+func (ChartCurve) EnumDescriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{7}
 }
 
 type Record struct {
@@ -2394,7 +2511,17 @@ type ChartSeries struct {
 	Values []int64                `protobuf:"zigzag64,3,rep,packed,name=values,proto3" json:"values,omitempty"`
 	// Indices of the categories this series has no value for (left blank; the
 	// number in `values` at that place is ignored). A line skips it, a bar is not drawn.
-	Missing       []uint32 `protobuf:"varint,4,rep,packed,name=missing,proto3" json:"missing,omitempty"`
+	Missing []uint32 `protobuf:"varint,4,rep,packed,name=missing,proto3" json:"missing,omitempty"`
+	// Combo charts: how this series is drawn (bar, line or area; zero is bar).
+	Kind ChartKind `protobuf:"varint,5,opt,name=kind,proto3,enum=styli.ink.v1.ChartKind" json:"kind,omitempty"`
+	// Combo charts: use the second axis, on the right.
+	Secondary bool `protobuf:"varint,6,opt,name=secondary,proto3" json:"secondary,omitempty"`
+	// Draw a straight line of best fit through this series' values.
+	Trendline bool `protobuf:"varint,7,opt,name=trendline,proto3" json:"trendline,omitempty"`
+	// Scatter and bubble charts: where each point is along the bottom (`values` is
+	// how high), and for a bubble its size, all in thousandths. Same length as `values`.
+	Xs            []int64 `protobuf:"zigzag64,8,rep,packed,name=xs,proto3" json:"xs,omitempty"`
+	Sizes         []int64 `protobuf:"zigzag64,9,rep,packed,name=sizes,proto3" json:"sizes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2457,6 +2584,41 @@ func (x *ChartSeries) GetMissing() []uint32 {
 	return nil
 }
 
+func (x *ChartSeries) GetKind() ChartKind {
+	if x != nil {
+		return x.Kind
+	}
+	return ChartKind_CHART_BAR
+}
+
+func (x *ChartSeries) GetSecondary() bool {
+	if x != nil {
+		return x.Secondary
+	}
+	return false
+}
+
+func (x *ChartSeries) GetTrendline() bool {
+	if x != nil {
+		return x.Trendline
+	}
+	return false
+}
+
+func (x *ChartSeries) GetXs() []int64 {
+	if x != nil {
+		return x.Xs
+	}
+	return nil
+}
+
+func (x *ChartSeries) GetSizes() []int64 {
+	if x != nil {
+		return x.Sizes
+	}
+	return nil
+}
+
 // A chart on the page, drawn from its data. The whole state of it, written like
 // a shape (the last event wins). The data is always here, so a reader that does
 // not know where it came from can still draw it; with a source table the app
@@ -2490,12 +2652,49 @@ type ChartSet struct {
 	// block of its cells (first row and column, how many of each) read as the
 	// categories and series; with `series_in_rows` each row is a series, otherwise
 	// each column is. The first row and column of the block are the labels.
-	SourceTable   []byte `protobuf:"bytes,17,opt,name=source_table,json=sourceTable,proto3" json:"source_table,omitempty"`
-	SrcRow        uint32 `protobuf:"varint,18,opt,name=src_row,json=srcRow,proto3" json:"src_row,omitempty"`
-	SrcCol        uint32 `protobuf:"varint,19,opt,name=src_col,json=srcCol,proto3" json:"src_col,omitempty"`
-	SrcRows       uint32 `protobuf:"varint,20,opt,name=src_rows,json=srcRows,proto3" json:"src_rows,omitempty"`
-	SrcCols       uint32 `protobuf:"varint,21,opt,name=src_cols,json=srcCols,proto3" json:"src_cols,omitempty"`
-	SeriesInRows  bool   `protobuf:"varint,22,opt,name=series_in_rows,json=seriesInRows,proto3" json:"series_in_rows,omitempty"`
+	SourceTable  []byte `protobuf:"bytes,17,opt,name=source_table,json=sourceTable,proto3" json:"source_table,omitempty"`
+	SrcRow       uint32 `protobuf:"varint,18,opt,name=src_row,json=srcRow,proto3" json:"src_row,omitempty"`
+	SrcCol       uint32 `protobuf:"varint,19,opt,name=src_col,json=srcCol,proto3" json:"src_col,omitempty"`
+	SrcRows      uint32 `protobuf:"varint,20,opt,name=src_rows,json=srcRows,proto3" json:"src_rows,omitempty"`
+	SrcCols      uint32 `protobuf:"varint,21,opt,name=src_cols,json=srcCols,proto3" json:"src_cols,omitempty"`
+	SeriesInRows bool   `protobuf:"varint,22,opt,name=series_in_rows,json=seriesInRows,proto3" json:"series_in_rows,omitempty"`
+	// Bars run sideways (categories down the side).
+	Horizontal bool `protobuf:"varint,23,opt,name=horizontal,proto3" json:"horizontal,omitempty"`
+	// Stacked bars and areas show each category as shares of 100 (needs `stacked`).
+	Percent bool       `protobuf:"varint,24,opt,name=percent,proto3" json:"percent,omitempty"`
+	Curve   ChartCurve `protobuf:"varint,25,opt,name=curve,proto3,enum=styli.ink.v1.ChartCurve" json:"curve,omitempty"`
+	// Lines and radars: leave the dots off.
+	HideMarkers bool `protobuf:"varint,26,opt,name=hide_markers,json=hideMarkers,proto3" json:"hide_markers,omitempty"`
+	// Donut: the hole as a whole percent of the radius; zero is the default, 55.
+	Hole uint32 `protobuf:"varint,27,opt,name=hole,proto3" json:"hole,omitempty"`
+	// Radar: shade the inside.
+	Filled bool `protobuf:"varint,28,opt,name=filled,proto3" json:"filled,omitempty"`
+	// A tilted, extruded look for bars, pies, donuts, areas and lines (still a flat picture, not a turnable scene).
+	ThreeD bool `protobuf:"varint,29,opt,name=three_d,json=threeD,proto3" json:"three_d,omitempty"`
+	// Waterfall: categories that show the running total.
+	Totals []uint32 `protobuf:"varint,30,rep,packed,name=totals,proto3" json:"totals,omitempty"`
+	// Write the value on each bar, point or slice.
+	ShowValues bool `protobuf:"varint,31,opt,name=show_values,json=showValues,proto3" json:"show_values,omitempty"`
+	// Gauge: the ends of the dial in thousandths; a max not above the min means 0 to 100.
+	GaugeMin int64 `protobuf:"zigzag64,32,opt,name=gauge_min,json=gaugeMin,proto3" json:"gauge_min,omitempty"`
+	GaugeMax int64 `protobuf:"zigzag64,33,opt,name=gauge_max,json=gaugeMax,proto3" json:"gauge_max,omitempty"`
+	// Population pyramid: with `horizontal`, the first series runs to the left of zero, the second to the right.
+	Pyramid bool `protobuf:"varint,34,opt,name=pyramid,proto3" json:"pyramid,omitempty"`
+	// Gantt: the starts and ends are dates, as days since 1970-01-01 (in thousandths), shown as dates.
+	DateAxis bool `protobuf:"varint,35,opt,name=date_axis,json=dateAxis,proto3" json:"date_axis,omitempty"`
+	// Treemap: the group each category belongs to (same length as `categories`, or empty for none).
+	Groups []string `protobuf:"bytes,36,rep,name=groups,proto3" json:"groups,omitempty"`
+	// Histogram: the number of bins, or the width of one (thousandths); zero for both means a count chosen from the samples.
+	Bins     uint32 `protobuf:"varint,37,opt,name=bins,proto3" json:"bins,omitempty"`
+	BinWidth int64  `protobuf:"zigzag64,38,opt,name=bin_width,json=binWidth,proto3" json:"bin_width,omitempty"`
+	// Box plot: leave out the dots beyond the whiskers; mark the mean.
+	HideOutliers bool `protobuf:"varint,39,opt,name=hide_outliers,json=hideOutliers,proto3" json:"hide_outliers,omitempty"`
+	ShowMean     bool `protobuf:"varint,40,opt,name=show_mean,json=showMean,proto3" json:"show_mean,omitempty"`
+	// Gantt: a vertical line at this value (thousandths; zero for none), such as today.
+	Marker int64 `protobuf:"zigzag64,41,opt,name=marker,proto3" json:"marker,omitempty"`
+	// Heatmap: the colours for the lowest and highest values (0xAARRGGBB; zero alpha means the defaults, pale blue and blue).
+	HeatLow       uint32 `protobuf:"varint,42,opt,name=heat_low,json=heatLow,proto3" json:"heat_low,omitempty"`
+	HeatHigh      uint32 `protobuf:"varint,43,opt,name=heat_high,json=heatHigh,proto3" json:"heat_high,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2682,6 +2881,153 @@ func (x *ChartSet) GetSeriesInRows() bool {
 		return x.SeriesInRows
 	}
 	return false
+}
+
+func (x *ChartSet) GetHorizontal() bool {
+	if x != nil {
+		return x.Horizontal
+	}
+	return false
+}
+
+func (x *ChartSet) GetPercent() bool {
+	if x != nil {
+		return x.Percent
+	}
+	return false
+}
+
+func (x *ChartSet) GetCurve() ChartCurve {
+	if x != nil {
+		return x.Curve
+	}
+	return ChartCurve_CURVE_STRAIGHT
+}
+
+func (x *ChartSet) GetHideMarkers() bool {
+	if x != nil {
+		return x.HideMarkers
+	}
+	return false
+}
+
+func (x *ChartSet) GetHole() uint32 {
+	if x != nil {
+		return x.Hole
+	}
+	return 0
+}
+
+func (x *ChartSet) GetFilled() bool {
+	if x != nil {
+		return x.Filled
+	}
+	return false
+}
+
+func (x *ChartSet) GetThreeD() bool {
+	if x != nil {
+		return x.ThreeD
+	}
+	return false
+}
+
+func (x *ChartSet) GetTotals() []uint32 {
+	if x != nil {
+		return x.Totals
+	}
+	return nil
+}
+
+func (x *ChartSet) GetShowValues() bool {
+	if x != nil {
+		return x.ShowValues
+	}
+	return false
+}
+
+func (x *ChartSet) GetGaugeMin() int64 {
+	if x != nil {
+		return x.GaugeMin
+	}
+	return 0
+}
+
+func (x *ChartSet) GetGaugeMax() int64 {
+	if x != nil {
+		return x.GaugeMax
+	}
+	return 0
+}
+
+func (x *ChartSet) GetPyramid() bool {
+	if x != nil {
+		return x.Pyramid
+	}
+	return false
+}
+
+func (x *ChartSet) GetDateAxis() bool {
+	if x != nil {
+		return x.DateAxis
+	}
+	return false
+}
+
+func (x *ChartSet) GetGroups() []string {
+	if x != nil {
+		return x.Groups
+	}
+	return nil
+}
+
+func (x *ChartSet) GetBins() uint32 {
+	if x != nil {
+		return x.Bins
+	}
+	return 0
+}
+
+func (x *ChartSet) GetBinWidth() int64 {
+	if x != nil {
+		return x.BinWidth
+	}
+	return 0
+}
+
+func (x *ChartSet) GetHideOutliers() bool {
+	if x != nil {
+		return x.HideOutliers
+	}
+	return false
+}
+
+func (x *ChartSet) GetShowMean() bool {
+	if x != nil {
+		return x.ShowMean
+	}
+	return false
+}
+
+func (x *ChartSet) GetMarker() int64 {
+	if x != nil {
+		return x.Marker
+	}
+	return 0
+}
+
+func (x *ChartSet) GetHeatLow() uint32 {
+	if x != nil {
+		return x.HeatLow
+	}
+	return 0
+}
+
+func (x *ChartSet) GetHeatHigh() uint32 {
+	if x != nil {
+		return x.HeatHigh
+	}
+	return 0
 }
 
 type ChartRemoved struct {
@@ -2879,12 +3225,17 @@ const file_ink_proto_rawDesc = "" +
 	"\tsrc_width\x18\f \x01(\rR\bsrcWidth\x12\x1d\n" +
 	"\n" +
 	"src_height\x18\r \x01(\rR\tsrcHeight\"\x0e\n" +
-	"\fImageRemoved\"q\n" +
+	"\fImageRemoved\"\x88\x02\n" +
 	"\vChartSeries\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05color\x18\x02 \x01(\rR\x05color\x12\x1a\n" +
 	"\x06values\x18\x03 \x03(\x12B\x02\x10\x01R\x06values\x12\x1c\n" +
-	"\amissing\x18\x04 \x03(\rB\x02\x10\x01R\amissing\"\xf7\x04\n" +
+	"\amissing\x18\x04 \x03(\rB\x02\x10\x01R\amissing\x12+\n" +
+	"\x04kind\x18\x05 \x01(\x0e2\x17.styli.ink.v1.ChartKindR\x04kind\x12\x1c\n" +
+	"\tsecondary\x18\x06 \x01(\bR\tsecondary\x12\x1c\n" +
+	"\ttrendline\x18\a \x01(\bR\ttrendline\x12\x12\n" +
+	"\x02xs\x18\b \x03(\x12B\x02\x10\x01R\x02xs\x12\x18\n" +
+	"\x05sizes\x18\t \x03(\x12B\x02\x10\x01R\x05sizes\"\xd2\t\n" +
 	"\bChartSet\x12+\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x17.styli.ink.v1.ChartKindR\x04kind\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x11R\x01x\x12\f\n" +
@@ -2912,7 +3263,31 @@ const file_ink_proto_rawDesc = "" +
 	"\asrc_col\x18\x13 \x01(\rR\x06srcCol\x12\x19\n" +
 	"\bsrc_rows\x18\x14 \x01(\rR\asrcRows\x12\x19\n" +
 	"\bsrc_cols\x18\x15 \x01(\rR\asrcCols\x12$\n" +
-	"\x0eseries_in_rows\x18\x16 \x01(\bR\fseriesInRows\"\x0e\n" +
+	"\x0eseries_in_rows\x18\x16 \x01(\bR\fseriesInRows\x12\x1e\n" +
+	"\n" +
+	"horizontal\x18\x17 \x01(\bR\n" +
+	"horizontal\x12\x18\n" +
+	"\apercent\x18\x18 \x01(\bR\apercent\x12.\n" +
+	"\x05curve\x18\x19 \x01(\x0e2\x18.styli.ink.v1.ChartCurveR\x05curve\x12!\n" +
+	"\fhide_markers\x18\x1a \x01(\bR\vhideMarkers\x12\x12\n" +
+	"\x04hole\x18\x1b \x01(\rR\x04hole\x12\x16\n" +
+	"\x06filled\x18\x1c \x01(\bR\x06filled\x12\x17\n" +
+	"\athree_d\x18\x1d \x01(\bR\x06threeD\x12\x1a\n" +
+	"\x06totals\x18\x1e \x03(\rB\x02\x10\x01R\x06totals\x12\x1f\n" +
+	"\vshow_values\x18\x1f \x01(\bR\n" +
+	"showValues\x12\x1b\n" +
+	"\tgauge_min\x18  \x01(\x12R\bgaugeMin\x12\x1b\n" +
+	"\tgauge_max\x18! \x01(\x12R\bgaugeMax\x12\x18\n" +
+	"\apyramid\x18\" \x01(\bR\apyramid\x12\x1b\n" +
+	"\tdate_axis\x18# \x01(\bR\bdateAxis\x12\x16\n" +
+	"\x06groups\x18$ \x03(\tR\x06groups\x12\x12\n" +
+	"\x04bins\x18% \x01(\rR\x04bins\x12\x1b\n" +
+	"\tbin_width\x18& \x01(\x12R\bbinWidth\x12#\n" +
+	"\rhide_outliers\x18' \x01(\bR\fhideOutliers\x12\x1b\n" +
+	"\tshow_mean\x18( \x01(\bR\bshowMean\x12\x16\n" +
+	"\x06marker\x18) \x01(\x12R\x06marker\x12\x19\n" +
+	"\bheat_low\x18* \x01(\rR\aheatLow\x12\x1b\n" +
+	"\theat_high\x18+ \x01(\rR\bheatHigh\"\x0e\n" +
 	"\fChartRemoved*;\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
@@ -2941,12 +3316,37 @@ const file_ink_proto_rawDesc = "" +
 	"\x0eConnectorRoute\x12\x12\n" +
 	"\x0eROUTE_STRAIGHT\x10\x00\x12\x0f\n" +
 	"\vROUTE_ELBOW\x10\x01\x12\x0f\n" +
-	"\vROUTE_CURVE\x10\x02*9\n" +
+	"\vROUTE_CURVE\x10\x02*\xf5\x02\n" +
 	"\tChartKind\x12\r\n" +
 	"\tCHART_BAR\x10\x00\x12\x0e\n" +
 	"\n" +
 	"CHART_LINE\x10\x01\x12\r\n" +
-	"\tCHART_PIE\x10\x02B6\n" +
+	"\tCHART_PIE\x10\x02\x12\x0e\n" +
+	"\n" +
+	"CHART_AREA\x10\x03\x12\x0f\n" +
+	"\vCHART_DONUT\x10\x04\x12\x0f\n" +
+	"\vCHART_RADAR\x10\x05\x12\x0f\n" +
+	"\vCHART_POLAR\x10\x06\x12\x10\n" +
+	"\fCHART_FUNNEL\x10\a\x12\x13\n" +
+	"\x0fCHART_WATERFALL\x10\b\x12\x0f\n" +
+	"\vCHART_COMBO\x10\t\x12\x0f\n" +
+	"\vCHART_GAUGE\x10\n" +
+	"\x12\x13\n" +
+	"\x0fCHART_SPARKLINE\x10\v\x12\x15\n" +
+	"\x11CHART_CANDLESTICK\x10\f\x12\x11\n" +
+	"\rCHART_SCATTER\x10\r\x12\x10\n" +
+	"\fCHART_BUBBLE\x10\x0e\x12\x13\n" +
+	"\x0fCHART_HISTOGRAM\x10\x0f\x12\x11\n" +
+	"\rCHART_BOXPLOT\x10\x10\x12\x11\n" +
+	"\rCHART_HEATMAP\x10\x11\x12\x11\n" +
+	"\rCHART_TREEMAP\x10\x12\x12\x0f\n" +
+	"\vCHART_GANTT\x10\x13*B\n" +
+	"\n" +
+	"ChartCurve\x12\x12\n" +
+	"\x0eCURVE_STRAIGHT\x10\x00\x12\x10\n" +
+	"\fCURVE_SMOOTH\x10\x01\x12\x0e\n" +
+	"\n" +
+	"CURVE_STEP\x10\x02B6\n" +
 	"\x13app.styli.ink.protoP\x01Z\x1dstyli/core/internal/ink/inkpbb\x06proto3"
 
 var (
@@ -2961,7 +3361,7 @@ func file_ink_proto_rawDescGZIP() []byte {
 	return file_ink_proto_rawDescData
 }
 
-var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
 var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_ink_proto_goTypes = []any{
 	(Tool)(0),                // 0: styli.ink.v1.Tool
@@ -2971,72 +3371,75 @@ var file_ink_proto_goTypes = []any{
 	(Arrowhead)(0),           // 4: styli.ink.v1.Arrowhead
 	(ConnectorRoute)(0),      // 5: styli.ink.v1.ConnectorRoute
 	(ChartKind)(0),           // 6: styli.ink.v1.ChartKind
-	(*Record)(nil),           // 7: styli.ink.v1.Record
-	(*Header)(nil),           // 8: styli.ink.v1.Header
-	(*Event)(nil),            // 9: styli.ink.v1.Event
-	(*StrokeAdded)(nil),      // 10: styli.ink.v1.StrokeAdded
-	(*StrokeErased)(nil),     // 11: styli.ink.v1.StrokeErased
-	(*Transformed)(nil),      // 12: styli.ink.v1.Transformed
-	(*TextBoxSet)(nil),       // 13: styli.ink.v1.TextBoxSet
-	(*TextBoxRemoved)(nil),   // 14: styli.ink.v1.TextBoxRemoved
-	(*TableSet)(nil),         // 15: styli.ink.v1.TableSet
-	(*TableRemoved)(nil),     // 16: styli.ink.v1.TableRemoved
-	(*ZMoved)(nil),           // 17: styli.ink.v1.ZMoved
-	(*PageSet)(nil),          // 18: styli.ink.v1.PageSet
-	(*ShapeSet)(nil),         // 19: styli.ink.v1.ShapeSet
-	(*ShapeRemoved)(nil),     // 20: styli.ink.v1.ShapeRemoved
-	(*ConnectorEnd)(nil),     // 21: styli.ink.v1.ConnectorEnd
-	(*ConnectorSet)(nil),     // 22: styli.ink.v1.ConnectorSet
-	(*ConnectorRemoved)(nil), // 23: styli.ink.v1.ConnectorRemoved
-	(*Ring)(nil),             // 24: styli.ink.v1.Ring
-	(*FillSet)(nil),          // 25: styli.ink.v1.FillSet
-	(*FillRemoved)(nil),      // 26: styli.ink.v1.FillRemoved
-	(*ImageSet)(nil),         // 27: styli.ink.v1.ImageSet
-	(*ImageRemoved)(nil),     // 28: styli.ink.v1.ImageRemoved
-	(*ChartSeries)(nil),      // 29: styli.ink.v1.ChartSeries
-	(*ChartSet)(nil),         // 30: styli.ink.v1.ChartSet
-	(*ChartRemoved)(nil),     // 31: styli.ink.v1.ChartRemoved
+	(ChartCurve)(0),          // 7: styli.ink.v1.ChartCurve
+	(*Record)(nil),           // 8: styli.ink.v1.Record
+	(*Header)(nil),           // 9: styli.ink.v1.Header
+	(*Event)(nil),            // 10: styli.ink.v1.Event
+	(*StrokeAdded)(nil),      // 11: styli.ink.v1.StrokeAdded
+	(*StrokeErased)(nil),     // 12: styli.ink.v1.StrokeErased
+	(*Transformed)(nil),      // 13: styli.ink.v1.Transformed
+	(*TextBoxSet)(nil),       // 14: styli.ink.v1.TextBoxSet
+	(*TextBoxRemoved)(nil),   // 15: styli.ink.v1.TextBoxRemoved
+	(*TableSet)(nil),         // 16: styli.ink.v1.TableSet
+	(*TableRemoved)(nil),     // 17: styli.ink.v1.TableRemoved
+	(*ZMoved)(nil),           // 18: styli.ink.v1.ZMoved
+	(*PageSet)(nil),          // 19: styli.ink.v1.PageSet
+	(*ShapeSet)(nil),         // 20: styli.ink.v1.ShapeSet
+	(*ShapeRemoved)(nil),     // 21: styli.ink.v1.ShapeRemoved
+	(*ConnectorEnd)(nil),     // 22: styli.ink.v1.ConnectorEnd
+	(*ConnectorSet)(nil),     // 23: styli.ink.v1.ConnectorSet
+	(*ConnectorRemoved)(nil), // 24: styli.ink.v1.ConnectorRemoved
+	(*Ring)(nil),             // 25: styli.ink.v1.Ring
+	(*FillSet)(nil),          // 26: styli.ink.v1.FillSet
+	(*FillRemoved)(nil),      // 27: styli.ink.v1.FillRemoved
+	(*ImageSet)(nil),         // 28: styli.ink.v1.ImageSet
+	(*ImageRemoved)(nil),     // 29: styli.ink.v1.ImageRemoved
+	(*ChartSeries)(nil),      // 30: styli.ink.v1.ChartSeries
+	(*ChartSet)(nil),         // 31: styli.ink.v1.ChartSet
+	(*ChartRemoved)(nil),     // 32: styli.ink.v1.ChartRemoved
 }
 var file_ink_proto_depIdxs = []int32{
-	8,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
-	9,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
-	10, // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
-	11, // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
-	12, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
-	13, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
-	14, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
-	18, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
-	15, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
-	16, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
-	17, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
-	19, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
-	20, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
-	22, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
-	23, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
-	25, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
-	26, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
-	27, // 17: styli.ink.v1.Event.image_set:type_name -> styli.ink.v1.ImageSet
-	28, // 18: styli.ink.v1.Event.image_removed:type_name -> styli.ink.v1.ImageRemoved
-	30, // 19: styli.ink.v1.Event.chart_set:type_name -> styli.ink.v1.ChartSet
-	31, // 20: styli.ink.v1.Event.chart_removed:type_name -> styli.ink.v1.ChartRemoved
+	9,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
+	10, // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
+	11, // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
+	12, // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
+	13, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
+	14, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
+	15, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
+	19, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
+	16, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
+	17, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
+	18, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
+	20, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
+	21, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
+	23, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
+	24, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
+	26, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
+	27, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
+	28, // 17: styli.ink.v1.Event.image_set:type_name -> styli.ink.v1.ImageSet
+	29, // 18: styli.ink.v1.Event.image_removed:type_name -> styli.ink.v1.ImageRemoved
+	31, // 19: styli.ink.v1.Event.chart_set:type_name -> styli.ink.v1.ChartSet
+	32, // 20: styli.ink.v1.Event.chart_removed:type_name -> styli.ink.v1.ChartRemoved
 	0,  // 21: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
 	1,  // 22: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
 	3,  // 23: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
 	2,  // 24: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
-	21, // 25: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
-	21, // 26: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
+	22, // 25: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
+	22, // 26: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
 	4,  // 27: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
 	4,  // 28: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
 	2,  // 29: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
 	5,  // 30: styli.ink.v1.ConnectorSet.route:type_name -> styli.ink.v1.ConnectorRoute
-	24, // 31: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
-	6,  // 32: styli.ink.v1.ChartSet.kind:type_name -> styli.ink.v1.ChartKind
-	29, // 33: styli.ink.v1.ChartSet.series:type_name -> styli.ink.v1.ChartSeries
-	34, // [34:34] is the sub-list for method output_type
-	34, // [34:34] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	25, // 31: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
+	6,  // 32: styli.ink.v1.ChartSeries.kind:type_name -> styli.ink.v1.ChartKind
+	6,  // 33: styli.ink.v1.ChartSet.kind:type_name -> styli.ink.v1.ChartKind
+	30, // 34: styli.ink.v1.ChartSet.series:type_name -> styli.ink.v1.ChartSeries
+	7,  // 35: styli.ink.v1.ChartSet.curve:type_name -> styli.ink.v1.ChartCurve
+	36, // [36:36] is the sub-list for method output_type
+	36, // [36:36] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_ink_proto_init() }
@@ -3074,7 +3477,7 @@ func file_ink_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ink_proto_rawDesc), len(file_ink_proto_rawDesc)),
-			NumEnums:      7,
+			NumEnums:      8,
 			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,

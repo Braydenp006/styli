@@ -1564,105 +1564,17 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         dragPaint.color = 0xFF6750A4.toInt()
     }
 
-    private val chartFill = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
-    private val chartLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
-    private val chartSolid = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val chartText = Paint(Paint.ANTI_ALIAS_FLAG)
-
-    /** Draws a chart (in page units; the canvas already has the page matrix) from its data, with the parts laid out by [ChartMaths]. */
+    /** Draws a chart (in page units; the canvas already has the page matrix): placed and turned here, painted by [ChartDraw]. */
     private fun drawChart(canvas: Canvas, c: Chart, vl: Float, vt: Float, vr: Float, vb: Float) {
         val corners = c.corners()
         if (corners.maxOf { it.first } < vl || corners.minOf { it.first } > vr || corners.maxOf { it.second } < vt || corners.minOf { it.second } > vb) return
         val moved = dragMap?.takeIf { c.id in selection }
-        val px = (1.5 / geometry.scale).toFloat() // a hairline: about a pixel and a half on the screen
-        val f = c.textSize
-        val ink = if (c.textColor ushr 24 == 0) Color.BLACK else c.textColor
-        val lay = ChartMaths.layout(c)
         canvas.save()
         if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
         canvas.translate(c.x, c.y)
         canvas.rotate(Math.toDegrees(c.angle.toDouble()).toFloat())
-        canvas.drawRect(0f, 0f, c.width, c.height, chartFill)
-        chartLine.strokeWidth = px; chartLine.color = 0xFFBDBDBD.toInt()
-        canvas.drawRect(0f, 0f, c.width, c.height, chartLine)
-        chartText.color = ink
-        fun text(s: String, x: Float, y: Float, size: Float, align: Paint.Align, bold: Boolean = false) {
-            chartText.textSize = size; chartText.textAlign = align; chartText.isFakeBoldText = bold
-            canvas.drawText(s, x, y, chartText)
-        }
-        lay.title?.let { text(c.title, ((it.l + it.r) / 2).toFloat(), (it.b - f * 0.4).toFloat(), f * 1.2f, Paint.Align.CENTER, true) }
-        val p = lay.plot
-        if (c.kind == ChartKind.PIE) {
-            val r = (minOf(p.r - p.l, p.b - p.t) / 2 * 0.95).toFloat()
-            val cx = ((p.l + p.r) / 2).toFloat(); val cy = ((p.t + p.b) / 2).toFloat()
-            val oval = RectF(cx - r, cy - r, cx + r, cy + r)
-            for (s in ChartMaths.pie(c)) {
-                chartSolid.color = Chart.colourFor(s.index)
-                canvas.drawArc(oval, Math.toDegrees(s.start).toFloat(), Math.toDegrees(s.sweep).toFloat(), true, chartSolid)
-                if (s.share >= 0.05) {
-                    val mid = s.start + s.sweep / 2
-                    chartText.color = Color.WHITE
-                    text("${Math.round(s.share * 100)}%", (cx + r * 0.65 * Math.cos(mid)).toFloat(), (cy + r * 0.65 * Math.sin(mid) + f * 0.3).toFloat(), f * 0.9f, Paint.Align.CENTER, true)
-                    chartText.color = ink
-                }
-            }
-        } else {
-            val scale = ChartMaths.scaleFor(c)
-            val left = p.l.toFloat(); val right = p.r.toFloat()
-            for (t in scale.ticks) {
-                val y = ChartMaths.yOf(p, scale, t).toFloat()
-                if (!c.hideGrid) { chartLine.color = 0xFFE0E0E0.toInt(); canvas.drawLine(left, y, right, y, chartLine) }
-                text(ChartMaths.format(t), left - f * 0.4f, y + f * 0.3f, f * 0.8f, Paint.Align.RIGHT)
-            }
-            val n = c.categories.size
-            val slot = if (n == 0) 0.0 else (p.r - p.l) / n
-            for ((i, name) in c.categories.withIndex()) text(name, (p.l + slot * (i + 0.5)).toFloat(), (p.b + f * 1.2).toFloat(), f * 0.8f, Paint.Align.CENTER)
-            if (c.kind == ChartKind.BAR) {
-                for ((j, row) in ChartMaths.bars(c, p, scale).withIndex()) {
-                    chartSolid.color = c.series[j].color
-                    for (b in row) if (b != null) canvas.drawRect(b.l.toFloat(), b.t.toFloat(), b.r.toFloat(), b.b.toFloat(), chartSolid)
-                }
-            } else {
-                chartLine.strokeWidth = f * 0.2f
-                for ((j, pts) in ChartMaths.linePoints(c, p, scale).withIndex()) {
-                    chartLine.color = c.series[j].color; chartSolid.color = c.series[j].color
-                    var prev: Pair<Double, Double>? = null
-                    for (pt in pts) {
-                        if (pt != null && prev != null) canvas.drawLine(prev.first.toFloat(), prev.second.toFloat(), pt.first.toFloat(), pt.second.toFloat(), chartLine)
-                        if (pt != null) canvas.drawCircle(pt.first.toFloat(), pt.second.toFloat(), f * 0.3f, chartSolid)
-                        prev = pt // a blank value breaks the line
-                    }
-                }
-            }
-            chartLine.strokeWidth = px * 1.5f; chartLine.color = ink
-            val zero = ChartMaths.yOf(p, scale, 0.0).coerceIn(p.t, p.b).toFloat()
-            canvas.drawLine(left, zero, right, zero, chartLine)
-            canvas.drawLine(left, p.t.toFloat(), left, p.b.toFloat(), chartLine)
-            lay.xLabel?.let { text(c.xLabel, ((it.l + it.r) / 2).toFloat(), (it.b - f * 0.3).toFloat(), f, Paint.Align.CENTER) }
-            lay.yLabel?.let {
-                canvas.save()
-                canvas.rotate(-90f, ((it.l + it.r) / 2).toFloat(), ((it.t + it.b) / 2).toFloat())
-                text(c.yLabel, ((it.l + it.r) / 2).toFloat(), ((it.t + it.b) / 2 + f * 0.35).toFloat(), f, Paint.Align.CENTER)
-                canvas.restore()
-            }
-        }
-        lay.legend?.let { box ->
-            val names = if (c.kind == ChartKind.PIE) c.categories else c.series.map { it.name }
-            val colours = if (c.kind == ChartKind.PIE) c.categories.indices.map { Chart.colourFor(it) } else c.series.map { it.color }
-            chartText.textSize = f * 0.9f; chartText.textAlign = Paint.Align.LEFT; chartText.isFakeBoldText = false
-            val sw = f * 0.8f
-            val widths = names.map { sw + f * 0.4f + chartText.measureText(it) + f * 1.2f }
-            var x = (((box.l + box.r) / 2) - widths.sum() / 2).coerceAtLeast(box.l).toFloat()
-            val y = ((box.t + box.b) / 2).toFloat()
-            for ((k, name) in names.withIndex()) {
-                if (x + widths[k] > box.r + f) break // no room for the rest
-                chartSolid.color = colours[k]
-                canvas.drawRect(x, y - sw / 2, x + sw, y + sw / 2, chartSolid)
-                chartText.color = ink
-                canvas.drawText(name, x + sw + f * 0.4f, y + f * 0.3f, chartText)
-                x += widths[k]
-            }
-        }
+        // A chart that cannot be drawn must not take the page down with it.
+        try { ChartDraw.draw(canvas, c, (1.5 / geometry.scale).toFloat()) } catch (e: Exception) { android.util.Log.e("Chart", "cannot draw ${c.kind}", e) } // a hairline: about a pixel and a half on the screen
         canvas.restore()
     }
 

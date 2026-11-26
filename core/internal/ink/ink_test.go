@@ -398,6 +398,80 @@ func TestChartSetAndRemoved(t *testing.T) {
 	}
 }
 
+// The chart kinds and options added later read back whole, and absent ones read as the defaults.
+func TestChartKindsAndOptions(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	combo := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_COMBO, Width: 100, Height: 100, Horizontal: true, Percent: true, Curve: inkpb.ChartCurve_CURVE_SMOOTH,
+		HideMarkers: true, Hole: 40, Filled: true, ThreeD: true, Totals: []uint32{0, 3}, ShowValues: true, GaugeMin: -5000, GaugeMax: 250000, Pyramid: true,
+		Series: []*inkpb.ChartSeries{{Name: "A", Kind: inkpb.ChartKind_CHART_LINE, Secondary: true, Trendline: true, Values: []int64{1}}}}
+	old := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_BAR, Width: 100, Height: 100, Series: []*inkpb.ChartSeries{{Name: "A", Values: []int64{1}}}}
+	for _, k := range []inkpb.ChartKind{inkpb.ChartKind_CHART_AREA, inkpb.ChartKind_CHART_DONUT, inkpb.ChartKind_CHART_RADAR, inkpb.ChartKind_CHART_POLAR, inkpb.ChartKind_CHART_FUNNEL,
+		inkpb.ChartKind_CHART_WATERFALL, inkpb.ChartKind_CHART_GAUGE, inkpb.ChartKind_CHART_SPARKLINE, inkpb.ChartKind_CHART_CANDLESTICK} {
+		if err := Append(p, &inkpb.Event{Id: id, Device: "d", Seq: 1, Kind: &inkpb.Event_ChartSet{ChartSet: &inkpb.ChartSet{Kind: k}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Append(p, &inkpb.Event{Id: id, Device: "d", Seq: 2, Kind: &inkpb.Event_ChartSet{ChartSet: combo}}, &inkpb.Event{Id: id, Device: "d", Seq: 3, Kind: &inkpb.Event_ChartSet{ChartSet: old}}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 11 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[9].GetChartSet(), combo) {
+		t.Error("the combo chart changed on the way")
+	}
+	o := l.Events[10].GetChartSet()
+	if o.Horizontal || o.Percent || o.Curve != inkpb.ChartCurve_CURVE_STRAIGHT || o.HideMarkers || o.Hole != 0 || o.Filled || o.ThreeD || len(o.Totals) != 0 || o.ShowValues || o.GaugeMin != 0 || o.GaugeMax != 0 || o.Pyramid ||
+		o.Series[0].Kind != inkpb.ChartKind_CHART_BAR || o.Series[0].Secondary || o.Series[0].Trendline {
+		t.Error("a chart written before these options must read with all of them off")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"area at=", "donut at=", "radar at=", "polar at=", "funnel at=", "waterfall at=", "combo at=", "gauge at=", "sparkline at=", "candlestick at="} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// The kinds and options of the second batch read back whole; older charts read with all of them off.
+func TestChartKindsBatchB(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	full := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_GANTT, Width: 100, Height: 100, DateAxis: true, Groups: []string{"a", "a", "b"}, Bins: 7, BinWidth: 2500,
+		HideOutliers: true, ShowMean: true, Marker: 19000000, HeatLow: 0xff112233, HeatHigh: 0xff445566,
+		Series: []*inkpb.ChartSeries{{Name: "A", Values: []int64{1, 2}, Xs: []int64{-5, 10}, Sizes: []int64{300, 900}}}}
+	old := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_BAR, Width: 100, Height: 100, Series: []*inkpb.ChartSeries{{Name: "A", Values: []int64{1}}}}
+	evs := []*inkpb.Event{}
+	for i, k := range []inkpb.ChartKind{inkpb.ChartKind_CHART_SCATTER, inkpb.ChartKind_CHART_BUBBLE, inkpb.ChartKind_CHART_HISTOGRAM, inkpb.ChartKind_CHART_BOXPLOT, inkpb.ChartKind_CHART_HEATMAP, inkpb.ChartKind_CHART_TREEMAP} {
+		evs = append(evs, &inkpb.Event{Id: id, Device: "d", Seq: uint64(i + 1), Kind: &inkpb.Event_ChartSet{ChartSet: &inkpb.ChartSet{Kind: k}}})
+	}
+	evs = append(evs, &inkpb.Event{Id: id, Device: "d", Seq: 7, Kind: &inkpb.Event_ChartSet{ChartSet: full}}, &inkpb.Event{Id: id, Device: "d", Seq: 8, Kind: &inkpb.Event_ChartSet{ChartSet: old}})
+	if err := Append(p, evs...); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 8 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[6].GetChartSet(), full) {
+		t.Error("the Gantt chart changed on the way")
+	}
+	o := l.Events[7].GetChartSet()
+	if o.DateAxis || len(o.Groups) != 0 || o.Bins != 0 || o.BinWidth != 0 || o.HideOutliers || o.ShowMean || o.Marker != 0 || o.HeatLow != 0 || o.HeatHigh != 0 || len(o.Series[0].Xs) != 0 || len(o.Series[0].Sizes) != 0 {
+		t.Error("a chart written before these options must read with all of them off")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"scatter at=", "bubble at=", "histogram at=", "boxplot at=", "heatmap at=", "treemap at=", "gantt at="} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // A dotted stroke is an ordinary stroke event with its own tool; it reads back and dumps by name.
 func TestDottedStroke(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p")

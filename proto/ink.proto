@@ -337,6 +337,46 @@ enum ChartKind {
   CHART_BAR = 0;
   CHART_LINE = 1;
   CHART_PIE = 2;
+  CHART_AREA = 3;
+  CHART_DONUT = 4;
+  CHART_RADAR = 5;
+  // Like a radar, but each category is a wedge with the same angle and the value is its radius.
+  CHART_POLAR = 6;
+  // The first series, one centred bar per category, widest value first as given.
+  CHART_FUNNEL = 7;
+  // The first series are the steps (changes), running on from each other; the
+  // categories listed in `totals` instead show the running total so far.
+  CHART_WATERFALL = 8;
+  // Each series has its own kind (bar, line or area) and may use a second axis on the right.
+  CHART_COMBO = 9;
+  // One value (the first series, first category) on a dial between gauge_min and
+  // gauge_max; a second category, if there is one, is a target mark.
+  CHART_GAUGE = 10;
+  // A small line with no axes, labels or legend.
+  CHART_SPARKLINE = 11;
+  // Four series in order: open, high, low, close.
+  CHART_CANDLESTICK = 12;
+  // Each series is a set of points: `xs` and `values` (y) pairs, and, for a
+  // bubble chart, `sizes`. Categories, if there are any, label the points.
+  CHART_SCATTER = 13;
+  CHART_BUBBLE = 14;
+  // The first series' values are raw samples, counted into bins (see `bins`, `bin_width`).
+  CHART_HISTOGRAM = 15;
+  // Each series' values are samples; one box each (median, quartiles, whiskers, outliers).
+  CHART_BOXPLOT = 16;
+  // Categories are the rows, series the columns, values the cells, shaded from `heat_low` to `heat_high`.
+  CHART_HEATMAP = 17;
+  // The first series are the sizes, categories the tiles; `groups` (one per category, if any) nests them.
+  CHART_TREEMAP = 18;
+  // Categories are the tasks; the first series are the starts, the second the ends and the third (optional) the percent done.
+  CHART_GANTT = 19;
+}
+
+// How a line (or the top of an area) joins its points.
+enum ChartCurve {
+  CURVE_STRAIGHT = 0;
+  CURVE_SMOOTH = 1;
+  CURVE_STEP = 2;
 }
 
 // One series of a chart: a name, a colour and one value per category. Values
@@ -348,6 +388,16 @@ message ChartSeries {
   // Indices of the categories this series has no value for (left blank; the
   // number in `values` at that place is ignored). A line skips it, a bar is not drawn.
   repeated uint32 missing = 4 [packed = true];
+  // Combo charts: how this series is drawn (bar, line or area; zero is bar).
+  ChartKind kind = 5;
+  // Combo charts: use the second axis, on the right.
+  bool secondary = 6;
+  // Draw a straight line of best fit through this series' values.
+  bool trendline = 7;
+  // Scatter and bubble charts: where each point is along the bottom (`values` is
+  // how high), and for a bubble its size, all in thousandths. Same length as `values`.
+  repeated sint64 xs = 8 [packed = true];
+  repeated sint64 sizes = 9 [packed = true];
 }
 
 // A chart on the page, drawn from its data. The whole state of it, written like
@@ -388,6 +438,43 @@ message ChartSet {
   uint32 src_rows = 20;
   uint32 src_cols = 21;
   bool series_in_rows = 22;
+  // Bars run sideways (categories down the side).
+  bool horizontal = 23;
+  // Stacked bars and areas show each category as shares of 100 (needs `stacked`).
+  bool percent = 24;
+  ChartCurve curve = 25;
+  // Lines and radars: leave the dots off.
+  bool hide_markers = 26;
+  // Donut: the hole as a whole percent of the radius; zero is the default, 55.
+  uint32 hole = 27;
+  // Radar: shade the inside.
+  bool filled = 28;
+  // A tilted, extruded look for bars, pies, donuts, areas and lines (still a flat picture, not a turnable scene).
+  bool three_d = 29;
+  // Waterfall: categories that show the running total.
+  repeated uint32 totals = 30 [packed = true];
+  // Write the value on each bar, point or slice.
+  bool show_values = 31;
+  // Gauge: the ends of the dial in thousandths; a max not above the min means 0 to 100.
+  sint64 gauge_min = 32;
+  sint64 gauge_max = 33;
+  // Population pyramid: with `horizontal`, the first series runs to the left of zero, the second to the right.
+  bool pyramid = 34;
+  // Gantt: the starts and ends are dates, as days since 1970-01-01 (in thousandths), shown as dates.
+  bool date_axis = 35;
+  // Treemap: the group each category belongs to (same length as `categories`, or empty for none).
+  repeated string groups = 36;
+  // Histogram: the number of bins, or the width of one (thousandths); zero for both means a count chosen from the samples.
+  uint32 bins = 37;
+  sint64 bin_width = 38;
+  // Box plot: leave out the dots beyond the whiskers; mark the mean.
+  bool hide_outliers = 39;
+  bool show_mean = 40;
+  // Gantt: a vertical line at this value (thousandths; zero for none), such as today.
+  sint64 marker = 41;
+  // Heatmap: the colours for the lowest and highest values (0xAARRGGBB; zero alpha means the defaults, pale blue and blue).
+  uint32 heat_low = 42;
+  uint32 heat_high = 43;
 }
 
 message ChartRemoved {}
