@@ -57,6 +57,9 @@ class TextBox(
     fun corners(height: Float) = listOf(toPage(0f, 0f), toPage(width, 0f), toPage(width, height), toPage(0f, height))
 }
 
+/** How [PageModel.arrange] moves things in the layers. */
+enum class Arrange { FRONT, BACK, FORWARD, BACKWARD }
+
 /** What happens to the log: the same kinds the ink format has. A text box is always written whole. */
 sealed interface Ev {
     data class Added(val item: Item) : Ev
@@ -68,6 +71,8 @@ sealed interface Ev {
     data class TableRemoved(val id: String) : Ev
     /** The page's size, template or fixed-or-infinite changed; the whole new state. */
     data class PageChanged(val page: PageSet) : Ev
+    /** Object [id] now sits just above [above] in the layers, or at the very bottom if [above] is null. */
+    data class ZMoved(val id: String, val above: String?) : Ev
     /** The strokes [ids] were moved or resized by [map]. */
     data class Transformed(val ids: List<String>, val map: Affine) : Ev
 }
@@ -96,21 +101,46 @@ class PageModel(page: PageSet = A4_LINED) {
     var tables: List<Table> = emptyList()
         private set
 
+    /**
+     * Every object's ID (strokes, text boxes, tables), bottom layer first: the drawing order. A new stroke or text
+     * box goes on top and a new table at the bottom; [arrange] changes it.
+     */
+    var order: List<String> = emptyList()
+        private set
+
+    private val itemIndex = Index<Item> { it.id }
+    private val textIndex = Index<TextBox> { it.id }
+    private val tableIndex = Index<Table> { it.id }
+    fun itemOf(id: String): Item? = itemIndex.of(items)[id]
+    fun textOf(id: String): TextBox? = textIndex.of(texts)[id]
+    fun tableOf(id: String): Table? = tableIndex.of(tables)[id]
+
+    /** ID to object, rebuilt only when the list it is for was replaced. */
+    private class Index<T>(val id: (T) -> String) {
+        private var src: List<T>? = null
+        private var map = emptyMap<String, T>()
+        fun of(list: List<T>): Map<String, T> {
+            if (src !== list) { map = list.associateBy(id); src = list }
+            return map
+        }
+    }
+
     /** Events not yet written anywhere. */
     val log = mutableListOf<Ev>()
 
     private class Tf(val ids: List<String>, val map: Affine)
 
     /** Everything an undo step puts back: the lists are replaced, never changed, so they can be kept as they were. */
-    private data class Snap(val items: List<Item>, val texts: List<TextBox>, val tables: List<Table>, val page: PageSet)
+    private data class Snap(val items: List<Item>, val texts: List<TextBox>, val tables: List<Table>, val order: List<String>, val page: PageSet)
 
     private class Step(val before: Snap, val after: Snap, val tf: Tf? = null)
 
-    private fun now() = Snap(items, texts, tables, page)
+    private fun now() = Snap(items, texts, tables, order, page)
 
     private val undoStack = ArrayDeque<Step>()
     private val redoStack = ArrayDeque<Step>()
     private var openBefore: List<Item>? = null // set while an eraser drag is going on
+    private var openOrder: List<String> = emptyList() // the layers when it began
 
     val canUndo get() = undoStack.isNotEmpty()
     val canRedo get() = redoStack.isNotEmpty()
@@ -247,21 +277,28 @@ class PageModel(page: PageSet = A4_LINED) {
      * every touched stroke goes whole. Call it for each point of a drag, then [endErase]. The pen's own
      * width counts: the disc is [r] plus half the stroke's width. Returns true if anything changed.
      */
-    fun erase(x: Float, y: Float, r: Float, partial: Boolean): Boolean {
+    fun erase(x: Float, y: Float, r: Float, partial: Boolean, only: EraseOnly = EraseOnly.ALL): Boolean {
         val before = items
         val out = ArrayList<Item>(before.size)
+        val replaced = HashMap<String, List<String>>() // a stroke's ID to the IDs that take its layer (none if it went)
         for (it in before) {
+            if (!only.matches(it)) { out.add(it); continue }
             val reach = r + it.width / 2f
             if (!partial) {
-                if (!EraseGeometry.hits(it.pts, x, y, reach)) out.add(it)
+                if (!EraseGeometry.hits(it.pts, x, y, reach)) out.add(it) else replaced[it.id] = emptyList()
                 continue
             }
             val pieces = EraseGeometry.cut(it.pts, x, y, reach)
-            if (pieces == null) out.add(it) else pieces.forEach { p -> out.add(Item(newId(), it.tool, it.color, it.width, p)) }
+            if (pieces == null) out.add(it) else {
+                val made = pieces.map { p -> Item(newId(), it.tool, it.color, it.width, p) }
+                out.addAll(made)
+                replaced[it.id] = made.map { m -> m.id }
+            }
         }
         if (out.size == before.size && out.indices.all { out[it] === before[it] }) return false
-        if (openBefore == null) openBefore = before
+        if (openBefore == null) { openBefore = before; openOrder = order }
         items = out
+        order = order.flatMap { replaced[it] ?: listOf(it) } // a piece keeps the layer of the stroke it came from
         return true
     }
 
@@ -302,6 +339,7 @@ class PageModel(page: PageSet = A4_LINED) {
         openBefore = null
         val after = now()
         items = before // commit() sets it and writes the log from the difference
+        order = openOrder
         commit(after)
     }
 
@@ -324,10 +362,59 @@ class PageModel(page: PageSet = A4_LINED) {
     /** Makes [after] the state, as one new undo step (nothing happens if it is the same state). */
     private fun commit(after: Snap, tf: Tf? = null) {
         val before = now()
-        if (before.items === after.items && before.texts === after.texts && before.tables === after.tables && before.page == after.page) return
-        undoStack.addLast(Step(before, after, tf))
+        val settled = if (after.order === before.order) after.copy(order = settle(before.order, after)) else after
+        if (before.items === settled.items && before.texts === settled.texts && before.tables === settled.tables && before.order === settled.order && before.page == settled.page) return
+        undoStack.addLast(Step(before, settled, tf))
         redoStack.clear()
-        move(before, after, tf)
+        move(before, settled, tf)
+    }
+
+    /** The layers after a change that did not name them: what is gone leaves, a new stroke or text box goes on top, a new table at the bottom. */
+    private fun settle(old: List<String>, to: Snap): List<String> {
+        val have = HashSet<String>()
+        to.items.mapTo(have) { it.id }; to.texts.mapTo(have) { it.id }; to.tables.mapTo(have) { it.id }
+        val known = old.toHashSet()
+        val kept = old.filter { it in have }
+        val top = to.items.filter { it.id !in known }.map { it.id } + to.texts.filter { it.id !in known }.map { it.id }
+        val bottom = to.tables.filter { it.id !in known }.map { it.id }
+        return if (kept.size == old.size && top.isEmpty() && bottom.isEmpty()) old else bottom + kept + top
+    }
+
+    /**
+     * Moves [ids] in the layers: to the front or back, or one step forward or backward past the next object that
+     * overlaps it ([box] gives an object's box, null if unknown, which counts as overlapping). They keep their
+     * order among themselves. One undo step; false if nothing moves.
+     */
+    fun arrange(ids: Set<String>, how: Arrange, box: (String) -> Box? = { null }): Boolean {
+        endErase()
+        val mine = order.filter { it in ids }
+        if (mine.isEmpty()) return false
+        val rest = order.filter { it !in ids }
+        val next: List<String> = when (how) {
+            Arrange.FRONT -> rest + mine
+            Arrange.BACK -> mine + rest
+            else -> {
+                val out = order.toMutableList()
+                val forward = how == Arrange.FORWARD
+                fun touches(a: String, b: String): Boolean {
+                    val p = box(a) ?: return true
+                    val q = box(b) ?: return true
+                    return p.l <= q.r && q.l <= p.r && p.t <= q.b && q.t <= p.b
+                }
+                // The one nearest the end it moves towards goes first, so they never pass each other.
+                for (id in if (forward) mine.asReversed() else mine) {
+                    val at = out.indexOf(id)
+                    val range = if (forward) (at + 1 until out.size) else (at - 1 downTo 0)
+                    val hit = range.firstOrNull { out[it] !in ids && touches(id, out[it]) } ?: continue
+                    out.removeAt(at)
+                    out.add(hit, id) // forward: just after the one it passed (the list shrank by one); backward: just before it
+                }
+                out
+            }
+        }
+        if (next == order) return false
+        commit(now().copy(order = next))
+        return true
     }
 
     /** Goes from [from] to [to] and writes what that means to the log. */
@@ -346,10 +433,29 @@ class PageModel(page: PageSet = A4_LINED) {
         from.tables.filter { it.id !in tableNow }.forEach { log.add(Ev.TableRemoved(it.id)) }
         to.tables.filter { tableWas[it.id] !== it }.forEach { log.add(Ev.TableSet(it)) }
         if (to.page != from.page) log.add(Ev.PageChanged(to.page))
+        logLayers(from, to)
         items = to.items
         texts = to.texts
         tables = to.tables
         page = to.page
+        order = to.order
+    }
+
+    /** Writes [Ev.ZMoved] for every object whose place the format's plain rules would not give (see ink.proto). */
+    private fun logLayers(from: Snap, to: Snap) {
+        val have = to.order.toHashSet()
+        val was = from.order.toHashSet()
+        val plain = from.order.filterTo(ArrayList()) { it in have }
+        to.items.filter { it.id !in was }.forEach { plain.add(it.id) }
+        to.texts.filter { it.id !in was }.forEach { plain.add(it.id) }
+        to.tables.filter { it.id !in was }.forEach { plain.add(0, it.id) }
+        if (plain.size != to.order.size) return
+        for (i in to.order.indices) {
+            if (plain[i] == to.order[i]) continue
+            plain.remove(to.order[i])
+            plain.add(i, to.order[i])
+            log.add(Ev.ZMoved(to.order[i], if (i == 0) null else to.order[i - 1]))
+        }
     }
 
     companion object {

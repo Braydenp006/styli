@@ -52,6 +52,8 @@ private fun InkScreen() {
     var letter by remember { mutableStateOf(false) }
     var landscape by remember { mutableStateOf(false) }
     var tool by remember { mutableStateOf(InkCanvasView.Tool.PEN) }
+    var units by remember { mutableStateOf(RulerUnits.METRIC) }
+    var erasing by remember { mutableStateOf(EraseOnly.ALL) }
     var shade by remember { mutableStateOf(0) }
     var thick by remember { mutableStateOf(0) }
     // Penmanship, each 0 off, 1 low, 2 medium, 3 high (hold time: 0.3, 0.5, 0.8, 1.2 s)
@@ -143,8 +145,26 @@ private fun InkScreen() {
             Button(onClick = { pHold = (pHold + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) {
                 Text("Hold: ${listOf("0.3", "0.5", "0.8", "1.2")[pHold]} s", softWrap = false)
             }
+            if (tool == InkCanvasView.Tool.ERASER_STROKE || tool == InkCanvasView.Tool.ERASER_PART) {
+                Button(
+                    onClick = { erasing = EraseOnly.entries[(erasing.ordinal + 1) % EraseOnly.entries.size]; canvas?.eraseOnly = erasing },
+                    Modifier.padding(start = 8.dp),
+                ) { Text("Erases: " + erasing.name.lowercase(), softWrap = false) }
+            }
+            Button(onClick = { canvas?.toggleRuler() }, Modifier.padding(start = 8.dp)) { Text("Ruler") }
+            Button(
+                onClick = { units = RulerUnits.entries[(units.ordinal + 1) % RulerUnits.entries.size]; canvas?.rulerUnits = units },
+                Modifier.padding(start = 8.dp),
+            ) { Text("Units: " + units.name.lowercase(), softWrap = false) }
             if (tool == InkCanvasView.Tool.TABLE) {
                 Button(onClick = { tableDialog = true }, Modifier.padding(start = 8.dp)) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
+            }
+            if (tool == InkCanvasView.Tool.LASSO) {
+                // Layers for what is selected.
+                Button(onClick = { canvas?.arrange(Arrange.FRONT) }, Modifier.padding(start = 8.dp)) { Text("To front", softWrap = false) }
+                Button(onClick = { canvas?.arrange(Arrange.FORWARD) }, Modifier.padding(start = 8.dp)) { Text("Forward", softWrap = false) }
+                Button(onClick = { canvas?.arrange(Arrange.BACKWARD) }, Modifier.padding(start = 8.dp)) { Text("Backward", softWrap = false) }
+                Button(onClick = { canvas?.arrange(Arrange.BACK) }, Modifier.padding(start = 8.dp)) { Text("To back", softWrap = false) }
             }
             if (tool == InkCanvasView.Tool.LASSO) {
                 // For a table selected with the lasso: tap a cell first for the row and column buttons.

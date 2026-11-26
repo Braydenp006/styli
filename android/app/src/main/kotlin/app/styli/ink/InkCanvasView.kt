@@ -25,6 +25,8 @@ import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
 import androidx.ink.brush.Brush
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.ink.brush.StockBrushes
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
@@ -56,7 +58,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, TEXT, TABLE }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, LASER, TEXT, TABLE }
 
     /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
     val notebook = Notebook()
@@ -111,6 +113,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (tool == Tool.HIGHLIGHTER) brushFor(highlighterFamily, highlighterColor, highlighterWidth)
         else brushFor(penFamily, penColor, penWidth)
 
+    /** What the erasers may touch (all, ink only, highlights only or straight lines only). */
+    var eraseOnly = EraseOnly.ALL
+
     /** The eraser's reach on screen, so it feels the same at any zoom. */
     private val eraserPx = 10f
 
@@ -149,6 +154,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawTableDragPreview(canvas)
                 canvas.restore() // the pull's shift
                 drawPullHint(canvas)
+                drawRuler(canvas)
+                drawLaser(canvas)
             }
         }
 
@@ -172,18 +179,22 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
         canvas.save()
         canvas.concat(toScreen)
-        for (table in model.tables) drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb) // under the ink
-        for (item in model.items) {
-            // A transform makes a new Item under the same ID, so an old picture is not reused.
-            val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
-            val moved = dragMap?.takeIf { item.id in selection }
-            if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) continue
-            canvas.save()
-            if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
-            renderer.draw(canvas, p.stroke, toScreen)
-            canvas.restore()
-        }
-        for (box in model.texts) {
+        for (id in model.order) { // bottom layer first
+            val table = model.tableOf(id)
+            if (table != null) { drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb); continue }
+            val item = model.itemOf(id)
+            if (item != null) {
+                // A transform makes a new Item under the same ID, so an old picture is not reused.
+                val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
+                val moved = dragMap?.takeIf { item.id in selection }
+                if (moved == null && (p.r < vl || p.l > vr || p.b < vt || p.t > vb)) continue
+                canvas.save()
+                if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+                renderer.draw(canvas, p.stroke, toScreen)
+                canvas.restore()
+                continue
+            }
+            val box = model.textOf(id) ?: continue
             if (box.id == editBox?.id) continue // the editor shows it
             val moved = dragMap?.takeIf { box.id in selection }
             canvas.save()
@@ -491,9 +502,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN) stopGlide() // a touch catches the page
+        if (rulerGrab(event)) return true
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !textTapping && !tabling) {
+            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !textTapping && !tabling) {
                 gestureActive = false // a pen landing after a palm takes over
                 pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
@@ -517,7 +529,29 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     tableFromX = x; tableFromY = y; tableToX = x; tableToY = y
                     return true
                 }
-                if (tool == Tool.LINE) {
+                if (tool == Tool.LASER) {
+                    lasering = true
+                    laserTo(event, i)
+                    return true
+                }
+                val rl = ruler
+                if (rl != null && (tool == Tool.PEN || tool == Tool.HIGHLIGHTER)) {
+                    val side = rl.edgeNear(event.getX(i), event.getY(i), rulerReachPx)
+                    if (side != 0) { // the pen is at the ruler's edge: it draws a line along it
+                        val (sx, sy) = rl.onEdge(event.getX(i), event.getY(i), side)
+                        ruling = true
+                        rulerSide = side
+                        lineHl = tool == Tool.HIGHLIGHTER
+                        lining = true
+                        lineStartX = geometry.toPageX(sx.toDouble()).toFloat()
+                        lineStartY = geometry.toPageY(sy.toDouble()).toFloat()
+                        lineStartMs = event.eventTime
+                        lineEnd = lineStartX to lineStartY
+                        return true
+                    }
+                }
+                if (tool == Tool.LINE || tool == Tool.LINE_HIGHLIGHTER) {
+                    lineHl = tool == Tool.LINE_HIGHLIGHTER
                     lining = true
                     lineStartX = geometry.toPageX(event.getX(i).toDouble()).toFloat()
                     lineStartY = geometry.toPageY(event.getY(i).toDouble()).toFloat()
@@ -549,6 +583,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 gestureActive = true
             }
         }
+        if (rulerFingers(event)) return true
+        if (lasering) return laser(event)
         if (textTapping) return textGesture(event)
         if (tabling) return tableGesture(event)
         return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (snapped != null) snapping(event) else if (strokeId != null) drawing(event) else moving(event)
@@ -843,6 +879,22 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
     }
 
+    /** Moves the selected things in the layers (front, back, or one step). */
+    fun arrange(how: Arrange) {
+        if (model.arrange(selection, how, ::boxOf)) changed(true)
+    }
+
+    /** The box round a stroke, text box or table on the page, for telling what overlaps. */
+    private fun boxOf(id: String): Box? {
+        model.itemOf(id)?.let { i ->
+            val h = i.width / 2.0
+            return Box(i.pts.minOf { it.x } - h, i.pts.minOf { it.y } - h, i.pts.maxOf { it.x } + h, i.pts.maxOf { it.y } + h)
+        }
+        model.textOf(id)?.let { return textRect(it) }
+        model.tableOf(id)?.let { return Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }
+        return null
+    }
+
     /** The box round a text box on the page (round its corners, so a turned one is boxed loosely). */
     private fun textRect(b: TextBox): Box {
         val c = b.corners(layoutOf(b).height.toFloat())
@@ -1082,6 +1134,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     // ---- Straight line: the pen drags out a line from where it landed; it is stored when the pen lifts. ----
 
     private var lining = false
+    private var lineHl = false // the line being dragged is a highlighter stroke
+    private var ruling = false // ...and it runs along the ruler's edge
+    private var rulerSide = 0
     private var lineStartX = 0f
     private var lineStartY = 0f
     private var lineStartMs = 0L
@@ -1091,8 +1146,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private fun drawLinePreview(canvas: Canvas) {
         if (!lining) return
         val g = geometry
-        linePaint.color = penColor
-        linePaint.strokeWidth = maxOf(1.5f, (penWidth * g.scale).toFloat())
+        linePaint.color = if (lineHl) highlighterColor else penColor
+        linePaint.strokeWidth = maxOf(1.5f, ((if (lineHl) highlighterWidth else penWidth) * g.scale).toFloat())
         canvas.drawLine(
             g.toScreenX(lineStartX.toDouble()).toFloat(), g.toScreenY(lineStartY.toDouble()).toFloat(),
             g.toScreenX(lineEnd.first.toDouble()).toFloat(), g.toScreenY(lineEnd.second.toDouble()).toFloat(), linePaint,
@@ -1104,7 +1159,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val i = event.findPointerIndex(pointerId)
         when (event.actionMasked) {
             MotionEvent.ACTION_MOVE -> if (i >= 0) {
-                lineEnd = LineGeometry.end(lineStartX, lineStartY, g.toPageX(event.getX(i).toDouble()).toFloat(), g.toPageY(event.getY(i).toDouble()).toFloat())
+                val rl = ruler
+                lineEnd = if (ruling && rl != null) {
+                    val (ex, ey) = rl.onEdge(event.getX(i), event.getY(i), rulerSide) // along the edge, never snapped to level
+                    g.toPageX(ex.toDouble()).toFloat() to g.toPageY(ey.toDouble()).toFloat()
+                } else LineGeometry.end(lineStartX, lineStartY, g.toPageX(event.getX(i).toDouble()).toFloat(), g.toPageY(event.getY(i).toDouble()).toFloat())
                 pageLayer.invalidate()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
@@ -1112,12 +1171,154 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 val pts = if (event.actionMasked == MotionEvent.ACTION_CANCEL) null
                     else LineGeometry.points(lineStartX, lineStartY, lineEnd.first, lineEnd.second, event.eventTime - lineStartMs)
                 lining = false
-                if (pts != null) model.add(StrokeTool.TOOL_PEN, penColor, penWidth, pts)
+                ruling = false
+                if (pts != null) {
+                    if (lineHl) model.add(StrokeTool.TOOL_HIGHLIGHTER, highlighterColor, highlighterWidth, pts)
+                    else model.add(StrokeTool.TOOL_PEN, penColor, penWidth, pts)
+                }
                 changed(true)
             }
         }
         return true
     }
+
+    // ---- Laser pointer: a red dot that follows the pen and fades. Nothing is stored. ----
+
+    private var lasering = false
+    private val laserTrail = LaserTrail()
+    private val laserPaint = Paint().apply { color = Color.RED; isAntiAlias = true; strokeCap = Paint.Cap.ROUND }
+
+    private fun laserTo(event: MotionEvent, i: Int) {
+        for (h in 0 until event.historySize) laserTrail.add(event.getHistoricalX(i, h), event.getHistoricalY(i, h), event.getHistoricalEventTime(h))
+        laserTrail.add(event.getX(i), event.getY(i), event.eventTime)
+        pageLayer.invalidate()
+    }
+
+    private fun laser(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) laserTo(event, i)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                lasering = false
+                laserTrail.lift()
+            }
+        }
+        return true
+    }
+
+    private fun drawLaser(canvas: Canvas) {
+        val now = android.os.SystemClock.uptimeMillis()
+        laserTrail.prune(now)
+        if (laserTrail.isEmpty) return
+        var prev: LaserDot? = null
+        for (d in laserTrail.alive(now)) {
+            laserPaint.alpha = (d.alpha * 255).toInt()
+            laserPaint.strokeWidth = 8f * d.alpha + 2f
+            val p = prev
+            if (d.joined && p != null) canvas.drawLine(p.x, p.y, d.x, d.y, laserPaint) else canvas.drawPoint(d.x, d.y, laserPaint)
+            prev = d
+        }
+        pageLayer.postInvalidateOnAnimation() // keeps fading until it is gone
+    }
+
+    // ---- Ruler: lies on the screen; a pen stroke that starts at its edge runs straight along it. ----
+
+    /** The ruler, or null when it is hidden. It is not saved and not synced. */
+    var ruler: Ruler? = null
+        private set
+
+    /** How close (on screen) the pen must land to a ruler edge to be drawn along it: 8 mm. */
+    private val rulerReachPx get() = resources.displayMetrics.xdpi / 25.4f * 8f
+
+    fun toggleRuler() {
+        ruler = if (ruler != null) null else {
+            val perCm = resources.displayMetrics.xdpi / 2.54f
+            Ruler(width / 2f, height / 3f, 0f, minOf(20f * perCm, width * 0.9f), 3f * perCm)
+        }
+        rulerIds.clear()
+        pageLayer.invalidate()
+    }
+
+    private val rulerIds = ArrayList<Int>() // the fingers holding the ruler (up to two)
+    private val rulerLast = HashMap<Int, Pair<Float, Float>>()
+
+    private val penBusy get() = strokeId != null || lining || erasing || lassoing || lasering || snapped != null || textTapping || tabling
+
+    /** A finger landing on the ruler takes hold of it (instead of scrolling the page). True if it did. */
+    private fun rulerGrab(event: MotionEvent): Boolean {
+        val r = ruler ?: return false
+        val a = event.actionMasked
+        if (a != MotionEvent.ACTION_DOWN && a != MotionEvent.ACTION_POINTER_DOWN) return false
+        val i = event.actionIndex
+        if (isPen(event.getToolType(i)) || gestureActive || rulerIds.size >= 2 || !r.contains(event.getX(i), event.getY(i))) return false
+        val id = event.getPointerId(i)
+        rulerIds.add(id)
+        rulerLast[id] = event.getX(i) to event.getY(i)
+        return true
+    }
+
+    /** Moves and turns the ruler with the fingers holding it. True if the event was only theirs (the pen is not busy). */
+    private fun rulerFingers(event: MotionEvent): Boolean {
+        val r = ruler
+        if (r == null || rulerIds.isEmpty()) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                val now = rulerIds.map { id -> event.findPointerIndex(id).let { if (it < 0) null else event.getX(it) to event.getY(it) } }
+                if (now.all { it != null }) {
+                    val old = rulerIds.map { rulerLast.getValue(it) }
+                    if (now.size == 2) r.follow(old[0].first, old[0].second, old[1].first, old[1].second, now[0]!!.first, now[0]!!.second, now[1]!!.first, now[1]!!.second)
+                    else r.move(now[0]!!.first - old[0].first, now[0]!!.second - old[0].second)
+                    rulerIds.forEachIndexed { k, id -> rulerLast[id] = now[k]!! }
+                    pageLayer.invalidate()
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val id = event.getPointerId(event.actionIndex)
+                if (rulerIds.remove(id)) rulerLast.remove(id)
+            }
+            MotionEvent.ACTION_CANCEL -> { rulerIds.clear(); rulerLast.clear() }
+            else -> return false // a pen landing is the pen's
+        }
+        return !penBusy
+    }
+
+    private val rulerFill = Paint().apply { color = 0x66B0BEC5; style = Paint.Style.FILL }
+    private val rulerEdge = Paint().apply { color = 0xFF546E7A.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+
+    private fun drawRuler(canvas: Canvas) {
+        val r = ruler ?: return
+        val c = r.corners()
+        val body = android.graphics.Path().apply { moveTo(c[0].first, c[0].second); for (k in 1..3) lineTo(c[k].first, c[k].second); close() }
+        canvas.drawPath(body, rulerFill)
+        canvas.drawPath(body, rulerEdge)
+        // Metric ticks go on the top edge, inches on the top edge or (with both) on the bottom one.
+        if (rulerUnits != RulerUnits.INCHES) drawTicks(canvas, r, false, -1)
+        if (rulerUnits != RulerUnits.METRIC) drawTicks(canvas, r, true, if (rulerUnits == RulerUnits.BOTH) 1 else -1)
+    }
+
+    private val rulerText = Paint().apply { color = 0xFF37474F.toInt(); textSize = 24f; isAntiAlias = true }
+
+    /** The ticks of one scale along long edge [side] (-1 top, 1 bottom), pointing inwards, numbers beside the long ones. */
+    private fun drawTicks(canvas: Canvas, r: Ruler, imperial: Boolean, side: Int) {
+        val inward = (-sin(r.angle) to cos(r.angle)) // across the ruler, from the top edge to the bottom one
+        val sign = -side // from the edge a tick starts on, inwards
+        for (m in RulerScale.marks(imperial, r.length, geometry.scale)) {
+            val len = r.thickness * listOf(0.3f, 0.22f, 0.17f, 0.13f, 0.1f)[if (imperial) m.rank else listOf(0, 1, 4)[m.rank]]
+            val (x, y) = r.edgePoint(m.along, side)
+            canvas.drawLine(x, y, x + inward.first * len * sign, y + inward.second * len * sign, rulerEdge)
+            val label = m.label ?: continue
+            canvas.save()
+            canvas.translate(x, y)
+            canvas.rotate(Math.toDegrees(r.angle.toDouble()).toFloat())
+            canvas.drawText(label, 4f, if (sign > 0) len + rulerText.textSize else -len - 4f, rulerText)
+            canvas.restore()
+        }
+    }
+
+    /** What the ruler's edges measure. */
+    var rulerUnits = RulerUnits.METRIC
+        set(v) { field = v; pageLayer.invalidate() }
 
     private var erasing = false
     private var eraserEnd = false
@@ -1145,7 +1346,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private fun eraseAt(sx: Float, sy: Float) {
         val g = geometry
         val partial = tool == Tool.ERASER_PART && !eraserEnd
-        if (model.erase(g.toPageX(sx.toDouble()).toFloat(), g.toPageY(sy.toDouble()).toFloat(), (eraserPx / g.scale).toFloat(), partial)) {
+        if (model.erase(g.toPageX(sx.toDouble()).toFloat(), g.toPageY(sy.toDouble()).toFloat(), (eraserPx / g.scale).toFloat(), partial, eraseOnly)) {
             pageLayer.invalidate()
         }
     }

@@ -1,10 +1,23 @@
 package app.styli.ink
 
+import app.styli.ink.proto.Tool
 import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /** One recorded pen point, in page units. [t] is milliseconds since the stroke's first point, [p] is 0 to 1. */
 data class Pt(val x: Float, val y: Float, val t: Long, val p: Float)
+
+/** What an eraser may touch. A straight line is a stroke of exactly two points (the line tool, the ruler and auto-straightening make those). */
+enum class EraseOnly {
+    ALL, INK, HIGHLIGHTS, LINES;
+
+    fun matches(item: Item) = when (this) {
+        ALL -> true
+        INK -> item.tool == Tool.TOOL_PEN
+        HIGHLIGHTS -> item.tool == Tool.TOOL_HIGHLIGHTER
+        LINES -> item.pts.size == 2
+    }
+}
 
 /** Pure maths for the eraser. A "disc" is the eraser: centre (cx, cy), radius r, in page units. */
 object EraseGeometry {

@@ -131,7 +131,7 @@ class EraseTest {
         for (e in m.log) when (e) {
             is Ev.Added -> replay[e.item.id] = e.item
             is Ev.Erased -> replay.remove(e.id)
-            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved -> {}
+            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved -> {}
             is Ev.Transformed -> {}
         }
         assertEquals(m.items.map { it.id }, replay.keys.toList())
@@ -145,5 +145,29 @@ class EraseTest {
         m.endErase()
         m.undo() // undoes the add, not a phantom erase
         assertEquals(0, m.items.size)
+    }
+
+    @Test
+    fun filterLeavesOtherKindsAlone() {
+        val m = PageModel()
+        val ink = m.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, line())
+        val hl = m.add(Tool.TOOL_HIGHLIGHTER, 0x99FFEB3B.toInt(), 400, line())
+        val ruled = m.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, listOf(Pt(0f, 0f, 0, 1f), Pt(1000f, 0f, 10, 1f)))
+        // All three lie along y=0 and the eraser touches all of them.
+        assertTrue(m.erase(500f, 0f, 10f, partial = false, only = EraseOnly.HIGHLIGHTS))
+        m.endErase()
+        assertEquals(setOf(ink.id, ruled.id), m.items.map { it.id }.toSet())
+        assertTrue(m.erase(500f, 0f, 10f, partial = false, only = EraseOnly.LINES))
+        m.endErase()
+        assertEquals(listOf(ink.id), m.items.map { it.id })
+        assertFalse(m.erase(500f, 0f, 10f, partial = false, only = EraseOnly.HIGHLIGHTS))
+        assertTrue(hl.id !in m.items.map { it.id })
+    }
+
+    @Test
+    fun anAutoStraightenedLineCountsAsALine() {
+        val rough = (0..20).map { Pt(it * 50f, if (it % 2 == 0) 8f else -8f, it * 10L, 1f) }
+        val clean = ShapeGeometry.snap(rough)!!
+        assertTrue(EraseOnly.LINES.matches(Item("a", Tool.TOOL_PEN, 0, 40, clean)))
     }
 }

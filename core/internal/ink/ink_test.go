@@ -255,3 +255,25 @@ func TestTable(t *testing.T) {
 		}
 	}
 }
+
+// A layer move reads back and dumps with where it went.
+func TestZMoved(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	mk := func(seq uint64, above []byte) *inkpb.Event {
+		return &inkpb.Event{Id: []byte("0123456789abcdef"), Device: "z", Seq: seq, Kind: &inkpb.Event_ZMoved{ZMoved: &inkpb.ZMoved{Above: above}}}
+	}
+	if err := Append(p, mk(1, []byte("fedcba9876543210")), mk(2, nil)); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 2 {
+		t.Fatal(l, err)
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"above 66656463626139383736353433323130", "to the bottom"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}

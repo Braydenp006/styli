@@ -48,6 +48,7 @@ message Event {
     PageSet page_set = 15;
     TableSet table_set = 16;
     TableRemoved table_removed = 17;
+    ZMoved z_moved = 18;
   }
 }
 
@@ -128,6 +129,18 @@ message TableSet {
 }
 
 message TableRemoved {}
+
+// Layers. A page's objects (strokes, text boxes, tables, and later shapes) sit
+// in one order, bottom to top. A reader keeps a list: a new stroke or text box
+// goes on top, a new table goes at the bottom, a removed one leaves the list.
+// ZMoved then puts the object named by Event.id just above the object `above`,
+// or at the very bottom if `above` is empty. A writer emits one wherever the
+// list it means differs from what those rules give (a bring-to-front, a piece
+// left by a partial erase that keeps the place of the stroke it came from, an
+// undo of either).
+message ZMoved {
+  bytes above = 1;
+}
 
 enum Template {
   TEMPLATE_BLANK = 0;
