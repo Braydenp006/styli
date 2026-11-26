@@ -166,3 +166,32 @@ func TestSharedSample(t *testing.T) {
 		t.Fatalf("sample.stylog differs from what this build writes (%v); rerun with STYLI_UPDATE_GOLDEN=1 if the change is meant", err)
 	}
 }
+
+// A text box written before colour and highlight existed has neither (zero), and one with them keeps them.
+func TestTextBoxColours(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	old := []byte{} // a box as an old writer made it: no fields 6 and 7
+	old, _ = proto.Marshal(&inkpb.TextBoxSet{X: 1, Y: 2, Width: 3000, FontSize: 400, Text: "hi"})
+	var box inkpb.TextBoxSet
+	if err := proto.Unmarshal(old, &box); err != nil || box.Color != 0 || box.Highlight != 0 || box.Angle != 0 {
+		t.Fatal(box.String(), err)
+	}
+	set := func(seq uint64, b *inkpb.TextBoxSet) *inkpb.Event {
+		return &inkpb.Event{Id: []byte("0123456789abcdef"), Device: "tab", Seq: seq, Kind: &inkpb.Event_TextBoxSet{TextBoxSet: b}}
+	}
+	if err := Append(p, set(1, &inkpb.TextBoxSet{Text: "plain"}), set(2, &inkpb.TextBoxSet{Text: "red", Color: 0xffc62828, Highlight: 0x99ffeb3b, Angle: -4550})); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 2 {
+		t.Fatal(l, err)
+	}
+	if b := l.Events[1].GetTextBoxSet(); b.Color != 0xffc62828 || b.Highlight != 0x99ffeb3b || b.Angle != -4550 {
+		t.Errorf("colours lost: %v", b)
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	if !strings.Contains(out.String(), `color=ffc62828 highlight=99ffeb3b angle=-4550 "red"`) || !strings.Contains(out.String(), `color=00000000 highlight=00000000 angle=0 "plain"`) {
+		t.Errorf("dump:\n%s", out.String())
+	}
+}

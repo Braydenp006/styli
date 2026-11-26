@@ -10,7 +10,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,6 +59,10 @@ private fun InkScreen() {
     var pShapes by remember { mutableStateOf(2) }
     var pLevel by remember { mutableStateOf(2) }
     var pHold by remember { mutableStateOf(1) }
+    var solid by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
+    var textColor by remember { mutableStateOf(0) }
+    var textHighlight by remember { mutableStateOf(0) }
 
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
@@ -113,6 +127,14 @@ private fun InkScreen() {
             Button(onClick = { pHold = (pHold + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) {
                 Text("Hold: ${listOf("0.3", "0.5", "0.8", "1.2")[pHold]} s", softWrap = false)
             }
+            if (tool == InkCanvasView.Tool.TEXT || tool == InkCanvasView.Tool.LASSO) {
+                Button(onClick = { picking = 1 }, Modifier.padding(start = 8.dp)) { Text("Text colour") }
+                Button(onClick = { picking = 2 }, Modifier.padding(start = 8.dp)) { Text("Highlight") }
+                if (tool == InkCanvasView.Tool.TEXT) Button(onClick = { canvas?.finishText() }, Modifier.padding(start = 8.dp)) { Text("Done") }
+            }
+            Button(onClick = { solid = !solid; canvas?.solidOutline = solid }, Modifier.padding(start = 8.dp)) {
+                Text("Outline: " + if (solid) "solid" else "dashed", softWrap = false)
+            }
             Button(onClick = { infinite = !infinite; apply() }, Modifier.padding(start = 8.dp)) {
                 Text(if (infinite) "Canvas" else "Page")
             }
@@ -133,5 +155,44 @@ private fun InkScreen() {
             }
             Text(latency, Modifier.padding(start = 16.dp))
         }
+        if (picking != 0) {
+            val text = picking == 1
+            AlertDialog(
+                onDismissRequest = { picking = 0 },
+                confirmButton = { TextButton(onClick = { picking = 0 }) { Text("Close") } },
+                title = { Text(if (text) "Text colour" else "Highlight") },
+                text = {
+                    Column {
+                        (if (text) TEXT_COLOURS else HIGHLIGHTS).chunked(5).forEach { row ->
+                            Row(Modifier.padding(bottom = 8.dp)) {
+                                row.forEach { argb ->
+                                    val chosen = argb == (if (text) textColor else textHighlight)
+                                    Box(
+                                        Modifier.padding(end = 8.dp).size(44.dp).clip(CircleShape)
+                                            .background(if (argb ushr 24 == 0) Color.White else Color(argb))
+                                            .border(if (chosen) 3.dp else 1.dp, if (chosen) Color.Black else Color.Gray, CircleShape)
+                                            .clickable {
+                                                if (text) textColor = argb else textHighlight = argb
+                                                canvas?.setTextStyle(textColor, textHighlight)
+                                                picking = 0
+                                            },
+                                        contentAlignment = Alignment.Center,
+                                    ) { if (argb ushr 24 == 0) Text(if (text) "A" else "none", softWrap = false) }
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        }
     }
 }
+
+// Throwaway swatches for the text tool; the real picker comes with the tool rail. Zero alpha = the default.
+private val TEXT_COLOURS = listOf(
+    0, 0xFF000000, 0xFF616161, 0xFFC62828, 0xFFEF6C00, 0xFFF9A825, 0xFF2E7D32, 0xFF00838F, 0xFF1565C0, 0xFF4527A0, 0xFF7B1FA2, 0xFFAD1457,
+).map { it.toInt() }
+
+private val HIGHLIGHTS = listOf(
+    0, 0x99FFEB3B, 0x9966BB6A, 0x99F06292, 0x994FC3F7, 0x99FFB74D, 0x99BA68C8, 0x994DB6AC, 0x99EF5350, 0x99BDBDBD,
+).map { it.toInt() }

@@ -92,6 +92,15 @@ message TextBoxSet {
   uint32 width = 3;
   uint32 font_size = 4;
   string text = 5;
+  // 0xAARRGGBB as on a light page, like a stroke's colour. A zero alpha (so
+  // zero, and so absent in a log written before these were added) means: the
+  // text in the page's ordinary ink colour, and no highlight behind it.
+  uint32 color = 6;
+  uint32 highlight = 7;
+  // How far the box is turned clockwise on the page, in 0.01 degrees (a whole
+  // number like every other unit here), about its top-left corner (x, y). Zero,
+  // and so absent in a log written before this was added, means upright.
+  sint32 angle = 8;
 }
 
 message TextBoxRemoved {}

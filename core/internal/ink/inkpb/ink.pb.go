@@ -682,12 +682,21 @@ func (x *Transformed) GetF() float64 {
 // The whole state of a text box. Adding, editing and moving are all this; the
 // last one wins.
 type TextBoxSet struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	X             int32                  `protobuf:"zigzag32,1,opt,name=x,proto3" json:"x,omitempty"`
-	Y             int32                  `protobuf:"zigzag32,2,opt,name=y,proto3" json:"y,omitempty"`
-	Width         uint32                 `protobuf:"varint,3,opt,name=width,proto3" json:"width,omitempty"`
-	FontSize      uint32                 `protobuf:"varint,4,opt,name=font_size,json=fontSize,proto3" json:"font_size,omitempty"`
-	Text          string                 `protobuf:"bytes,5,opt,name=text,proto3" json:"text,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	X        int32                  `protobuf:"zigzag32,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y        int32                  `protobuf:"zigzag32,2,opt,name=y,proto3" json:"y,omitempty"`
+	Width    uint32                 `protobuf:"varint,3,opt,name=width,proto3" json:"width,omitempty"`
+	FontSize uint32                 `protobuf:"varint,4,opt,name=font_size,json=fontSize,proto3" json:"font_size,omitempty"`
+	Text     string                 `protobuf:"bytes,5,opt,name=text,proto3" json:"text,omitempty"`
+	// 0xAARRGGBB as on a light page, like a stroke's colour. A zero alpha (so
+	// zero, and so absent in a log written before these were added) means: the
+	// text in the page's ordinary ink colour, and no highlight behind it.
+	Color     uint32 `protobuf:"varint,6,opt,name=color,proto3" json:"color,omitempty"`
+	Highlight uint32 `protobuf:"varint,7,opt,name=highlight,proto3" json:"highlight,omitempty"`
+	// How far the box is turned clockwise on the page, in 0.01 degrees (a whole
+	// number like every other unit here), about its top-left corner (x, y). Zero,
+	// and so absent in a log written before this was added, means upright.
+	Angle         int32 `protobuf:"zigzag32,8,opt,name=angle,proto3" json:"angle,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -755,6 +764,27 @@ func (x *TextBoxSet) GetText() string {
 		return x.Text
 	}
 	return ""
+}
+
+func (x *TextBoxSet) GetColor() uint32 {
+	if x != nil {
+		return x.Color
+	}
+	return 0
+}
+
+func (x *TextBoxSet) GetHighlight() uint32 {
+	if x != nil {
+		return x.Highlight
+	}
+	return 0
+}
+
+func (x *TextBoxSet) GetAngle() int32 {
+	if x != nil {
+		return x.Angle
+	}
+	return 0
 }
 
 type TextBoxRemoved struct {
@@ -906,14 +936,17 @@ const file_ink_proto_rawDesc = "" +
 	"\x01c\x18\x04 \x01(\x01R\x01c\x12\f\n" +
 	"\x01d\x18\x05 \x01(\x01R\x01d\x12\f\n" +
 	"\x01e\x18\x06 \x01(\x01R\x01e\x12\f\n" +
-	"\x01f\x18\a \x01(\x01R\x01f\"o\n" +
+	"\x01f\x18\a \x01(\x01R\x01f\"\xb9\x01\n" +
 	"\n" +
 	"TextBoxSet\x12\f\n" +
 	"\x01x\x18\x01 \x01(\x11R\x01x\x12\f\n" +
 	"\x01y\x18\x02 \x01(\x11R\x01y\x12\x14\n" +
 	"\x05width\x18\x03 \x01(\rR\x05width\x12\x1b\n" +
 	"\tfont_size\x18\x04 \x01(\rR\bfontSize\x12\x12\n" +
-	"\x04text\x18\x05 \x01(\tR\x04text\"\x10\n" +
+	"\x04text\x18\x05 \x01(\tR\x04text\x12\x14\n" +
+	"\x05color\x18\x06 \x01(\rR\x05color\x12\x1c\n" +
+	"\thighlight\x18\a \x01(\rR\thighlight\x12\x14\n" +
+	"\x05angle\x18\b \x01(\x11R\x05angle\"\x10\n" +
 	"\x0eTextBoxRemoved\"\x87\x01\n" +
 	"\aPageSet\x12\x14\n" +
 	"\x05width\x18\x01 \x01(\rR\x05width\x12\x16\n" +
