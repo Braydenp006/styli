@@ -5,9 +5,13 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.RectF
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.FrameLayout
+import androidx.ink.authoring.ExperimentalInkHandoffApi
 import androidx.ink.authoring.ExperimentalInkLatencyDataApi
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
@@ -17,32 +21,114 @@ import androidx.ink.brush.StockBrushes
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
+import app.styli.ink.proto.PageSet
+import app.styli.ink.proto.Template
 
 /**
- * A white page you can draw on with a stylus.
+ * A page you can draw on with a stylus and move around with your fingers (drag to pan, pinch to zoom).
  *
  * Two layers stack here. While the pen is down, [InProgressStrokesView] draws the live stroke with
  * the library's low-latency path. When the pen lifts, the finished stroke moves to [pageLayer],
- * which is an ordinary view that redraws every finished stroke.
+ * which is an ordinary view that redraws the page, its template and every finished stroke that is on
+ * screen. Strokes are kept in page units (0.01 mm), see [PageGeometry].
  */
 @SuppressLint("RestrictedApi") // the latency callback is marked library-internal, fine for a test tool
-@OptIn(ExperimentalInkLatencyDataApi::class)
+@OptIn(ExperimentalInkLatencyDataApi::class, ExperimentalInkHandoffApi::class)
 class InkCanvasView(context: Context) : FrameLayout(context) {
 
     /** Called with a short latency summary while drawing. */
     var onLatency: ((String) -> Unit)? = null
 
-    private val finishedStrokes = mutableListOf<Stroke>()
+    /** A finished stroke and its box in page units, so a redraw can skip the ones off screen. */
+    private class Placed(val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
+
+    private val finishedStrokes = mutableListOf<Placed>()
     private val renderer = CanvasStrokeRenderer.create()
-    private val brush =
-        Brush.createWithColorIntArgb(StockBrushes.pressurePen(), Color.BLACK, 5f, 0.1f)
+
+    // Sizes are in page units: a 0.4 mm pen, and strokes simplified to within 0.02 mm.
+    private val brush = Brush.createWithColorIntArgb(StockBrushes.pressurePen(), Color.BLACK, 40f, 2f)
+
+    private val pxPerUnit = resources.displayMetrics.xdpi / 2540.0
+    private var geometry = PageGeometry(21000, 29700, false, pxPerUnit)
+    private var template = Template.TEMPLATE_BLANK
+    private val toScreen = Matrix()
+    private val line = Paint().apply { strokeWidth = 1f }
+    private val sheetEdge = Paint().apply { color = 0xFFAAAAAA.toInt(); style = Paint.Style.STROKE }
 
     private val pageLayer =
         object : View(context) {
             override fun onDraw(canvas: Canvas) {
-                for (stroke in finishedStrokes) renderer.draw(canvas, stroke, Matrix())
+                val g = geometry
+                canvas.drawColor(if (g.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
+                canvas.save()
+                if (!g.infinite) {
+                    val sheet = RectF(
+                        g.toScreenX(0.0).toFloat(), g.toScreenY(0.0).toFloat(),
+                        g.toScreenX(g.pageW.toDouble()).toFloat(), g.toScreenY(g.pageH.toDouble()).toFloat(),
+                    )
+                    canvas.drawRect(sheet, Paint().apply { color = Color.WHITE })
+                    canvas.drawRect(sheet, sheetEdge)
+                    canvas.clipRect(sheet)
+                }
+                drawTemplate(canvas)
+                toScreen.setScale(g.scale.toFloat(), g.scale.toFloat())
+                toScreen.postTranslate(g.tx.toFloat(), g.ty.toFloat())
+                val (vl, vt, vr, vb) = g.visible().map { it.toFloat() }
+                // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
+                canvas.save()
+                canvas.concat(toScreen)
+                for (p in finishedStrokes) {
+                    if (p.r < vl || p.l > vr || p.b < vt || p.t > vb) continue
+                    renderer.draw(canvas, p.stroke, toScreen)
+                }
+                canvas.restore()
+                canvas.restore()
             }
-        }.apply { setBackgroundColor(Color.WHITE) }
+        }
+
+    private fun drawTemplate(canvas: Canvas) {
+        val g = geometry
+        val (vl, vt, vr, vb) = g.visible()
+        // A fixed page has no lines outside the sheet (the clip covers the sides; the top margin is the offset).
+        val top = if (g.infinite) vt else maxOf(vt, 0.0)
+        val bottom = if (g.infinite) vb else minOf(vb, g.pageH.toDouble())
+        val left = if (g.infinite) vl else maxOf(vl, 0.0)
+        val right = if (g.infinite) vr else minOf(vr, g.pageW.toDouble())
+        when (template) {
+            Template.TEMPLATE_LINED -> {
+                line.color = 0xFFC3D3EA.toInt()
+                val first = if (g.infinite) Int.MIN_VALUE.toDouble() else LINED_TOP.toDouble()
+                for (y in PageGeometry.lines(maxOf(top, first), bottom, LINED_STEP, LINED_TOP, g.scale)) {
+                    val sy = g.toScreenY(y.toDouble()).toFloat()
+                    canvas.drawLine(0f, sy, width.toFloat(), sy, line)
+                }
+            }
+            Template.TEMPLATE_GRID -> {
+                line.color = 0xFFD5D5D5.toInt()
+                for (y in PageGeometry.lines(top, bottom, GRID_STEP, 0, g.scale)) {
+                    val sy = g.toScreenY(y.toDouble()).toFloat()
+                    canvas.drawLine(0f, sy, width.toFloat(), sy, line)
+                }
+                for (x in PageGeometry.lines(left, right, GRID_STEP, 0, g.scale)) {
+                    val sx = g.toScreenX(x.toDouble()).toFloat()
+                    canvas.drawLine(sx, 0f, sx, height.toFloat(), line)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Shows this page: its size, template and whether it is fixed or an infinite canvas. */
+    fun setPage(page: PageSet) {
+        geometry = PageGeometry(page.width, page.height, page.infinite, pxPerUnit)
+        template = page.template
+        geometry.fit(width, height)
+        pageLayer.invalidate()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        geometry.fit(w, h)
+    }
 
     private val liveLayer = InProgressStrokesView(context)
     private val predictor = MotionEventPredictor.newInstance(this)
@@ -60,7 +146,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         liveLayer.addFinishedStrokesListener(
             object : InProgressStrokesFinishedListener {
                 override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                    finishedStrokes.addAll(strokes.values)
+                    strokes.values.forEach { finishedStrokes.add(place(it)) }
                     pageLayer.invalidate()
                     // Only stop drawing the live copy after the page layer has the stroke, to avoid a flicker.
                     liveLayer.removeFinishedStrokes(strokes.keys)
@@ -101,16 +187,75 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (finishedStrokes.removeLastOrNull() != null) pageLayer.invalidate()
     }
 
+    private fun place(stroke: Stroke): Placed {
+        var l = Float.MAX_VALUE; var t = Float.MAX_VALUE; var r = -Float.MAX_VALUE; var b = -Float.MAX_VALUE
+        for (i in 0 until stroke.inputs.size) {
+            val p = stroke.inputs[i]
+            l = minOf(l, p.x); r = maxOf(r, p.x); t = minOf(t, p.y); b = maxOf(b, p.y)
+        }
+        val pad = stroke.brush.size // the pen is wider than the path it follows
+        return Placed(stroke, l - pad, t - pad, r + pad, b + pad)
+    }
+
+    // shortcut: the pen draws and fingers move the page; a finger resting on the glass while the pen draws is
+    // ignored but not told apart from a real touch by size. Proper palm rejection comes later.
+    private var gestureActive = false
+    private var lastX = 0f
+    private var lastY = 0f
+
+    private val scaleDetector =
+        ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(d: ScaleGestureDetector): Boolean {
+                    geometry.zoomBy(d.scaleFactor.toDouble(), d.focusX.toDouble(), d.focusY.toDouble())
+                    pageLayer.invalidate()
+                    return true
+                }
+            },
+        )
+
+    private fun isPen(toolType: Int) = toolType != MotionEvent.TOOL_TYPE_FINGER
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+            val i = event.actionIndex
+            if (isPen(event.getToolType(i)) && strokeId == null) {
+                gestureActive = false // a pen landing after a palm takes over
+                requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
+                pointerId = event.getPointerId(i)
+                strokeId = liveLayer.startStroke(event, pointerId, brush, screenToPage())
+                return true
+            }
+            if (!isPen(event.getToolType(i)) && strokeId == null && (action == MotionEvent.ACTION_DOWN || gestureActive)) {
+                gestureActive = true
+            }
+        }
+        return if (strokeId != null) drawing(event) else moving(event)
+    }
+
+    // The finished stroke is handed to pageLayer a moment after the pen lifts, but on the SM-P620 nothing redrew the
+    // screen until the next touch. Asking for a few frames in a row makes sure that hand-off gets drawn.
+    private fun keepDrawing(frames: Int) {
+        if (frames <= 0) return
+        pageLayer.invalidate()
+        postOnAnimation { keepDrawing(frames - 1) }
+    }
+
+    private fun screenToPage(): Matrix {
+        val g = geometry
+        return Matrix().apply {
+            setTranslate(-g.tx.toFloat(), -g.ty.toFloat())
+            postScale((1 / g.scale).toFloat(), (1 / g.scale).toFloat())
+        }
+    }
+
+    private fun drawing(event: MotionEvent): Boolean {
         predictor.record(event)
         val predicted = predictor.predict()
         try {
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
-                    pointerId = event.getPointerId(0)
-                    strokeId = liveLayer.startStroke(event, pointerId, brush)
-                }
                 MotionEvent.ACTION_MOVE -> {
                     val id = strokeId ?: return true
                     liveLayer.addToStroke(event, pointerId, id, predicted)
@@ -121,6 +266,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     if (event.getPointerId(event.actionIndex) != pointerId) return true
                     liveLayer.finishStroke(event, pointerId, id)
                     strokeId = null
+                    // Without this, a fresh launch kept the stroke in the live layer and it vanished (seen on the SM-P620).
+                    liveLayer.requestHandoff()
+                    keepDrawing(30)
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     strokeId?.let { liveLayer.cancelStroke(it, event) }
@@ -131,5 +279,35 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             predicted?.recycle()
         }
         return true
+    }
+
+    /** Two fingers pan and zoom; one finger pans. */
+    private fun moving(event: MotionEvent): Boolean {
+        if (!gestureActive) return true
+        scaleDetector.onTouchEvent(event)
+        val action = event.actionMasked
+        val skip = if (action == MotionEvent.ACTION_POINTER_UP) event.actionIndex else -1
+        var cx = 0f
+        var cy = 0f
+        var n = 0
+        for (i in 0 until event.pointerCount) {
+            if (i == skip) continue
+            cx += event.getX(i); cy += event.getY(i); n++
+        }
+        if (n > 0) { cx /= n; cy /= n }
+        if (action == MotionEvent.ACTION_MOVE) {
+            geometry.panBy((cx - lastX).toDouble(), (cy - lastY).toDouble())
+            pageLayer.invalidate()
+        }
+        lastX = cx
+        lastY = cy
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) gestureActive = false
+        return true
+    }
+
+    private companion object {
+        const val LINED_TOP = 1600 // 16 mm
+        const val LINED_STEP = 800 // 8 mm
+        const val GRID_STEP = 500 // 5 mm
     }
 }

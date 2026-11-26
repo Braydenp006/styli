@@ -1,0 +1,118 @@
+package app.styli.ink
+
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
+
+/** Page sizes in the format's unit, 0.01 mm. */
+object PageSizes {
+    fun of(letter: Boolean, landscape: Boolean): Pair<Int, Int> {
+        val (w, h) = if (letter) 21590 to 27940 else 21000 to 29700
+        return if (landscape) h to w else w to h
+    }
+}
+
+/**
+ * Where the page is on the screen. Everything on the page is in units of 0.01 mm; the screen shows
+ * `screen = page * scale + (tx, ty)`. No Android types, so it can be unit tested.
+ *
+ * A fixed page keeps its sheet on the screen (it can be panned only as far as its edges); an infinite
+ * canvas has no edges, only a limit so coordinates stay far inside the format's 32-bit range.
+ */
+class PageGeometry(
+    val pageW: Int,
+    val pageH: Int,
+    val infinite: Boolean,
+    /** Screen pixels per unit when the page is shown at its real size. */
+    private val oneToOne: Double,
+) {
+    var scale = oneToOne
+        private set
+    var tx = 0.0
+        private set
+    var ty = 0.0
+        private set
+    private var viewW = 0
+    private var viewH = 0
+
+    private val minScale: Double
+        get() = if (infinite) oneToOne * 0.1 else min(wholePageScale(), widthScale()) * 0.8
+    private val maxScale: Double
+        get() = max(oneToOne * 8, minScale)
+
+    private fun widthScale() = (viewW - 2 * MARGIN) / pageW
+    private fun wholePageScale() = min(widthScale(), (viewH - 2 * MARGIN) / pageH)
+
+    /** Start position for a view of this size: a fixed page fits the width, a canvas starts at real size. */
+    fun fit(viewW: Int, viewH: Int) {
+        this.viewW = viewW
+        this.viewH = viewH
+        if (viewW <= 0 || viewH <= 0) return
+        if (infinite) {
+            scale = oneToOne
+            tx = MARGIN * 2
+            ty = MARGIN * 2
+        } else {
+            scale = widthScale()
+            tx = MARGIN
+            ty = MARGIN
+        }
+        clamp()
+    }
+
+    fun zoomBy(factor: Double, focusX: Double, focusY: Double) {
+        val next = (scale * factor).coerceIn(minScale, maxScale)
+        val f = next / scale
+        tx = focusX - (focusX - tx) * f
+        ty = focusY - (focusY - ty) * f
+        scale = next
+        clamp()
+    }
+
+    fun panBy(dx: Double, dy: Double) {
+        tx += dx
+        ty += dy
+        clamp()
+    }
+
+    private fun clamp() {
+        scale = scale.coerceIn(minScale, max(maxScale, minScale))
+        if (infinite) {
+            // The view's top left corner may not go further than this from the origin.
+            tx = tx.coerceIn(-LIMIT * scale, LIMIT * scale)
+            ty = ty.coerceIn(-LIMIT * scale, LIMIT * scale)
+        } else {
+            tx = clampAxis(tx, pageW * scale, viewW)
+            ty = clampAxis(ty, pageH * scale, viewH)
+        }
+    }
+
+    private fun clampAxis(t: Double, size: Double, view: Int): Double =
+        if (size + 2 * MARGIN <= view) (view - size) / 2 else t.coerceIn(view - size - MARGIN, MARGIN)
+
+    fun toPageX(sx: Double) = (sx - tx) / scale
+    fun toPageY(sy: Double) = (sy - ty) / scale
+    fun toScreenX(px: Double) = px * scale + tx
+    fun toScreenY(py: Double) = py * scale + ty
+
+    /** What the view shows, in page units: left, top, right, bottom. */
+    fun visible(): DoubleArray = doubleArrayOf(toPageX(0.0), toPageY(0.0), toPageX(viewW.toDouble()), toPageY(viewH.toDouble()))
+
+    companion object {
+        const val MARGIN = 24.0
+        const val LIMIT = 100_000_000.0 // 1 km
+        const val MIN_GAP_PX = 6.0
+
+        /**
+         * The template lines between [from] and [to] (page units): `offset + k * step`. Nothing when
+         * they would sit closer than a few pixels, which would only be a grey smear.
+         */
+        fun lines(from: Double, to: Double, step: Int, offset: Int, scale: Double): List<Int> {
+            if (step * scale < MIN_GAP_PX || to < from) return emptyList()
+            val first = ceil((from - offset) / step).toLong()
+            val last = floor((to - offset) / step).toLong()
+            return (first..last).map { (offset + it * step).toInt() }
+        }
+    }
+}

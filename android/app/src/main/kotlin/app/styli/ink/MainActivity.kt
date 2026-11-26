@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import app.styli.ink.proto.PageSet
+import app.styli.ink.proto.Template
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,6 +34,15 @@ class MainActivity : ComponentActivity() {
 private fun InkScreen() {
     var latency by remember { mutableStateOf("Draw to measure latency") }
     var canvas by remember { mutableStateOf<InkCanvasView?>(null) }
+    var infinite by remember { mutableStateOf(false) }
+    var template by remember { mutableStateOf(Template.TEMPLATE_LINED) }
+    var letter by remember { mutableStateOf(false) }
+    var landscape by remember { mutableStateOf(false) }
+
+    fun apply() {
+        val (w, h) = PageSizes.of(letter, landscape)
+        canvas?.setPage(PageSet.newBuilder().setWidth(w).setHeight(h).setTemplate(template).setInfinite(infinite).build())
+    }
 
     Box(Modifier.fillMaxSize()) {
         AndroidView(
@@ -40,6 +51,7 @@ private fun InkScreen() {
                 InkCanvasView(context).also {
                     it.onLatency = { text -> latency = text }
                     canvas = it
+                    apply()
                 }
             },
         )
@@ -48,6 +60,24 @@ private fun InkScreen() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(onClick = { canvas?.undo() }) { Text("Undo") }
+            Button(onClick = { infinite = !infinite; apply() }, Modifier.padding(start = 8.dp)) {
+                Text(if (infinite) "Canvas" else "Page")
+            }
+            Button(
+                onClick = {
+                    template = when (template) {
+                        Template.TEMPLATE_BLANK -> Template.TEMPLATE_LINED
+                        Template.TEMPLATE_LINED -> Template.TEMPLATE_GRID
+                        else -> Template.TEMPLATE_BLANK
+                    }
+                    apply()
+                },
+                Modifier.padding(start = 8.dp),
+            ) { Text(template.name.removePrefix("TEMPLATE_").lowercase()) }
+            Button(onClick = { letter = !letter; apply() }, Modifier.padding(start = 8.dp)) { Text(if (letter) "Letter" else "A4") }
+            Button(onClick = { landscape = !landscape; apply() }, Modifier.padding(start = 8.dp)) {
+                Text(if (landscape) "Landscape" else "Portrait")
+            }
             Text(latency, Modifier.padding(start = 16.dp))
         }
     }
