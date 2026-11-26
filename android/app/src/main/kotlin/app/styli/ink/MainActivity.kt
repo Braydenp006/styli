@@ -217,6 +217,8 @@ private fun InkScreen() {
 
             Menu("Ink") { close ->
                 Heading("Colour")
+                Item("Pen colour…") { picking = 8; close() } // any colour, with the eyedropper
+                Item("Highlighter colour…") { picking = 9; close() }
                 for (k in 0..2) Choice("Colour ${k + 1}", shade == k) {
                     shade = k
                     canvas?.apply {
@@ -403,31 +405,38 @@ private fun InkScreen() {
         }
         if (picking != 0) {
             val text = picking == 1 || picking == 3 || picking == 5 // the palette that starts with the default ink colour, not "none"
-            val palette = when (picking) { 1, 3, 5 -> TEXT_COLOURS; 2 -> HIGHLIGHTS; else -> FILLS }
+            val palette = when (picking) { 1, 3, 5 -> TEXT_COLOURS; 2 -> HIGHLIGHTS; 8 -> TEXT_COLOURS.drop(1); 9 -> HIGHLIGHTS.drop(1); else -> FILLS }
+            // Gives the colour [argb] to whatever the picker was opened for (the same for a swatch and for the eyedropper).
+            fun applyColour(code: Int, argb: Int) {
+                when (code) {
+                    1 -> { textColor = argb; canvas?.setTextStyle(textColor, textHighlight) }
+                    2 -> { textHighlight = argb; canvas?.setTextStyle(textColor, textHighlight) }
+                    3 -> { tColor = argb; canvas?.setTableStyle(argb, null, null) }
+                    5 -> { sColor = argb; canvas?.setShapeStyle(argb, null, null, null) }
+                    6 -> { sFill = argb; canvas?.setShapeStyle(null, argb, null, null) }
+                    7 -> { bColor = argb; canvas?.bucketColor = argb }
+                    8 -> { shade = -1; canvas?.penColor = argb }
+                    9 -> { shade = -1; canvas?.highlighterColor = (argb and 0xFFFFFF) or 0x99000000.toInt() } // see-through, so the writing shows
+                    else -> { tFill = argb; canvas?.setTableStyle(null, argb, null) }
+                }
+            }
             AlertDialog(
                 onDismissRequest = { picking = 0 },
                 confirmButton = { TextButton(onClick = { picking = 0 }) { Text("Close") } },
-                title = { Text(when (picking) { 1 -> "Text colour"; 2 -> "Highlight"; 3 -> "Table lines colour"; 5 -> "Shape outline"; 6 -> "Shape fill"; 7 -> "Fill colour"; else -> "Table fill" }) },
+                dismissButton = { TextButton(onClick = { val code = picking; picking = 0; canvas?.startEyedropper { applyColour(code, it) } }) { Text("Eyedropper") } },
+                title = { Text(when (picking) { 1 -> "Text colour"; 2 -> "Highlight"; 3 -> "Table lines colour"; 5 -> "Shape outline"; 6 -> "Shape fill"; 7 -> "Fill colour"; 8 -> "Pen colour"; 9 -> "Highlighter colour"; else -> "Table fill" }) },
                 text = {
                     Column {
                         palette.chunked(5).forEach { row ->
                             Row(Modifier.padding(bottom = 8.dp)) {
                                 row.forEach { argb ->
-                                    val chosen = argb == when (picking) { 1 -> textColor; 2 -> textHighlight; 3 -> tColor; 5 -> sColor; 6 -> sFill; 7 -> bColor; else -> tFill }
+                                    val chosen = argb == when (picking) { 1 -> textColor; 2 -> textHighlight; 3 -> tColor; 5 -> sColor; 6 -> sFill; 7 -> bColor; 8 -> canvas?.penColor; 9 -> canvas?.highlighterColor; else -> tFill }
                                     Box(
                                         Modifier.padding(end = 8.dp).size(44.dp).clip(CircleShape)
                                             .background(if (argb ushr 24 == 0) Color.White else Color(argb))
                                             .border(if (chosen) 3.dp else 1.dp, if (chosen) Color.Black else Color.Gray, CircleShape)
                                             .clickable {
-                                                when (picking) {
-                                                    1 -> { textColor = argb; canvas?.setTextStyle(textColor, textHighlight) }
-                                                    2 -> { textHighlight = argb; canvas?.setTextStyle(textColor, textHighlight) }
-                                                    3 -> { tColor = argb; canvas?.setTableStyle(argb, null, null) }
-                                                    5 -> { sColor = argb; canvas?.setShapeStyle(argb, null, null, null) }
-                                                    6 -> { sFill = argb; canvas?.setShapeStyle(null, argb, null, null) }
-                                                    7 -> { bColor = argb; canvas?.bucketColor = argb }
-                                                    else -> { tFill = argb; canvas?.setTableStyle(null, argb, null) }
-                                                }
+                                                applyColour(picking, argb)
                                                 picking = 0
                                             },
                                         contentAlignment = Alignment.Center,

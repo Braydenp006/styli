@@ -183,6 +183,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             field = v
             selection.clear() // a selection only lives while the lasso is the tool
             cropId = null
+            dropper = null
             if (pendingClip != null) { pendingClip = null; onPlacing?.invoke(null) }
             pageLayer.invalidate()
         }
@@ -241,6 +242,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     drawPage(canvas)
                 }
                 activate(work)
+                if (sampling) { canvas.restore(); return } // the page as it is, with none of the tools' overlays
                 drawCarried(canvas)
                 drawLassoOverlay(canvas)
                 drawGuides(canvas)
@@ -258,6 +260,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawBendHint(canvas)
                 drawRuler(canvas)
                 drawLaser(canvas)
+                drawDropper(canvas)
             }
         }
 
@@ -285,6 +288,79 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         for (id in model.order) if (!(carried && id in selection)) drawObject(canvas, id, vl, vt, vr, vb) // bottom layer first
         canvas.restore()
         canvas.restore()
+    }
+
+    // ---- Eyedropper: asked for by a colour picker. Touch anywhere (a ring above the touch shows the colour as you go),
+    // lift to take it: the colour of what is drawn at that point, as it looks on the screen. ----
+
+    private var dropper: ((Int) -> Unit)? = null // who gets the colour; set while the eyedropper is on
+    private var dropX = -1f
+    private var dropY = -1f
+    private var dropColor = 0
+    private var sampling = false // true while the page is drawn just to read one pixel
+
+    /** Turns the eyedropper on: the next touch picks a colour and gives it (opaque) to [onPicked]. */
+    fun startEyedropper(onPicked: (Int) -> Unit) {
+        finishText()
+        dropper = onPicked
+        dropX = -1f
+        pageLayer.invalidate()
+    }
+
+    fun cancelEyedropper() { dropper = null; pageLayer.invalidate() }
+
+    /** The colour drawn at the screen point, with the page drawn alone (no selection frames or other overlays). */
+    private fun colourAt(sx: Float, sy: Float): Int {
+        val bmp = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        c.translate(-sx, -sy)
+        sampling = true
+        try { pageLayer.draw(c) } finally { sampling = false }
+        return (bmp.getPixel(0, 0) or 0xFF000000.toInt()).also { bmp.recycle() }
+    }
+
+    private fun eyedropper(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                dropX = event.x; dropY = event.y
+                dropColor = colourAt(dropX, dropY)
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP -> {
+                val take = dropper
+                dropper = null
+                if (take != null) take(colourAt(event.x, event.y))
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_CANCEL -> { dropper = null; pageLayer.invalidate() }
+        }
+        return true
+    }
+
+    private val dropFill = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val dropEdgeDark = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 6f; color = Color.BLACK; isAntiAlias = true }
+    private val dropEdgeLight = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = Color.WHITE; isAntiAlias = true }
+
+    private fun drawDropper(canvas: Canvas) {
+        if (dropper == null) return
+        val d = resources.displayMetrics.density
+        if (dropX >= 0f) {
+            val r = 36 * d
+            val cx = dropX.coerceIn(r, width - r)
+            val cy = (dropY - 72 * d).coerceAtLeast(r) // above the finger, so it does not hide the colour
+            dropFill.color = dropColor
+            canvas.drawCircle(cx, cy, r, dropFill)
+            canvas.drawCircle(cx, cy, r, dropEdgeDark)
+            canvas.drawCircle(cx, cy, r, dropEdgeLight)
+            canvas.drawCircle(dropX, dropY, 10f, dropEdgeDark)
+            canvas.drawCircle(dropX, dropY, 10f, dropEdgeLight)
+        }
+        val text = "Touch a colour, then lift to pick it"
+        val w = hintText.measureText(text) + 56f
+        @Suppress("DEPRECATION") val bottom = rootWindowInsets?.systemWindowInsetBottom ?: 0
+        val cy = height - bottom - 64f
+        canvas.drawRoundRect(width / 2f - w / 2, cy - 40f, width / 2f + w / 2, cy + 40f, 40f, 40f, hintBg)
+        canvas.drawText(text, width / 2f, cy + 14f, hintText)
     }
 
     // ---- Cropping: with one picture selected, Crop shows the whole file faintly round the part that shows, with a
@@ -791,6 +867,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
+        if (dropper != null) return eyedropper(event)
         if (action == MotionEvent.ACTION_DOWN) stopGlide() // a touch catches the page
         if (rulerGrab(event)) return true
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
