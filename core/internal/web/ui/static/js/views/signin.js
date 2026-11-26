@@ -17,16 +17,68 @@ function frame(root, ...children) {
       ...children)));
 }
 
+// accountField names the password for password managers (iCloud Keychain and
+// others save a password against a user name). Hidden: there is only one.
+export const accountField = () =>
+  h("input", { type: "text", name: "username", autocomplete: "username", value: "Styli atrium", hidden: true, tabindex: "-1" });
+
 const howToSignIn = () => [
   h("p", {}, "To sign in, use a browser that is signed in: open Settings, then Browsers, and choose Add a browser. Scan the code with this device, or open the link here."),
   h("p", { class: "hint" }, "On the atrium's own computer, a link is printed when the atrium starts and no browser is signed in. If every signed-in browser is lost, start the atrium with ", h("code", {}, "--new-browser-link"), "."),
 ];
 
-// showSignedOut is for a browser without a session.
-export function showSignedOut(root) {
+// showSignedOut is for a browser without a session. A browser that is still
+// trusted (it signed out, or went 30 days unused) can sign back in with the
+// atrium's password, if it has one; any other needs a link.
+export async function showSignedOut(root) {
+  let password = false;
+  try {
+    password = (await api.get("/api/signin")).password;
+  } catch {
+    // Can't tell: show the link instructions, which always work.
+  }
+  if (!password) {
+    frame(root, h("h1", { class: "signin-title" }, "This browser isn't signed in"), ...howToSignIn());
+    return;
+  }
+  const pwId = "signin-password";
+  const errorId = "signin-error";
+  const input = h("input", { class: "sty-input", id: pwId, type: "password", autocomplete: "current-password",
+    required: true, "aria-describedby": `${pwId}-help ${errorId}` });
+  const error = h("p", { class: "field-error", id: errorId, role: "alert", hidden: true });
+  const submit = h("button", { class: "sty-btn sty-btn--primary", type: "submit" }, "Sign in");
+  const form = h("form", { class: "signin-form", novalidate: true, onsubmit: async (e) => {
+    e.preventDefault();
+    error.hidden = true;
+    input.removeAttribute("aria-invalid");
+    submit.disabled = true;
+    try {
+      await api.post("/api/signin", { password: input.value });
+      location.reload();
+    } catch (err) {
+      submit.disabled = false;
+      error.textContent = err instanceof ApiError ? err.message : "Something went wrong.";
+      error.hidden = false;
+      if (err.code === "wrong_password") {
+        input.setAttribute("aria-invalid", "true");
+        input.select();
+      }
+      input.focus();
+    }
+  } },
+  accountField(),
+  h("label", { class: "sty-field", for: pwId },
+    h("span", {}, "Your atrium's password"),
+    input,
+    h("span", { class: "sty-help", id: `${pwId}-help` }, "Forgotten it? Start the atrium with ", h("code", {}, "--clear-password"), ", then sign in with a link.")),
+  error,
+  h("div", { class: "banner-actions" }, submit));
   frame(root,
-    h("h1", { class: "signin-title" }, "This browser isn't signed in"),
+    h("h1", { class: "signin-title" }, "Sign in to your atrium"),
+    form,
+    h("h2", {}, "Or use a link"),
     ...howToSignIn());
+  input.focus();
 }
 
 // showJoin is what a one-time link opens. The link's secret is taken out of

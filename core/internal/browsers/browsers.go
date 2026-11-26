@@ -62,13 +62,17 @@ type Browser struct {
 	LastSeen time.Time `json:"last_seen"` // updated when the session is renewed, so to the day
 	// SessionHash is the SHA-256 of the session cookie's secret, never the
 	// secret itself. SessionExpires is when the session ends unless renewed.
+	// The same secret identifies the browser for KnownUntil (its cookie's life),
+	// so once the session ends it can sign back in with the atrium's password.
 	SessionHash    string    `json:"session_hash"`
 	SessionExpires time.Time `json:"session_expires"`
+	KnownUntil     time.Time `json:"known_until,omitzero"`
 }
 
 type file struct {
 	Version  int       `json:"version"`
 	Browsers []Browser `json:"browsers"`
+	Password string    `json:"password,omitempty"` // the atrium's password, as an Argon2id hash
 }
 
 type link struct {
@@ -84,12 +88,15 @@ type List struct {
 	bs    map[string]*Browser
 	links []link
 	now   func() time.Time
+
+	password string            // Argon2id hash, "" for none
+	tries    map[string]*tries // wrong passwords per browser ID
 }
 
 // Open reads the list from the vault. A missing file is an empty list; a
 // damaged one, or one from a newer build, is an error, never an empty list.
 func Open(vaultRoot string) (*List, error) {
-	l := &List{path: filepath.Join(vaultRoot, ".ids", "browsers.json"), bs: map[string]*Browser{}, now: time.Now}
+	l := &List{path: filepath.Join(vaultRoot, ".ids", "browsers.json"), bs: map[string]*Browser{}, now: time.Now, tries: map[string]*tries{}}
 	b, err := os.ReadFile(l.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return l, nil
@@ -110,6 +117,12 @@ func Open(vaultRoot string) (*List, error) {
 			return nil, fmt.Errorf("browsers: %s is damaged: bad entry %q", l.path, br.ID)
 		}
 		l.bs[br.ID] = &br
+	}
+	if f.Password != "" {
+		if _, err := parseHash(f.Password); err != nil {
+			return nil, fmt.Errorf("browsers: %s is damaged: %w", l.path, err)
+		}
+		l.password = f.Password
 	}
 	return l, nil
 }
@@ -172,7 +185,7 @@ func (l *List) Redeem(secret, name string) (Browser, string, error) {
 	if err != nil {
 		return Browser{}, "", err
 	}
-	br := &Browser{ID: id, Name: name, AddedAt: now.UTC(), LastSeen: now.UTC(), SessionHash: sessionHash, SessionExpires: now.Add(SessionLife).UTC()}
+	br := &Browser{ID: id, Name: name, AddedAt: now.UTC(), LastSeen: now.UTC(), SessionHash: sessionHash, SessionExpires: now.Add(SessionLife).UTC(), KnownUntil: now.Add(KnownLife).UTC()}
 	l.bs[id] = br
 	if err := l.save(); err != nil {
 		delete(l.bs, id)
@@ -202,10 +215,10 @@ func (l *List) Check(session string) (b Browser, renewed, ok bool) {
 		return Browser{}, false, false
 	}
 	if br.SessionExpires.Sub(now) <= SessionLife-RenewEvery {
-		was, seen := br.SessionExpires, br.LastSeen
-		br.SessionExpires, br.LastSeen = now.Add(SessionLife).UTC(), now.UTC()
+		was := *br
+		br.SessionExpires, br.KnownUntil, br.LastSeen = now.Add(SessionLife).UTC(), now.Add(KnownLife).UTC(), now.UTC()
 		if l.save() != nil { // keep the old times; the next request tries again
-			br.SessionExpires, br.LastSeen = was, seen
+			*br = was
 		} else {
 			renewed = true
 		}
@@ -226,6 +239,7 @@ func (l *List) Remove(id string) error {
 		l.bs[id] = br
 		return err
 	}
+	delete(l.tries, id)
 	return nil
 }
 
@@ -259,7 +273,7 @@ func (l *List) dropExpired(now time.Time) {
 }
 
 func (l *List) save() error {
-	f := file{Version: fileVersion, Browsers: make([]Browser, 0, len(l.bs))}
+	f := file{Version: fileVersion, Browsers: make([]Browser, 0, len(l.bs)), Password: l.password}
 	for _, br := range l.bs {
 		f.Browsers = append(f.Browsers, *br)
 	}

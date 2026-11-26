@@ -97,6 +97,16 @@ func signIn(t *testing.T, link string) {
 	}
 }
 
+func post(t *testing.T, url, body string) int {
+	t.Helper()
+	resp, err := client.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 func get(t *testing.T, url string) (int, map[string]any) {
 	t.Helper()
 	resp, err := client.Get(url)
@@ -182,13 +192,14 @@ func TestWholeHubEndToEnd(t *testing.T) {
 
 func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 	vaultDir, data, cfg := t.TempDir(), t.TempDir(), t.TempDir()
-	var link string // the sign-in link the last start printed, if any
+	var link string  // the sign-in link the last start printed, if any
+	var clearPw bool // the next start has --clear-password
 	start := func(newLink bool, then func(base string)) {
 		ctx, cancel := context.WithCancel(context.Background())
 		addrCh, done := make(chan string, 1), make(chan error, 1)
 		link = ""
 		go func() {
-			done <- Run(ctx, Config{Vault: vaultDir, Addr: "127.0.0.1:0", DataDir: data, ConfigDir: cfg, Logf: t.Logf, NewBrowserLink: newLink,
+			done <- Run(ctx, Config{Vault: vaultDir, Addr: "127.0.0.1:0", DataDir: data, ConfigDir: cfg, Logf: t.Logf, NewBrowserLink: newLink, ClearPassword: clearPw,
 				Ready: func(a string) { addrCh <- a }, BrowserLink: func(l string) { link = l }})
 		}()
 		select {
@@ -218,6 +229,9 @@ func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 		if resp.StatusCode != 201 || id == "" {
 			t.Fatalf("create: %d", resp.StatusCode)
 		}
+		if code := post(t, base+"/api/password", `{"new":"correct horse battery"}`); code != 200 {
+			t.Fatalf("set the password: %d", code)
+		}
 	})
 	start(false, func(base string) {
 		// The browser stays signed in across the restart, so no link is printed.
@@ -230,7 +244,28 @@ func TestSecondRunOnTheSameVaultKeepsEverything(t *testing.T) {
 		if _, m := get(t, base+"/api/notes?q=fig"); len(m["notes"].([]any)) != 1 {
 			t.Fatal("index lost across restart")
 		}
+		// The password survives the restart: sign out, then back in with it.
+		if code := post(t, base+"/api/signout", ``); code != 200 {
+			t.Fatalf("sign out: %d", code)
+		}
+		if code, _ := get(t, base+"/api/notes"); code != 401 {
+			t.Fatalf("notes after signing out: %d", code)
+		}
+		if code := post(t, base+"/api/signin", `{"password":"correct horse battery"}`); code != 200 {
+			t.Fatalf("sign in with the password: %d", code)
+		}
+		if code, _ := get(t, base+"/api/notes"); code != 200 {
+			t.Fatalf("notes after signing back in: %d", code)
+		}
 	})
+	// --clear-password removes it, for when it is forgotten.
+	clearPw = true
+	start(false, func(base string) {
+		if code, m := get(t, base+"/api/session"); code != 200 || m["password_set"] != false {
+			t.Fatalf("after --clear-password: %d %v", code, m)
+		}
+	})
+	clearPw = false
 	// --new-browser-link prints one anyway (every trusted browser was lost).
 	start(true, func(base string) {
 		if link == "" {
@@ -255,6 +290,10 @@ func TestDeviceMode(t *testing.T) {
 	err = Run(context.Background(), Config{Vault: vaultDir, Addr: "127.0.0.1:0", SyncAddr: "127.0.0.1:0", DataDir: t.TempDir(), ConfigDir: cfgDir, Logf: t.Logf})
 	if err == nil || !strings.Contains(err.Error(), "device") {
 		t.Fatalf("explicit sync port on a device: %v", err)
+	}
+	err = Run(context.Background(), Config{Vault: vaultDir, Addr: "127.0.0.1:0", ClearPassword: true, DataDir: t.TempDir(), ConfigDir: cfgDir, Logf: t.Logf})
+	if err == nil || !strings.Contains(err.Error(), "clear it there") {
+		t.Fatalf("--clear-password on a device: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

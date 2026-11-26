@@ -53,6 +53,9 @@ type Config struct {
 	// NewBrowserLink prints a one-time sign-in link at start even when some
 	// browser is already trusted (one is always printed when none is).
 	NewBrowserLink bool
+	// ClearPassword removes the atrium's web password, for when it is
+	// forgotten: having this machine is the proof.
+	ClearPassword bool
 	// BrowserLink, if set, is also given that link (tests sign in with it).
 	BrowserLink func(url string)
 	// HTTPS for the web UI, needed to listen beyond loopback. Without
@@ -190,6 +193,9 @@ func Run(parent context.Context, cfg Config) error {
 		if cfg.SyncAddr != "" && cfg.SyncAddr != DefaultSyncAddr {
 			return fmt.Errorf("this machine is a device of the atrium at %s, so it opens no sync port; leave out --sync-addr", link.Addr)
 		}
+		if cfg.ClearPassword {
+			return fmt.Errorf("this machine is a device of the atrium at %s; the web password is the atrium's, so clear it there", link.Addr)
+		}
 		cfg.SyncAddr = ""
 		key, err := devicekey.Load(cfg.ConfigDir)
 		if err != nil {
@@ -322,6 +328,12 @@ func Run(parent context.Context, cfg Config) error {
 	if engine == nil {
 		if brs, err = browsers.Open(cfg.Vault); err != nil {
 			return err
+		}
+		if cfg.ClearPassword {
+			if err := brs.ClearPassword(); err != nil {
+				return err
+			}
+			cfg.Logf("the web password was removed; set a new one in Settings, Browsers")
 		}
 	}
 

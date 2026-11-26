@@ -1,6 +1,6 @@
 // Command styli is the single Styli binary.
 //
-//	styli serve --vault DIR [--addr 127.0.0.1:7878] [--sync-addr :7879] [--no-announce] [--new-browser-link] [--tls-cert F --tls-key F] [--web-name N] [--new-ca] [--data DIR] [--config DIR]
+//	styli serve --vault DIR [--addr 127.0.0.1:7878] [--sync-addr :7879] [--no-announce] [--new-browser-link] [--clear-password] [--tls-cert F --tls-key F] [--web-name N] [--new-ca] [--data DIR] [--config DIR]
 //	styli join --vault DIR --atrium HOST[:PORT] [--name NAME] [--config DIR]
 //	styli version
 package main
@@ -54,6 +54,7 @@ func serve(args []string, stdout, stderr io.Writer) int {
 		return nil
 	})
 	fs.BoolVar(&cfg.NewCA, "new-ca", false, "atrium only: replace the atrium's certificate authority (every phone and laptop must install the new one)")
+	fs.BoolVar(&cfg.ClearPassword, "clear-password", false, "atrium only: remove the web password, for when it is forgotten")
 	fs.BoolVar(&cfg.NewBrowserLink, "new-browser-link", false, "atrium only: print a one-time link to sign a browser in, even if one is already trusted (for when every trusted browser is lost)")
 	fs.BoolVar(&cfg.NoAnnounce, "no-announce", false, "atrium only: do not announce this atrium on the local network (devices then need its address)")
 	fs.StringVar(&cfg.SyncAddr, "sync-addr", app.DefaultSyncAddr, "atrium only: where paired devices sync (mutual TLS); empty turns sync off")

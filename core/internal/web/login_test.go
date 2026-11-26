@@ -51,7 +51,9 @@ func TestTheAPINeedsASignedInBrowser(t *testing.T) {
 		{"GET", "/api/session"},
 		{"GET", "/api/browsers"},
 		{"POST", "/api/browsers/links"},
-		{"GET", "/api/join"},          // only POST is open
+		{"GET", "/api/join"}, // only POST is open
+		{"POST", "/api/signout"},
+		{"POST", "/api/password"},
 		{"GET", "/api/no-such-thing"}, // the whole of /api/, not a list of routes
 	} {
 		for name, session := range map[string]string{"no cookie": noCookie, "a forged cookie": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"} {
@@ -90,7 +92,7 @@ func TestABrowserJoinsWithALinkOnce(t *testing.T) {
 	if resp.StatusCode != 201 || c == nil || c.Value == "" {
 		t.Fatalf("join: %d %v %v", resp.StatusCode, m, c)
 	}
-	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.MaxAge != int(browsers.SessionLife.Seconds()) {
+	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.MaxAge != int(browsers.KnownLife.Seconds()) {
 		t.Fatalf("cookie flags: %+v", c)
 	}
 	if resp, m := e.as(t, c.Value, "GET", "/api/session", nil); resp.StatusCode != 200 || m["browser"].(map[string]any)["name"] != "iPhone Safari" {
@@ -187,7 +189,7 @@ func TestASessionInUseIsRenewed(t *testing.T) {
 	t.Cleanup(func() { browsers.RenewEvery = old })
 	e := newEnv(t)
 	resp, _ := e.as(t, e.cookie, "GET", "/api/notes", nil)
-	if c := sessionFrom(t, resp); resp.StatusCode != 200 || c == nil || c.Value != e.cookie || c.MaxAge != int(browsers.SessionLife.Seconds()) {
+	if c := sessionFrom(t, resp); resp.StatusCode != 200 || c == nil || c.Value != e.cookie || c.MaxAge != int(browsers.KnownLife.Seconds()) {
 		t.Fatalf("renewed cookie: %d %+v", resp.StatusCode, c)
 	}
 }
@@ -199,7 +201,8 @@ func TestADeviceNeedsNoSignIn(t *testing.T) {
 	if resp, _ := e.as(t, noCookie, "GET", "/api/notes", nil); resp.StatusCode != 200 {
 		t.Fatalf("notes on a device: %d", resp.StatusCode)
 	}
-	for _, c := range []struct{ method, path string }{{"GET", "/api/session"}, {"POST", "/api/join"}, {"GET", "/api/browsers"}, {"POST", "/api/browsers/links"}} {
+	for _, c := range []struct{ method, path string }{{"GET", "/api/session"}, {"POST", "/api/join"}, {"GET", "/api/browsers"}, {"POST", "/api/browsers/links"},
+		{"GET", "/api/signin"}, {"POST", "/api/signin"}, {"POST", "/api/signout"}, {"POST", "/api/password"}} {
 		if resp, m := e.as(t, noCookie, c.method, c.path, map[string]string{}); resp.StatusCode != 404 || m["code"] != "not_atrium" {
 			t.Errorf("%s %s on a device: %d %v", c.method, c.path, resp.StatusCode, m)
 		}

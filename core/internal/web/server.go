@@ -135,6 +135,10 @@ func (s *server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/session", s.getSession)
 	mux.HandleFunc("POST /api/join", s.join)
+	mux.HandleFunc("GET /api/signin", s.signinOptions)
+	mux.HandleFunc("POST /api/signin", s.signin)
+	mux.HandleFunc("POST /api/signout", s.signout)
+	mux.HandleFunc("POST /api/password", s.setPassword)
 	mux.HandleFunc("GET /api/browsers", s.listBrowsers)
 	mux.HandleFunc("POST /api/browsers/links", s.newBrowserLink)
 	mux.HandleFunc("POST /api/browsers/{id}/remove", s.removeBrowser)

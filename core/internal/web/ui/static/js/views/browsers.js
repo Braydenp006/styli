@@ -3,25 +3,31 @@
 // link itself). Only the atrium has it; on a device the card removes itself.
 import { api, ApiError } from "../api.js";
 import { h, setChildren } from "../dom.js";
-import { openDialog } from "../dialogs.js";
+import { openDialog, UserError } from "../dialogs.js";
 import { relativeTime } from "../time.js";
 import { showToast } from "../toast.js";
+import { accountField } from "./signin.js";
 
 const loopback = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
 export function browsersCard() {
   const list = h("div", { class: "device-list" });
   const body = h("div", { "aria-live": "polite" });
+  const pw = h("div");
+  let passwordSet = false;
   const card = h("section", { class: "dash-card settings-card", "aria-labelledby": "browsers-title", hidden: true },
     h("h2", { id: "browsers-title" }, "Browsers"),
     h("p", { class: "hint" }, "Browsers that can open this atrium, such as Safari on your iPhone. Add one with a link that works once."),
-    list, body);
+    list, body, pw);
   load();
   return card;
 
   async function load() {
     try {
-      draw((await api.get("/api/browsers")).browsers);
+      const [{ browsers }, session] = await Promise.all([api.get("/api/browsers"), api.get("/api/session")]);
+      passwordSet = session.password_set;
+      draw(browsers);
+      drawPassword();
       card.hidden = false;
     } catch (err) {
       if (err.code === "not_atrium") return card.remove();
@@ -32,13 +38,60 @@ export function browsersCard() {
   }
 
   function draw(browsers) {
-    setChildren(list, h("ul", { class: "device-rows", "aria-label": "Signed-in browsers" }, browsers.map((b) =>
+    setChildren(list, h("ul", { class: "device-rows", "aria-label": "Trusted browsers" }, browsers.map((b) =>
       h("li", { class: "device-row" },
         h("div", { class: "grow" },
           h("strong", {}, b.name), b.this ? [" ", h("span", { class: "sty-chip" }, "This browser")] : null,
           h("div", { class: "hint" }, `Added ${relativeTime(b.added_at)}. Last used ${relativeTime(b.last_seen)}.`)),
-        b.this ? button("Sign out", "secondary", () => signOut(b)) : button("Remove", "danger", () => remove(b))))));
+        b.this ? button("Sign out", "secondary", signOut) : button("Remove", "danger", () => remove(b))))));
     setChildren(body, h("div", { class: "banner-actions" }, button("Add a browser", "secondary", addBrowser)));
+  }
+
+  function drawPassword() {
+    setChildren(pw,
+      h("h3", {}, "Password"),
+      h("p", { class: "hint" }, passwordSet
+        ? "A browser in this list can sign back in with the password after it signs out or goes 30 days unused. A password never adds a new browser: that still takes a link."
+        : "Set a password so a browser in this list can sign back in after it signs out or goes 30 days unused, without a new link. A password never adds a new browser: that still takes a link."),
+      h("div", { class: "banner-actions" }, passwordSet
+        ? [button("Change password", "secondary", () => setPassword(true)), button("Remove password", "ghost", removePassword)]
+        : button("Set a password", "secondary", () => setPassword(false))));
+  }
+
+  function setPassword(change) {
+    const fields = [
+      accountField(),
+      change ? passwordField("Current password", "current", "current-password") : null,
+      passwordField(change ? "New password" : "Password", "new", "new-password", "At least 8 characters."),
+      passwordField("Type it again", "again", "new-password"),
+    ].filter(Boolean);
+    return openDialog({
+      title: change ? "Change the atrium's password" : "Set a password",
+      description: change ? "Every browser in the list uses the new password from now on. None is signed out." : "One password for this atrium, for every browser in the list.",
+      fields, submitLabel: change ? "Change password" : "Set password",
+      onSubmit: async (data) => {
+        if (data.get("new") !== data.get("again")) throw new UserError("The two passwords don't match.");
+        await api.post("/api/password", { current: data.get("current") || "", new: data.get("new") });
+        passwordSet = true;
+        drawPassword();
+        showToast(change ? "Password changed." : "Password set.");
+      },
+    });
+  }
+
+  function removePassword() {
+    return openDialog({
+      title: "Remove the password?",
+      description: "A browser that signs out, or goes 30 days unused, will then need a new link to sign back in.",
+      fields: [accountField(), passwordField("Current password", "current", "current-password")],
+      submitLabel: "Remove password", danger: true,
+      onSubmit: async (data) => {
+        await api.post("/api/password", { current: data.get("current"), new: "" });
+        passwordSet = false;
+        drawPassword();
+        showToast("Password removed.");
+      },
+    });
   }
 
   async function addBrowser() {
@@ -109,17 +162,29 @@ export function browsersCard() {
     });
   }
 
-  function signOut(b) {
+  function signOut() {
     return openDialog({
       title: "Sign out this browser?",
-      description: "To sign in again you'll need a new link from another signed-in browser. If this is the only one, start the atrium with --new-browser-link.",
-      submitLabel: "Sign out", danger: true,
+      description: passwordSet
+        ? "You can sign back in here with the atrium's password."
+        : "To sign in again you'll need a new link from another signed-in browser. If this is the only one, start the atrium with --new-browser-link.",
+      submitLabel: "Sign out", danger: !passwordSet,
       onSubmit: async () => {
-        await api.post(`/api/browsers/${encodeURIComponent(b.id)}/remove`);
+        await api.post("/api/signout");
         location.reload(); // shows the signed-out screen
       },
     });
   }
+}
+
+let nextField = 0;
+
+function passwordField(label, name, autocomplete, help) {
+  const id = `browsers-pw-${++nextField}`;
+  return h("label", { class: "sty-field", for: id },
+    label,
+    h("input", { class: "sty-input", id, name, type: "password", autocomplete, required: true }),
+    help ? h("span", { class: "sty-help" }, help) : null);
 }
 
 function button(label, kind, onclick) {
