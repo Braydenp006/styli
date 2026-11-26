@@ -369,6 +369,16 @@ const (
 	ChartKind_CHART_TREEMAP ChartKind = 18
 	// Categories are the tasks; the first series are the starts, the second the ends and the third (optional) the percent done.
 	ChartKind_CHART_GANTT ChartKind = 19
+	// Each row is a flow: the category is where it starts, `groups` where it ends, the first series how much.
+	ChartKind_CHART_SANKEY ChartKind = 20
+	// Each row's category is a path ("Food/Fruit/Apple"), the first series the size of that leaf; rings by depth.
+	ChartKind_CHART_SUNBURST ChartKind = 21
+	// Events along a line: the category is the name, the first series when (and the second, if any, when it ends).
+	ChartKind_CHART_TIMELINE ChartKind = 22
+	// One day per row: the category is a date ("2026-12-01"), the first series the value, drawn as a calendar of squares.
+	ChartKind_CHART_CALENDAR ChartKind = 23
+	// Curves y = f(x): each series' `expr` is a formula in x, drawn over the x range (and the y range, if given).
+	ChartKind_CHART_FUNCTION ChartKind = 24
 )
 
 // Enum value maps for ChartKind.
@@ -394,6 +404,11 @@ var (
 		17: "CHART_HEATMAP",
 		18: "CHART_TREEMAP",
 		19: "CHART_GANTT",
+		20: "CHART_SANKEY",
+		21: "CHART_SUNBURST",
+		22: "CHART_TIMELINE",
+		23: "CHART_CALENDAR",
+		24: "CHART_FUNCTION",
 	}
 	ChartKind_value = map[string]int32{
 		"CHART_BAR":         0,
@@ -416,6 +431,11 @@ var (
 		"CHART_HEATMAP":     17,
 		"CHART_TREEMAP":     18,
 		"CHART_GANTT":       19,
+		"CHART_SANKEY":      20,
+		"CHART_SUNBURST":    21,
+		"CHART_TIMELINE":    22,
+		"CHART_CALENDAR":    23,
+		"CHART_FUNCTION":    24,
 	}
 )
 
@@ -2520,8 +2540,12 @@ type ChartSeries struct {
 	Trendline bool `protobuf:"varint,7,opt,name=trendline,proto3" json:"trendline,omitempty"`
 	// Scatter and bubble charts: where each point is along the bottom (`values` is
 	// how high), and for a bubble its size, all in thousandths. Same length as `values`.
-	Xs            []int64 `protobuf:"zigzag64,8,rep,packed,name=xs,proto3" json:"xs,omitempty"`
-	Sizes         []int64 `protobuf:"zigzag64,9,rep,packed,name=sizes,proto3" json:"sizes,omitempty"`
+	Xs    []int64 `protobuf:"zigzag64,8,rep,packed,name=xs,proto3" json:"xs,omitempty"`
+	Sizes []int64 `protobuf:"zigzag64,9,rep,packed,name=sizes,proto3" json:"sizes,omitempty"`
+	// Error bars: how far each value could be out either way, in thousandths (same length as `values`; zero draws none).
+	Errors []int64 `protobuf:"zigzag64,10,rep,packed,name=errors,proto3" json:"errors,omitempty"`
+	// Function charts: the formula, such as "sin(x) / x" or "2x^2 - 3".
+	Expr          string `protobuf:"bytes,11,opt,name=expr,proto3" json:"expr,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2619,6 +2643,20 @@ func (x *ChartSeries) GetSizes() []int64 {
 	return nil
 }
 
+func (x *ChartSeries) GetErrors() []int64 {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
+func (x *ChartSeries) GetExpr() string {
+	if x != nil {
+		return x.Expr
+	}
+	return ""
+}
+
 // A chart on the page, drawn from its data. The whole state of it, written like
 // a shape (the last event wins). The data is always here, so a reader that does
 // not know where it came from can still draw it; with a source table the app
@@ -2693,8 +2731,13 @@ type ChartSet struct {
 	// Gantt: a vertical line at this value (thousandths; zero for none), such as today.
 	Marker int64 `protobuf:"zigzag64,41,opt,name=marker,proto3" json:"marker,omitempty"`
 	// Heatmap: the colours for the lowest and highest values (0xAARRGGBB; zero alpha means the defaults, pale blue and blue).
-	HeatLow       uint32 `protobuf:"varint,42,opt,name=heat_low,json=heatLow,proto3" json:"heat_low,omitempty"`
-	HeatHigh      uint32 `protobuf:"varint,43,opt,name=heat_high,json=heatHigh,proto3" json:"heat_high,omitempty"`
+	HeatLow  uint32 `protobuf:"varint,42,opt,name=heat_low,json=heatLow,proto3" json:"heat_low,omitempty"`
+	HeatHigh uint32 `protobuf:"varint,43,opt,name=heat_high,json=heatHigh,proto3" json:"heat_high,omitempty"`
+	// Function charts: the range drawn, in thousandths. A range whose max is not above its min means -10 to 10 for x and, for y, fitting the curves.
+	XMin          int64 `protobuf:"zigzag64,44,opt,name=x_min,json=xMin,proto3" json:"x_min,omitempty"`
+	XMax          int64 `protobuf:"zigzag64,45,opt,name=x_max,json=xMax,proto3" json:"x_max,omitempty"`
+	YMin          int64 `protobuf:"zigzag64,46,opt,name=y_min,json=yMin,proto3" json:"y_min,omitempty"`
+	YMax          int64 `protobuf:"zigzag64,47,opt,name=y_max,json=yMax,proto3" json:"y_max,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3030,6 +3073,34 @@ func (x *ChartSet) GetHeatHigh() uint32 {
 	return 0
 }
 
+func (x *ChartSet) GetXMin() int64 {
+	if x != nil {
+		return x.XMin
+	}
+	return 0
+}
+
+func (x *ChartSet) GetXMax() int64 {
+	if x != nil {
+		return x.XMax
+	}
+	return 0
+}
+
+func (x *ChartSet) GetYMin() int64 {
+	if x != nil {
+		return x.YMin
+	}
+	return 0
+}
+
+func (x *ChartSet) GetYMax() int64 {
+	if x != nil {
+		return x.YMax
+	}
+	return 0
+}
+
 type ChartRemoved struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -3225,7 +3296,7 @@ const file_ink_proto_rawDesc = "" +
 	"\tsrc_width\x18\f \x01(\rR\bsrcWidth\x12\x1d\n" +
 	"\n" +
 	"src_height\x18\r \x01(\rR\tsrcHeight\"\x0e\n" +
-	"\fImageRemoved\"\x88\x02\n" +
+	"\fImageRemoved\"\xb8\x02\n" +
 	"\vChartSeries\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05color\x18\x02 \x01(\rR\x05color\x12\x1a\n" +
@@ -3235,7 +3306,11 @@ const file_ink_proto_rawDesc = "" +
 	"\tsecondary\x18\x06 \x01(\bR\tsecondary\x12\x1c\n" +
 	"\ttrendline\x18\a \x01(\bR\ttrendline\x12\x12\n" +
 	"\x02xs\x18\b \x03(\x12B\x02\x10\x01R\x02xs\x12\x18\n" +
-	"\x05sizes\x18\t \x03(\x12B\x02\x10\x01R\x05sizes\"\xd2\t\n" +
+	"\x05sizes\x18\t \x03(\x12B\x02\x10\x01R\x05sizes\x12\x1a\n" +
+	"\x06errors\x18\n" +
+	" \x03(\x12B\x02\x10\x01R\x06errors\x12\x12\n" +
+	"\x04expr\x18\v \x01(\tR\x04expr\"\xa6\n" +
+	"\n" +
 	"\bChartSet\x12+\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x17.styli.ink.v1.ChartKindR\x04kind\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x11R\x01x\x12\f\n" +
@@ -3287,7 +3362,11 @@ const file_ink_proto_rawDesc = "" +
 	"\tshow_mean\x18( \x01(\bR\bshowMean\x12\x16\n" +
 	"\x06marker\x18) \x01(\x12R\x06marker\x12\x19\n" +
 	"\bheat_low\x18* \x01(\rR\aheatLow\x12\x1b\n" +
-	"\theat_high\x18+ \x01(\rR\bheatHigh\"\x0e\n" +
+	"\theat_high\x18+ \x01(\rR\bheatHigh\x12\x13\n" +
+	"\x05x_min\x18, \x01(\x12R\x04xMin\x12\x13\n" +
+	"\x05x_max\x18- \x01(\x12R\x04xMax\x12\x13\n" +
+	"\x05y_min\x18. \x01(\x12R\x04yMin\x12\x13\n" +
+	"\x05y_max\x18/ \x01(\x12R\x04yMax\"\x0e\n" +
 	"\fChartRemoved*;\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
@@ -3316,7 +3395,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x0eConnectorRoute\x12\x12\n" +
 	"\x0eROUTE_STRAIGHT\x10\x00\x12\x0f\n" +
 	"\vROUTE_ELBOW\x10\x01\x12\x0f\n" +
-	"\vROUTE_CURVE\x10\x02*\xf5\x02\n" +
+	"\vROUTE_CURVE\x10\x02*\xd7\x03\n" +
 	"\tChartKind\x12\r\n" +
 	"\tCHART_BAR\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -3340,7 +3419,12 @@ const file_ink_proto_rawDesc = "" +
 	"\rCHART_BOXPLOT\x10\x10\x12\x11\n" +
 	"\rCHART_HEATMAP\x10\x11\x12\x11\n" +
 	"\rCHART_TREEMAP\x10\x12\x12\x0f\n" +
-	"\vCHART_GANTT\x10\x13*B\n" +
+	"\vCHART_GANTT\x10\x13\x12\x10\n" +
+	"\fCHART_SANKEY\x10\x14\x12\x12\n" +
+	"\x0eCHART_SUNBURST\x10\x15\x12\x12\n" +
+	"\x0eCHART_TIMELINE\x10\x16\x12\x12\n" +
+	"\x0eCHART_CALENDAR\x10\x17\x12\x12\n" +
+	"\x0eCHART_FUNCTION\x10\x18*B\n" +
 	"\n" +
 	"ChartCurve\x12\x12\n" +
 	"\x0eCURVE_STRAIGHT\x10\x00\x12\x10\n" +

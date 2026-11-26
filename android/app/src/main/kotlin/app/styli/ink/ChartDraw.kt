@@ -52,6 +52,11 @@ object ChartDraw {
             ChartKind.HEATMAP -> heatmap(canvas, c, p, ink)
             ChartKind.TREEMAP -> treemap(canvas, c, p)
             ChartKind.GANTT -> gantt(canvas, c, p, ink, px)
+            ChartKind.SANKEY -> sankey(canvas, c, p, ink)
+            ChartKind.SUNBURST -> sunburst(canvas, c, p, ink)
+            ChartKind.TIMELINE -> timeline(canvas, c, p, ink, px)
+            ChartKind.CALENDAR -> calendar(canvas, c, p, ink)
+            ChartKind.FUNCTION -> function(canvas, c, p, ink, px)
             else -> axesChart(canvas, c, lay, ink, px)
         }
         lay.legend?.let { legend(canvas, c, it, ink) }
@@ -106,6 +111,7 @@ object ChartDraw {
                 areas(canvas, c, p, scale, scale2, d)
                 bars(canvas, c, p, scale, scale2, d, ink, side)
                 lines(canvas, c, p, scale, scale2, d, ink)
+                errorBars(canvas, c0, p, scale, scale2, ink, px)
             }
         }
         line.strokeWidth = px * 1.5f; line.color = ink
@@ -325,21 +331,53 @@ object ChartDraw {
                 line.pathEffect = null
                 if (c.showValues) ChartMaths.trendXY(s)?.let { (_, _, r2) -> label(canvas, "R\u00B2 " + ChartMaths.format(Math.round(r2 * 100) / 100.0), e.second.first, e.second.second - f * 0.5, f * 0.8f, Paint.Align.RIGHT, s.color) }
             }
+            line.strokeWidth = maxOf(px * 1.5f, f * 0.08f); line.color = ink
+            for (d in all[j]) { // error bars sit behind the points
+                d ?: continue
+                val e = s.errAt(d.index) ?: continue
+                val v = s.at(d.index) ?: continue
+                val yt = ChartMaths.yOf(p, sy, v + e).toFloat(); val yb = ChartMaths.yOf(p, sy, v - e).toFloat()
+                canvas.drawLine(d.x.toFloat(), yt, d.x.toFloat(), yb, line); cap(canvas, d.x.toFloat(), yt, f * 0.3f); cap(canvas, d.x.toFloat(), yb, f * 0.3f)
+            }
             for (d in all[j]) {
                 d ?: continue
                 val r = (if (bubble) d.r.coerceAtLeast(f * 0.2) else f * 0.35).toFloat()
                 val x = d.x.toFloat(); val y = d.y.toFloat()
-                if (c.threeD) { // a ball: a soft shadow, then a lit sphere
-                    solid.shader = null; solid.color = 0x33000000; canvas.drawCircle(x + r * 0.35f, y + r * 0.45f, r, solid)
-                    solid.shader = android.graphics.RadialGradient(x - r * 0.35f, y - r * 0.35f, r * 1.5f, intArrayOf(shade(s.color, 1.7f), s.color, shade(s.color, 0.5f)), floatArrayOf(0f, 0.4f, 1f), android.graphics.Shader.TileMode.CLAMP)
-                    canvas.drawCircle(x, y, r, solid); solid.shader = null
-                } else {
+                if (c.threeD) ball(canvas, x, y, r, s.color, if (bubble) 0xE6 else 0xFF)
+                else {
                     solid.color = if (bubble) (s.color and 0x00FFFFFF) or 0xA6000000.toInt() else s.color
                     canvas.drawCircle(x, y, r, solid)
                     if (bubble) { line.strokeWidth = px; line.color = s.color; canvas.drawCircle(x, y, r, line) }
                 }
                 if (c.showValues) c.categories.getOrNull(d.index)?.takeIf { it.isNotBlank() }?.let { label(canvas, it, d.x + r + f * 0.2, d.y + f * 0.3, f * 0.7f, Paint.Align.LEFT, ink) }
             }
+        }
+    }
+
+    /** A ball standing on the plot: a flat shadow down and to the right, then a lit sphere with a bright spot. [alpha] below 255 lets the page show through a little. */
+    private fun ball(canvas: Canvas, x: Float, y: Float, r: Float, colour: Int, alpha: Int = 0xFF) {
+        solid.shader = null
+        solid.color = 0x30000000
+        canvas.drawOval(x - r * 0.4f, y + r * 0.75f, x + r * 1.4f, y + r * 1.25f, solid)
+        val body = (colour and 0x00FFFFFF) or (alpha shl 24)
+        solid.color = Color.BLACK // the paint's own colour must be opaque, or it fades the whole shader
+        solid.shader = android.graphics.RadialGradient(x - r * 0.35f, y - r * 0.4f, r * 1.45f, intArrayOf(shade(body, 1.35f), body, shade(body, 0.55f)), floatArrayOf(0f, 0.5f, 1f), android.graphics.Shader.TileMode.CLAMP)
+        canvas.drawCircle(x, y, r, solid); solid.shader = null
+        solid.color = 0x99FFFFFF.toInt()
+        canvas.drawCircle(x - r * 0.38f, y - r * 0.42f, r * 0.2f, solid)
+    }
+
+    // ---- error bars ----
+
+    private fun cap(canvas: Canvas, x: Float, y: Float, half: Float) = canvas.drawLine(x - half, y, x + half, y, line)
+
+    private fun errorBars(canvas: Canvas, c: Chart, p: Box, scale: ChartMaths.Scale, scale2: ChartMaths.Scale, ink: Int, px: Float) {
+        val f = c.textSize
+        line.strokeWidth = maxOf(px * 1.5f, f * 0.08f); line.color = ink
+        for (spans in ChartMaths.errorBars(c, p, scale, scale2)) for (e in spans) {
+            e ?: continue
+            canvas.drawLine(e.x.toFloat(), e.top.toFloat(), e.x.toFloat(), e.bottom.toFloat(), line)
+            cap(canvas, e.x.toFloat(), e.top.toFloat(), f * 0.3f); cap(canvas, e.x.toFloat(), e.bottom.toFloat(), f * 0.3f)
         }
     }
 
@@ -447,6 +485,175 @@ object ChartDraw {
             label(canvas, if (c.dateAxis) ChartMaths.dateLabel(v) else ChartMaths.format(v), x + f * 0.25, p.t + f * 0.9, f * 0.75f, Paint.Align.LEFT, Chart.DOWN)
         }
         frame(canvas, p, ink, px)
+    }
+
+    // ---- Sankey ----
+
+    private fun sankey(canvas: Canvas, c: Chart, p: Box, ink: Int) {
+        val f = c.textSize
+        val lay = ChartMaths.sankey(c, p) ?: return
+        val d = if (c.threeD) f * 0.5 else 0.0
+        val last = lay.nodes.maxOf { it.level }
+        for (l in lay.links) { // the ribbons first, under the nodes
+            val from = lay.nodes[l.from]
+            val colour = Chart.colourFor(l.from)
+            val mx = ((l.x0 + l.x1) / 2).toFloat()
+            fun ribbon(dx: Float, dy: Float, argb: Int) {
+                path.reset()
+                path.moveTo(l.x0.toFloat() + dx, l.y0.toFloat() + dy)
+                path.cubicTo(mx + dx, l.y0.toFloat() + dy, mx + dx, l.y1.toFloat() + dy, l.x1.toFloat() + dx, l.y1.toFloat() + dy)
+                path.lineTo(l.x1.toFloat() + dx, (l.y1 + l.thickness).toFloat() + dy)
+                path.cubicTo(mx + dx, (l.y1 + l.thickness).toFloat() + dy, mx + dx, (l.y0 + l.thickness).toFloat() + dy, l.x0.toFloat() + dx, (l.y0 + l.thickness).toFloat() + dy)
+                path.close(); solid.color = argb; canvas.drawPath(path, solid)
+            }
+            if (d > 0) ribbon((d * 0.6).toFloat(), -(d * 0.6).toFloat(), (shade(colour, 0.6f) and 0x00FFFFFF) or 0x66000000)
+            ribbon(0f, 0f, (colour and 0x00FFFFFF) or 0x80000000.toInt())
+            if (c.showValues && l.thickness > f * 0.9) label(canvas, ChartMaths.format(l.value), (l.x0 + l.x1) / 2, (l.y0 + l.y1 + l.thickness) / 2 + f * 0.3, f * 0.7f, Paint.Align.CENTER, ink)
+            if (from.name.isEmpty()) continue
+        }
+        for ((i, n) in lay.nodes.withIndex()) {
+            box3d(canvas, n.box, Chart.colourFor(i), d)
+            val name = n.name + if (c.showValues) "  " + ChartMaths.format(n.total) else ""
+            if (n.level == last && lay.nodes.any { it.level != last }) label(canvas, name, n.box.l - f * 0.3, (n.box.t + n.box.b) / 2 + f * 0.3, f * 0.8f, Paint.Align.RIGHT, ink)
+            else label(canvas, name, n.box.r + f * 0.3 + d * 0.6, (n.box.t + n.box.b) / 2 + f * 0.3, f * 0.8f, Paint.Align.LEFT, ink)
+        }
+    }
+
+    // ---- sunburst ----
+
+    private fun sunburst(canvas: Canvas, c: Chart, p: Box, ink: Int) {
+        val f = c.textSize
+        val arcs = ChartMaths.sunburst(c)
+        if (arcs.isEmpty()) return
+        val rings = arcs.maxOf { it.depth } + 1
+        val tilt = if (c.threeD) 0.6f else 1f
+        val depth = if (c.threeD) f * 1.2f else 0f
+        val r = (minOf(p.r - p.l, (p.b - p.t - depth) / tilt) / 2 * 0.95).toFloat()
+        val cx = ((p.l + p.r) / 2).toFloat(); val cy = ((p.t + p.b - depth) / 2).toFloat()
+        val r0 = r * 0.16f
+        val rw = (r - r0) / rings
+        fun colour(a: ChartMaths.Arc) = shade(Chart.colourFor(a.top), 1f + 0.14f * a.depth)
+        fun draw(shadeBy: Float, dy: Float) {
+            canvas.save(); canvas.translate(0f, dy)
+            for (a in arcs) {
+                annulus(path, cx, cy, r0 + rw * (a.depth + 1) - rw * 0.04f, r0 + rw * a.depth, Math.toDegrees(a.start).toFloat(), Math.toDegrees(a.sweep).toFloat())
+                solid.color = shade(colour(a), shadeBy); canvas.drawPath(path, solid)
+            }
+            canvas.restore()
+        }
+        canvas.save()
+        canvas.scale(1f, tilt, cx, cy)
+        if (depth > 0f) for (k in 14 downTo 1) draw(0.65f, depth / tilt * k / 14)
+        draw(1f, 0f)
+        canvas.restore()
+        for (a in arcs) {
+            val mid = a.start + a.sweep / 2
+            val rr = r0 + rw * (a.depth + 0.5f)
+            val name = a.path.last()
+            text.textSize = f * 0.75f; text.isFakeBoldText = false
+            val fits = a.sweep * rr > text.measureText(name) * 1.15 && rw > f * 0.9
+            if (!fits || (tilt < 1f && a.depth > 0)) continue
+            val x = cx + rr * Math.cos(mid).toFloat(); val y = cy + rr * Math.sin(mid).toFloat() * tilt
+            canvas.save()
+            if (tilt < 1f) { canvas.translate(x, y); label(canvas, name, 0.0, f * 0.25, f * 0.75f, Paint.Align.CENTER, Color.WHITE, true) }
+            else { canvas.translate(x, y); canvas.rotate((if (Math.sin(mid) > 0) Math.toDegrees(mid) - 90 else Math.toDegrees(mid) + 90).toFloat()); label(canvas, name, 0.0, f * 0.25, f * 0.75f, Paint.Align.CENTER, Color.WHITE, true) }
+            canvas.restore()
+        }
+    }
+
+    // ---- timeline ----
+
+    private fun timeline(canvas: Canvas, c: Chart, p: Box, ink: Int, px: Float) {
+        val f = c.textSize
+        val scale = ChartMaths.timelineScale(c)
+        val axisY = (p.t + p.b) / 2
+        text.textSize = f * 0.85f; text.isFakeBoldText = false
+        val events = ChartMaths.timeline(c, p, scale) { text.measureText(it) + f * 0.6 }
+        line.strokeWidth = f * 0.14f; line.color = ink
+        canvas.drawLine(p.l.toFloat(), axisY.toFloat(), p.r.toFloat(), axisY.toFloat(), line)
+        for (t in ChartMaths.axisTicks(scale.lo, scale.hi, 8)) {
+            val x = p.l + scale.fraction(t) * (p.r - p.l)
+            line.strokeWidth = px; canvas.drawLine(x.toFloat(), (axisY - f * 0.2).toFloat(), x.toFloat(), (axisY + f * 0.2).toFloat(), line)
+            label(canvas, if (c.dateAxis) ChartMaths.dateLabel(t) else ChartMaths.format(t), x, axisY + f * 0.9, f * 0.6f, Paint.Align.CENTER, 0xFF757575.toInt())
+        }
+        val d = c.threeD
+        for (e in events) {
+            e ?: continue
+            val colour = Chart.colourFor(e.index)
+            val reach = f * 1.4 + e.lane * f * 1.9
+            val y = if (e.above) axisY - reach else axisY + reach
+            e.x2?.let { x2 -> solid.color = (colour and 0x00FFFFFF) or 0xAA000000.toInt(); canvas.drawRect(e.x.toFloat(), (axisY - f * 0.25).toFloat(), maxOf(x2, e.x + 2).toFloat(), (axisY + f * 0.25).toFloat(), solid) }
+            line.strokeWidth = px; line.color = colour
+            canvas.drawLine(e.x.toFloat(), axisY.toFloat(), e.x.toFloat(), y.toFloat(), line)
+            if (d) ball(canvas, e.x.toFloat(), axisY.toFloat(), f * 0.4f, colour) else { solid.color = colour; canvas.drawCircle(e.x.toFloat(), axisY.toFloat(), f * 0.35f, solid); line.strokeWidth = px * 1.5f; line.color = Color.WHITE; canvas.drawCircle(e.x.toFloat(), axisY.toFloat(), f * 0.35f, line) }
+            label(canvas, c.categories[e.index], e.x, if (e.above) y - f * 0.25 else y + f * 0.95, f * 0.85f, Paint.Align.CENTER, ink)
+            if (c.showValues) c.series.getOrNull(0)?.at(e.index)?.let { label(canvas, if (c.dateAxis) ChartMaths.dateLabel(it) else ChartMaths.format(it), e.x, if (e.above) y - f * 1.1 else y + f * 1.75, f * 0.65f, Paint.Align.CENTER, 0xFF757575.toInt()) }
+        }
+        if (c.marker != 0L) {
+            val v = c.marker / 1000.0
+            val x = (p.l + scale.fraction(v) * (p.r - p.l)).toFloat()
+            line.strokeWidth = f * 0.12f; line.color = Chart.DOWN
+            line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(f * 0.5f, f * 0.3f), 0f)
+            canvas.drawLine(x, p.t.toFloat(), x, p.b.toFloat(), line); line.pathEffect = null
+            label(canvas, if (c.dateAxis) ChartMaths.dateLabel(v) else ChartMaths.format(v), x + f * 0.25, p.t + f * 0.9, f * 0.75f, Paint.Align.LEFT, Chart.DOWN)
+        }
+    }
+
+    // ---- calendar heatmap ----
+
+    private fun calendar(canvas: Canvas, c: Chart, p: Box, ink: Int) {
+        val f = c.textSize
+        val cal = ChartMaths.calendar(c, p) ?: return
+        val left = p.l + f * 2.6; val top = p.t + f * 1.6
+        for ((row, name) in listOf(0 to "Mon", 2 to "Wed", 4 to "Fri")) label(canvas, name, left - f * 0.3, top + cal.cell * (row + 0.5) + f * 0.25, f * 0.65f, Paint.Align.RIGHT, 0xFF757575.toInt())
+        for (m in cal.months) label(canvas, m.name, left + cal.cell * m.col, top - f * 0.35, f * 0.75f, Paint.Align.LEFT, ink)
+        val d = if (c.threeD) minOf(f * 0.9, cal.cell * 0.5) else 0.0
+        for (day in cal.days) {
+            val b = day.box
+            if (day.value == null) { solid.color = 0xFFF0F0F0.toInt(); canvas.drawRect(b.l.toFloat(), b.t.toFloat(), b.r.toFloat(), b.b.toFloat(), solid); continue }
+            box3d(canvas, b, ChartMaths.heatColour(c, day.t), d * (0.25 + 0.75 * day.t))
+            if (c.showValues && cal.cell > f * 1.6) label(canvas, ChartMaths.format(day.value), (b.l + b.r) / 2, (b.t + b.b) / 2 + f * 0.25, f * 0.6f, Paint.Align.CENTER, if (day.t > 0.55) Color.WHITE else Color.BLACK)
+        }
+    }
+
+    // ---- function graph ----
+
+    private fun function(canvas: Canvas, c: Chart, p: Box, ink: Int, px: Float) {
+        val f = c.textSize
+        val (x0, x1) = ChartMaths.functionX(c); val (y0, y1) = ChartMaths.functionY(c)
+        fun sx(x: Double) = p.l + (x - x0) / (x1 - x0) * (p.r - p.l)
+        fun sy(y: Double) = p.b - (y - y0) / (y1 - y0) * (p.b - p.t)
+        val xAxisY = if (y0 <= 0.0 && y1 >= 0.0) sy(0.0) else p.b // axes cross at zero when it is on show, otherwise sit on the edge
+        val yAxisX = if (x0 <= 0.0 && x1 >= 0.0) sx(0.0) else p.l
+        for (t in ChartMaths.axisTicks(x0, x1)) {
+            if (!c.hideGrid) { line.strokeWidth = px; line.color = 0xFFE0E0E0.toInt(); canvas.drawLine(sx(t).toFloat(), p.t.toFloat(), sx(t).toFloat(), p.b.toFloat(), line) }
+            if (t != 0.0 || yAxisX == p.l) label(canvas, ChartMaths.format(t), sx(t), xAxisY + f * 1.1, f * 0.7f, Paint.Align.CENTER, ink)
+        }
+        for (t in ChartMaths.axisTicks(y0, y1)) {
+            if (!c.hideGrid) { line.strokeWidth = px; line.color = 0xFFE0E0E0.toInt(); canvas.drawLine(p.l.toFloat(), sy(t).toFloat(), p.r.toFloat(), sy(t).toFloat(), line) }
+            if (t != 0.0 || xAxisY == p.b) label(canvas, ChartMaths.format(t), yAxisX - f * 0.3, sy(t) + f * 0.25, f * 0.7f, Paint.Align.RIGHT, ink)
+        }
+        line.strokeWidth = px * 1.5f; line.color = ink
+        canvas.drawLine(p.l.toFloat(), xAxisY.toFloat(), p.r.toFloat(), xAxisY.toFloat(), line)
+        canvas.drawLine(yAxisX.toFloat(), p.t.toFloat(), yAxisX.toFloat(), p.b.toFloat(), line)
+        canvas.save()
+        canvas.clipRect(p.l.toFloat(), p.t.toFloat(), p.r.toFloat() + if (c.threeD) f else 0f, p.b.toFloat())
+        val o = if (c.threeD) (f * 0.9 * 0.6).toFloat() else 0f
+        for ((j, pieces) in ChartMaths.curves(c, p).withIndex()) {
+            val colour = c.series[j].color
+            for (piece in pieces) {
+                if (o > 0f) {
+                    solid.color = shade(colour, 0.6f)
+                    for (k in 0 until piece.size - 1) {
+                        path.reset(); path.moveTo(piece[k].first.toFloat(), piece[k].second.toFloat()); path.lineTo(piece[k + 1].first.toFloat(), piece[k + 1].second.toFloat())
+                        path.lineTo(piece[k + 1].first.toFloat() + o, piece[k + 1].second.toFloat() - o); path.lineTo(piece[k].first.toFloat() + o, piece[k].second.toFloat() - o); path.close(); canvas.drawPath(path, solid)
+                    }
+                }
+                path.reset(); piece.forEachIndexed { k, q -> if (k == 0) path.moveTo(q.first.toFloat(), q.second.toFloat()) else path.lineTo(q.first.toFloat(), q.second.toFloat()) }
+                line.strokeWidth = f * 0.2f; line.color = colour; canvas.drawPath(path, line)
+            }
+        }
+        canvas.restore()
     }
 
     // ---- pie and donut ----

@@ -472,6 +472,41 @@ func TestChartKindsBatchB(t *testing.T) {
 	}
 }
 
+// The third batch of kinds, error bars and formulas read back whole; older charts read with all of them off.
+func TestChartKindsBatchC(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	full := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_FUNCTION, Width: 100, Height: 100, XMin: -6283, XMax: 6283, YMin: -2000, YMax: 2000,
+		Series: []*inkpb.ChartSeries{{Name: "f", Expr: "sin(x) / x", Values: []int64{1, 2}, Errors: []int64{100, 0}}}}
+	old := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_BAR, Width: 100, Height: 100, Series: []*inkpb.ChartSeries{{Name: "A", Values: []int64{1}}}}
+	evs := []*inkpb.Event{}
+	for i, k := range []inkpb.ChartKind{inkpb.ChartKind_CHART_SANKEY, inkpb.ChartKind_CHART_SUNBURST, inkpb.ChartKind_CHART_TIMELINE, inkpb.ChartKind_CHART_CALENDAR} {
+		evs = append(evs, &inkpb.Event{Id: id, Device: "d", Seq: uint64(i + 1), Kind: &inkpb.Event_ChartSet{ChartSet: &inkpb.ChartSet{Kind: k}}})
+	}
+	evs = append(evs, &inkpb.Event{Id: id, Device: "d", Seq: 5, Kind: &inkpb.Event_ChartSet{ChartSet: full}}, &inkpb.Event{Id: id, Device: "d", Seq: 6, Kind: &inkpb.Event_ChartSet{ChartSet: old}})
+	if err := Append(p, evs...); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 6 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[4].GetChartSet(), full) {
+		t.Error("the function chart changed on the way")
+	}
+	o := l.Events[5].GetChartSet()
+	if o.XMin != 0 || o.XMax != 0 || o.YMin != 0 || o.YMax != 0 || len(o.Series[0].Errors) != 0 || o.Series[0].Expr != "" {
+		t.Error("a chart written before these options must read with all of them off")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"sankey at=", "sunburst at=", "timeline at=", "calendar at=", "function at="} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // A dotted stroke is an ordinary stroke event with its own tool; it reads back and dumps by name.
 func TestDottedStroke(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p")

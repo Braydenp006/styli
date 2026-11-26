@@ -370,6 +370,16 @@ enum ChartKind {
   CHART_TREEMAP = 18;
   // Categories are the tasks; the first series are the starts, the second the ends and the third (optional) the percent done.
   CHART_GANTT = 19;
+  // Each row is a flow: the category is where it starts, `groups` where it ends, the first series how much.
+  CHART_SANKEY = 20;
+  // Each row's category is a path ("Food/Fruit/Apple"), the first series the size of that leaf; rings by depth.
+  CHART_SUNBURST = 21;
+  // Events along a line: the category is the name, the first series when (and the second, if any, when it ends).
+  CHART_TIMELINE = 22;
+  // One day per row: the category is a date ("2026-12-01"), the first series the value, drawn as a calendar of squares.
+  CHART_CALENDAR = 23;
+  // Curves y = f(x): each series' `expr` is a formula in x, drawn over the x range (and the y range, if given).
+  CHART_FUNCTION = 24;
 }
 
 // How a line (or the top of an area) joins its points.
@@ -398,6 +408,10 @@ message ChartSeries {
   // how high), and for a bubble its size, all in thousandths. Same length as `values`.
   repeated sint64 xs = 8 [packed = true];
   repeated sint64 sizes = 9 [packed = true];
+  // Error bars: how far each value could be out either way, in thousandths (same length as `values`; zero draws none).
+  repeated sint64 errors = 10 [packed = true];
+  // Function charts: the formula, such as "sin(x) / x" or "2x^2 - 3".
+  string expr = 11;
 }
 
 // A chart on the page, drawn from its data. The whole state of it, written like
@@ -475,6 +489,11 @@ message ChartSet {
   // Heatmap: the colours for the lowest and highest values (0xAARRGGBB; zero alpha means the defaults, pale blue and blue).
   uint32 heat_low = 42;
   uint32 heat_high = 43;
+  // Function charts: the range drawn, in thousandths. A range whose max is not above its min means -10 to 10 for x and, for y, fitting the curves.
+  sint64 x_min = 44;
+  sint64 x_max = 45;
+  sint64 y_min = 46;
+  sint64 y_max = 47;
 }
 
 message ChartRemoved {}

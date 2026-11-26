@@ -12,7 +12,7 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-enum class ChartKind { BAR, LINE, PIE, AREA, DONUT, RADAR, POLAR, FUNNEL, WATERFALL, COMBO, GAUGE, SPARKLINE, CANDLESTICK, SCATTER, BUBBLE, HISTOGRAM, BOXPLOT, HEATMAP, TREEMAP, GANTT }
+enum class ChartKind { BAR, LINE, PIE, AREA, DONUT, RADAR, POLAR, FUNNEL, WATERFALL, COMBO, GAUGE, SPARKLINE, CANDLESTICK, SCATTER, BUBBLE, HISTOGRAM, BOXPLOT, HEATMAP, TREEMAP, GANTT, SANKEY, SUNBURST, TIMELINE, CALENDAR, FUNCTION }
 
 /** How a line (or the top of an area) joins its points. */
 enum class Curve { STRAIGHT, SMOOTH, STEP }
@@ -26,7 +26,11 @@ data class ChartSeries(
     val name: String, val color: Int, val values: List<Long>, val missing: Set<Int> = emptySet(),
     val kind: ChartKind = ChartKind.BAR, val secondary: Boolean = false, val trendline: Boolean = false,
     val xs: List<Long> = emptyList(), val sizes: List<Long> = emptyList(),
+    val errors: List<Long> = emptyList(), val expr: String = "",
 ) {
+    /** Error bars: how far value [i] could be out either way, or null for none. */
+    fun errAt(i: Int): Double? = if (i in missing || i !in errors.indices) null else (errors[i] / 1000.0).takeIf { it > 0.0 }
+
     /** Scatter and bubble: where point [i] is along the bottom, or null if it has none (or no value). */
     fun xAt(i: Int): Double? = if (i in missing || i !in xs.indices) null else xs[i] / 1000.0
 
@@ -87,6 +91,10 @@ data class Chart(
     val marker: Long = 0,
     val heatLow: Int = 0,
     val heatHigh: Int = 0,
+    val xMin: Long = 0,
+    val xMax: Long = 0,
+    val yMin: Long = 0,
+    val yMax: Long = 0,
 ) {
     /** The base text size: [fontSize], or a twenty-fourth of the box's height. */
     val textSize: Float get() = if (fontSize > 0f) fontSize else height / 24f
@@ -161,7 +169,7 @@ object ChartMaths {
     }
 
     /** Kinds drawn against a value axis (with numbers down one side and category names along the other). */
-    fun hasAxes(k: ChartKind) = k != ChartKind.PIE && k != ChartKind.DONUT && k != ChartKind.RADAR && k != ChartKind.POLAR && k != ChartKind.FUNNEL && k != ChartKind.GAUGE && k != ChartKind.SPARKLINE && k != ChartKind.TREEMAP
+    fun hasAxes(k: ChartKind) = k != ChartKind.PIE && k != ChartKind.DONUT && k != ChartKind.RADAR && k != ChartKind.POLAR && k != ChartKind.FUNNEL && k != ChartKind.GAUGE && k != ChartKind.SPARKLINE && k != ChartKind.TREEMAP && k != ChartKind.SANKEY && k != ChartKind.SUNBURST && k != ChartKind.CALENDAR
 
     /**
      * The chart as its values are drawn: a 100% stack turns each category's values into shares of 100, and a population
@@ -210,7 +218,7 @@ object ChartMaths {
             for (s in ser) {
                 val v = s.at(i) ?: continue
                 any = true
-                if (stackable(c, s)) { stack = true; if (v >= 0) pos += v else neg += v } else { lo = min(lo, v); hi = max(hi, v) }
+                if (stackable(c, s)) { stack = true; if (v >= 0) pos += v else neg += v } else { val e = s.errAt(i) ?: 0.0; lo = min(lo, v - e); hi = max(hi, v + e) }
             }
             if (stack) { lo = min(lo, min(neg, 0.0)); hi = max(hi, max(pos, 0.0)) }
         }
@@ -235,7 +243,7 @@ object ChartMaths {
     /** The names the legend lists (empty for the kinds that have none). */
     fun legendNames(c: Chart): List<String> = when (c.kind) {
         ChartKind.PIE, ChartKind.DONUT, ChartKind.POLAR, ChartKind.FUNNEL -> c.categories
-        ChartKind.GAUGE, ChartKind.WATERFALL, ChartKind.CANDLESTICK, ChartKind.SPARKLINE, ChartKind.HISTOGRAM, ChartKind.BOXPLOT, ChartKind.HEATMAP, ChartKind.GANTT -> emptyList()
+        ChartKind.GAUGE, ChartKind.WATERFALL, ChartKind.CANDLESTICK, ChartKind.SPARKLINE, ChartKind.HISTOGRAM, ChartKind.BOXPLOT, ChartKind.HEATMAP, ChartKind.GANTT, ChartKind.SANKEY, ChartKind.SUNBURST, ChartKind.TIMELINE, ChartKind.CALENDAR -> emptyList()
         ChartKind.TREEMAP -> c.groups.filter { it.isNotBlank() }.distinct()
         else -> c.series.map { it.name }
     }
@@ -253,10 +261,10 @@ object ChartMaths {
         val axes = hasAxes(c.kind)
         val xLabel = if (axes && c.xLabel.isNotBlank()) Box(left, bottom - f * 1.4, right, bottom).also { bottom -= f * 1.6 } else null
         val yLabel = if (axes && c.yLabel.isNotBlank()) Box(pad, top, pad + f * 1.4, bottom).also { left += f * 1.6 } else null
-        if (c.threeD && (axes || c.kind == ChartKind.RADAR || c.kind == ChartKind.FUNNEL || c.kind == ChartKind.TREEMAP)) { top += d3; right -= d3 }
+        if (c.threeD && (axes || c.kind == ChartKind.RADAR || c.kind == ChartKind.FUNNEL || c.kind == ChartKind.TREEMAP || c.kind == ChartKind.SANKEY || c.kind == ChartKind.CALENDAR)) { top += d3; right -= d3 }
         if (axes) {
             val sideBars = (c.horizontal && c.kind == ChartKind.BAR) || c.kind == ChartKind.GANTT || c.kind == ChartKind.HEATMAP
-            left += if (sideBars) min(w * 0.3, (c.categories.maxOfOrNull { it.length } ?: 1) * f * 0.5 + f * 0.6) else f * 3.6
+            left += if (c.kind == ChartKind.TIMELINE) 0.0 else if (sideBars) min(w * 0.3, (c.categories.maxOfOrNull { it.length } ?: 1) * f * 0.5 + f * 0.6) else f * 3.6
             bottom -= f * 1.6 // the category names (or, for sideways bars, the numbers) underneath
             if (c.kind == ChartKind.COMBO && c.series.any { it.secondary }) right -= f * 3.6
         }
@@ -512,7 +520,7 @@ object ChartMaths {
     /** The scales along the bottom and up the side for the points (neither needs to include zero). */
     fun scatterScales(c: Chart): Pair<Scale, Scale> {
         val xs = ArrayList<Double>(); val ys = ArrayList<Double>()
-        for (s in c.series) for (i in s.values.indices) { val x = s.xAt(i); val y = s.at(i); if (x != null && y != null) { xs.add(x); ys.add(y) } }
+        for (s in c.series) for (i in s.values.indices) { val x = s.xAt(i); val y = s.at(i); if (x != null && y != null) { val e = s.errAt(i) ?: 0.0; xs.add(x); ys.add(y - e); ys.add(y + e) } }
         if (xs.isEmpty()) return niceScale(0.0, 1.0, zero = false) to niceScale(0.0, 1.0, zero = false)
         // a little room round the points, so none sits on an axis
         fun padded(v: List<Double>): Scale { val pad = (v.max() - v.min()).takeIf { it > 0 }?.times(0.08) ?: 1.0; return niceScale(v.min() - pad, v.max() + pad, zero = false) }
@@ -751,6 +759,281 @@ object ChartMaths {
     fun dateText(days: Double): String = java.time.LocalDate.ofEpochDay(floor(days).toLong()).toString()
 
     private fun log2(x: Double) = ln(x) / ln(2.0)
+
+    // ---- error bars ----
+
+    /** An error bar drawn on a chart: the middle x, and the y of its top and bottom end. */
+    class ErrSpan(val x: Double, val top: Double, val bottom: Double)
+
+    /**
+     * For each series with error bars, a bar for every point that has one, in the chart's frame: on a bar's middle, or a
+     * line's or area's point. Stacked and sideways bars have none. Series without any get an empty list.
+     */
+    fun errorBars(c0: Chart, p: Box, scale: Scale, scale2: Scale = scale): List<List<ErrSpan?>> {
+        val c = effective(c0)
+        val n = c.categories.size
+        if (c.stacked || c.horizontal) return c.series.map { emptyList() }
+        val bars = bars(c, p, scale, scale2)
+        val pts = linePoints(c, p, scale, scale2)
+        return c.series.mapIndexed { j, s ->
+            if (s.errors.none { it > 0 }) return@mapIndexed emptyList()
+            val sc = if (s.secondary) scale2 else scale
+            (0 until n).map { i ->
+                val v = s.at(i); val e = s.errAt(i)
+                if (v == null || e == null) null else {
+                    val x = bars[j][i]?.let { (it.l + it.r) / 2 } ?: pts[j][i]?.first
+                    if (x == null) null else ErrSpan(x, yOf(p, sc, v + e), yOf(p, sc, v - e))
+                }
+            }
+        }
+    }
+
+    // ---- axis ticks for a fixed range ----
+
+    /** Round tick values inside [lo, hi] (multiples of a 1, 2 or 5 step), about [maxTicks] of them. */
+    fun axisTicks(lo: Double, hi: Double, maxTicks: Int = 7): List<Double> {
+        if (hi <= lo) return listOf(lo)
+        // the smallest round step (1, 2 or 5 times a power of ten) that leaves no more than maxTicks marks
+        val e0 = floor(log10((hi - lo) / maxTicks)).toInt() - 1
+        val step = (e0..e0 + 4).flatMap { e -> listOf(1.0, 2.0, 5.0).map { it * 10.0.pow(e) } }.first { st -> floor(hi / st + 1e-9) - ceil(lo / st - 1e-9) + 1 <= maxTicks }
+        val first = ceil(lo / step - 1e-9)
+        return generateSequence(first) { it + 1 }.map { it * step }.takeWhile { it <= hi + step * 1e-9 }.map { if (abs(it) < step * 1e-9) 0.0 else it }.toList()
+    }
+
+    // ---- function graphs ----
+
+    /** The x range drawn: the chart's own if it is a real range, otherwise -10 to 10. */
+    fun functionX(c: Chart): Pair<Double, Double> = if (c.xMax > c.xMin) c.xMin / 1000.0 to c.xMax / 1000.0 else -10.0 to 10.0
+
+    /** Each series' formula at [n]+1 evenly spaced x across the range; NaN where it has no value or the formula cannot be read. */
+    fun functionSamples(c: Chart, n: Int = 400): List<List<Pair<Double, Double>>> {
+        val (x0, x1) = functionX(c)
+        return c.series.map { s ->
+            val f = Formula.parse(s.expr)
+            (0..n).map { k -> val x = x0 + (x1 - x0) * k / n; x to (f?.at(x) ?: Double.NaN) }
+        }
+    }
+
+    /** The y range drawn: the chart's own if it is a real range, otherwise what the curves do between their 2nd and 98th percentile (so a curve shooting off to infinity does not flatten the rest), with a tenth of room. */
+    fun functionY(c: Chart): Pair<Double, Double> {
+        if (c.yMax > c.yMin) return c.yMin / 1000.0 to c.yMax / 1000.0
+        val all = functionSamples(c, 200).flatMap { it.map { p -> p.second } }.filter { it.isFinite() }.sorted()
+        if (all.isEmpty()) return -1.0 to 1.0
+        val lo = all[(all.size * 0.02).toInt()]; val hi = all[min(all.size - 1, (all.size * 0.98).toInt())]
+        if (hi - lo < 1e-9) return lo - 1 to hi + 1
+        return lo - (hi - lo) * 0.1 to hi + (hi - lo) * 0.1
+    }
+
+    /**
+     * Each series' curve as pieces of a polyline in the chart's frame ([p] is the plot): a piece ends where the formula has no value
+     * or the curve jumps from one side of the picture to the other (a tangent's asymptote), so no line is drawn across the gap.
+     */
+    fun curves(c: Chart, p: Box): List<List<List<Pair<Double, Double>>>> {
+        val (x0, x1) = functionX(c); val (y0, y1) = functionY(c)
+        val span = y1 - y0
+        return functionSamples(c).map { samples ->
+            val pieces = ArrayList<List<Pair<Double, Double>>>(); var cur = ArrayList<Pair<Double, Double>>()
+            var prev: Double? = null
+            for ((x, y) in samples) {
+                val ok = y.isFinite() && y > y0 - span * 5 && y < y1 + span * 5 && (prev == null || abs(y - prev) < span * 4)
+                if (!ok) { if (cur.size > 1) pieces.add(cur); cur = ArrayList(); prev = if (y.isFinite()) y else null; if (!(y.isFinite() && y > y0 - span * 5 && y < y1 + span * 5)) continue }
+                cur.add((p.l + (x - x0) / (x1 - x0) * (p.r - p.l)) to (p.b - (y - y0) / span * (p.b - p.t)))
+                prev = y
+            }
+            if (cur.size > 1) pieces.add(cur)
+            pieces
+        }
+    }
+
+    // ---- Sankey ----
+
+    class SankeyNode(val name: String, val level: Int, val box: Box, val total: Double)
+
+    /** A flow: from node [from] to node [to], [value] wide; its ribbon leaves at height [y0] of the source's right edge and arrives at [y1] of the target's left edge, [thickness] tall. */
+    class SankeyLink(val from: Int, val to: Int, val value: Double, val x0: Double, val y0: Double, val x1: Double, val y1: Double, val thickness: Double)
+
+    class SankeyLayout(val nodes: List<SankeyNode>, val links: List<SankeyLink>)
+
+    /**
+     * Nodes in columns (a node sits one column after the furthest column that feeds it; a loop is cut where it closes), each as
+     * tall as its busiest side, stacked top down and ordered to keep the ribbons from crossing as much as it can; ribbons are as
+     * thick as their flow. Rows whose flow is not positive, or that start and end in the same place, are left out.
+     */
+    fun sankey(c: Chart, p: Box): SankeyLayout? {
+        val s = c.series.firstOrNull() ?: return null
+        class Flow(val from: Int, val to: Int, val v: Double)
+        val names = ArrayList<String>()
+        fun node(n: String) = names.indexOf(n).let { if (it >= 0) it else { names.add(n); names.size - 1 } }
+        val flows = (0 until c.categories.size).mapNotNull { i ->
+            val a = c.categories[i].trim(); val b = c.groups.getOrNull(i)?.trim() ?: ""
+            val v = s.at(i)
+            if (a.isEmpty() || b.isEmpty() || a == b || v == null || v <= 0.0) null else Flow(node(a), node(b), v)
+        }
+        if (flows.isEmpty()) return null
+        val n = names.size
+        val level = IntArray(n)
+        repeat(n) { for (f in flows) if (level[f.from] + 1 > level[f.to] && level[f.from] + 1 < n) level[f.to] = level[f.from] + 1 }
+        val used = level.toSortedSet().toList()
+        val col = IntArray(n) { used.indexOf(level[it]) }
+        val cols = used.size
+        val inSum = DoubleArray(n); val outSum = DoubleArray(n)
+        for (f in flows) { outSum[f.from] += f.v; inSum[f.to] += f.v }
+        val total = DoubleArray(n) { max(inSum[it], outSum[it]) }
+        val gap = (p.b - p.t) * 0.04
+        val members = (0 until cols).map { k -> (0 until n).filter { col[it] == k }.toMutableList() }
+        val unit = members.minOf { m -> ((p.b - p.t) - gap * (m.size - 1)) / m.sumOf { total[it] } }
+        // order each column by where its feeders are (a few passes, left to right)
+        val centre = DoubleArray(n)
+        fun place() { for (m in members) { var y = p.t; for (i in m) { centre[i] = y + total[i] * unit / 2; y += total[i] * unit + gap } } }
+        place()
+        repeat(4) {
+            for (k in 1 until cols) {
+                members[k].sortBy { i -> val fs = flows.filter { it.to == i && col[it.from] < k }; if (fs.isEmpty()) centre[i] else fs.sumOf { centre[it.from] * it.v } / fs.sumOf { it.v } }
+                place()
+            }
+        }
+        val nodeW = max((p.r - p.l) * 0.03, c.textSize * 0.8)
+        val step = if (cols > 1) ((p.r - p.l) - nodeW) / (cols - 1) else 0.0
+        val boxes = Array(n) { i ->
+            val top = centre[i] - total[i] * unit / 2
+            val x = if (cols > 1) p.l + step * col[i] else (p.l + p.r - nodeW) / 2
+            Box(x, top, x + nodeW, top + total[i] * unit)
+        }
+        val links = ArrayList<SankeyLink>()
+        // each node hands its ribbons out top down in the order of where they land, and takes them in in the order of where they came from
+        val outOrder = flows.groupBy { it.from }.mapValues { (_, v) -> v.sortedBy { centre[it.to] } }
+        val inOrder = flows.groupBy { it.to }.mapValues { (_, v) -> v.sortedBy { centre[it.from] } }
+        val y0 = HashMap<Flow, Double>(); val y1 = HashMap<Flow, Double>()
+        for ((i, list) in outOrder) { var y = boxes[i].t; for (f in list) { y0[f] = y; y += f.v * unit } }
+        for ((i, list) in inOrder) { var y = boxes[i].t; for (f in list) { y1[f] = y; y += f.v * unit } }
+        for (f in flows) links.add(SankeyLink(f.from, f.to, f.v, boxes[f.from].r, y0.getValue(f), boxes[f.to].l, y1.getValue(f), f.v * unit))
+        return SankeyLayout(names.indices.map { SankeyNode(names[it], col[it], boxes[it], total[it]) }, links)
+    }
+
+    // ---- sunburst ----
+
+    /** A ring segment: its path from the root, the ring it is in (0 is the inside one), where it starts and how far it sweeps (radians clockwise from the top), its value, and which top-level item it belongs to (for its colour). */
+    class Arc(val path: List<String>, val depth: Int, val start: Double, val sweep: Double, val value: Double, val top: Int)
+
+    private class SunNode(val name: String) { val kids = LinkedHashMap<String, SunNode>(); var own = 0.0
+        val total: Double get() = if (kids.isEmpty()) own else max(own, kids.values.sumOf { it.total }) }
+
+    /** The rings of the first series: each row's category is a path split at "/" or ">" (blanks skipped), its value the size of that item. A parent's size is the sum of what is inside it (or its own number if that is larger). */
+    fun sunburst(c: Chart): List<Arc> {
+        val s = c.series.firstOrNull() ?: return emptyList()
+        val root = SunNode("")
+        for (i in 0 until c.categories.size) {
+            val v = s.at(i)?.takeIf { it > 0 } ?: continue
+            val parts = c.categories[i].split('/', '>').map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.isEmpty()) continue
+            var n = root
+            for (part in parts) n = n.kids.getOrPut(part) { SunNode(part) }
+            n.own += v
+        }
+        val out = ArrayList<Arc>()
+        fun walk(n: SunNode, path: List<String>, depth: Int, start: Double, sweep: Double, top: Int) {
+            val total = n.kids.values.sumOf { it.total }.takeIf { it > 0 } ?: return
+            var a = start
+            for ((k, child) in n.kids.values.withIndex()) {
+                val w = sweep * child.total / total
+                val t = if (depth == 0) k else top
+                out.add(Arc(path + child.name, depth, a, w, child.total, t))
+                walk(child, path + child.name, depth + 1, a, w, t)
+                a += w
+            }
+        }
+        walk(root, emptyList(), 0, -Math.PI / 2, 2 * Math.PI, 0)
+        return out
+    }
+
+    // ---- timeline ----
+
+    /** An event on the line: its x, where it ends (a span) if it does, and which lane of labels it sits in, above the line or below. */
+    class TimelineEvent(val index: Int, val x: Double, val x2: Double?, val lane: Int, val above: Boolean)
+
+    /** The time axis: all the dates (and ends), with room round them. */
+    fun timelineScale(c: Chart): Scale {
+        val a = c.series.getOrNull(0); val b = c.series.getOrNull(1)
+        val all = (0 until c.categories.size).flatMap { i -> listOfNotNull(a?.at(i), b?.at(i)) } + (if (c.marker != 0L) listOf(c.marker / 1000.0) else emptyList())
+        if (all.isEmpty()) return niceScale(0.0, 1.0, zero = false)
+        val pad = (all.max() - all.min()).takeIf { it > 0 }?.times(0.04) ?: 1.0
+        return niceScale(all.min() - pad, all.max() + pad, zero = false)
+    }
+
+    /**
+     * Places each event with a date along [p]'s width, alternating above and below the line, and puts a label in the first lane
+     * (the row nearest the line) where it does not run into one already there; [labelWidth] says how wide a name is. Events with no date are null.
+     */
+    fun timeline(c: Chart, p: Box, scale: Scale, labelWidth: (String) -> Double): List<TimelineEvent?> {
+        val n = c.categories.size
+        val w = p.r - p.l
+        val lanes = arrayOf(ArrayList<Double>(), ArrayList<Double>()) // the right end of the last label in each lane, above [0] and below [1]
+        val out = arrayOfNulls<TimelineEvent>(n)
+        val order = (0 until n).filter { c.series.getOrNull(0)?.at(it) != null }.sortedBy { c.series[0].at(it)!! }
+        var turn = 0
+        for (i in order) {
+            val x = p.l + scale.fraction(c.series[0].at(i)!!) * w
+            val x2 = c.series.getOrNull(1)?.at(i)?.let { p.l + scale.fraction(it) * w }
+            val half = labelWidth(c.categories[i]) / 2
+            val left = x - half; val right = x + half
+            // try the side it is this event's turn for, then the other; the lane that keeps it nearest the line wins
+            val choices = listOf(turn, 1 - turn).map { side ->
+                val lane = lanes[side].indexOfFirst { it + half * 0.1 <= left }.let { if (it >= 0) it else lanes[side].size }
+                side to lane
+            }
+            val (side, lane) = choices.minByOrNull { it.second }!!
+            if (lane < lanes[side].size) lanes[side][lane] = right else lanes[side].add(right)
+            out[i] = TimelineEvent(i, x, x2, lane, side == 0)
+            turn = 1 - side
+        }
+        return out.toList()
+    }
+
+    // ---- calendar heatmap ----
+
+    /** A day on the calendar: its day number, the week column and weekday row (0 is Monday) it sits in, its square, its value (null if the day had none) and how far along the colour ramp it is. */
+    class CalDay(val day: Long, val col: Int, val row: Int, val box: Box, val value: Double?, val t: Double)
+
+    /** A month's name and the week column its first day is in. */
+    class CalMonth(val col: Int, val name: String)
+
+    class Calendar(val days: List<CalDay>, val months: List<CalMonth>, val weeks: Int, val cell: Double)
+
+    /**
+     * Every day from the Monday on or before the earliest date to the Sunday on or after the latest, as squares in weeks across and
+     * weekdays down, fitted to [p] (with room inside for the weekday and month names); days with a value shade along the ramp.
+     * Rows whose category is not a date (2026-12-01) are skipped. Null if there is none.
+     */
+    fun calendar(c: Chart, p: Box): Calendar? {
+        val s = c.series.firstOrNull() ?: return null
+        val byDay = HashMap<Long, Double>()
+        for (i in 0 until c.categories.size) {
+            val d = parseDate(c.categories[i]) ?: continue
+            val v = s.at(i) ?: continue
+            byDay[d.toLong()] = (byDay[d.toLong()] ?: 0.0) + v
+        }
+        if (byDay.isEmpty()) return null
+        val first = byDay.keys.min(); val last = byDay.keys.max()
+        fun monday(d: Long) = d - Math.floorMod(java.time.LocalDate.ofEpochDay(d).dayOfWeek.value - 1L, 7L)
+        val start = monday(first)
+        val weeks = ((monday(last) - start) / 7 + 1).toInt()
+        val f = c.textSize.toDouble()
+        val left = p.l + f * 2.6; val top = p.t + f * 1.6
+        val cell = min((p.r - left) / weeks, (p.b - top) / 7)
+        val lo = byDay.values.min(); val hi = byDay.values.max()
+        val gap = cell * 0.08
+        val days = (start..(start + weeks * 7 - 1)).map { d ->
+            val k = (d - start).toInt()
+            val col = k / 7; val row = k % 7
+            val v = byDay[d]
+            CalDay(d, col, row, Box(left + cell * col + gap, top + cell * row + gap, left + cell * (col + 1) - gap, top + cell * (row + 1) - gap), v, if (v == null || hi == lo) 0.0 else (v - lo) / (hi - lo))
+        }
+        fun short(day: Long) = java.time.LocalDate.ofEpochDay(day).month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH)
+        // a month is named above the week its first day is in; the first week is named for its first day if no month starts in it
+        val months = days.filter { java.time.LocalDate.ofEpochDay(it.day).dayOfMonth == 1 }.map { CalMonth(it.col, short(it.day)) }.distinctBy { it.col }.toMutableList()
+        if (months.none { it.col == 0 }) months.add(0, CalMonth(0, short(days[0].day)))
+        return Calendar(days, months, weeks, cell)
+    }
 
     /** A number with at most two decimals, for crowded axes. */
     fun formatShort(v: Double): String = format(Math.round(v * 100) / 100.0)
