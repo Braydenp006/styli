@@ -44,7 +44,11 @@ private fun InkScreen() {
     var tool by remember { mutableStateOf(InkCanvasView.Tool.PEN) }
     var shade by remember { mutableStateOf(0) }
     var thick by remember { mutableStateOf(0) }
-    var straighten by remember { mutableStateOf(2) } // 0 off, 1 low, 2 medium, 3 high
+    // Penmanship, each 0 off, 1 low, 2 medium, 3 high (hold time: 0.3, 0.5, 0.8, 1.2 s)
+    var pLines by remember { mutableStateOf(2) }
+    var pShapes by remember { mutableStateOf(2) }
+    var pLevel by remember { mutableStateOf(2) }
+    var pHold by remember { mutableStateOf(1) }
 
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
@@ -96,13 +100,19 @@ private fun InkScreen() {
                 },
                 Modifier.padding(start = 8.dp),
             ) { Text("Width ${thick + 1}") }
-            Button(
-                onClick = {
-                    straighten = (straighten + 1) % 4
-                    canvas?.straightenStrength = listOf(0f, 0.6f, 1f, 1.6f)[straighten]
-                },
-                Modifier.padding(start = 8.dp),
-            ) { Text("Straighten: " + listOf("off", "low", "medium", "high")[straighten], softWrap = false) }
+            val strengths = listOf(0f, 0.25f, 1f, 2.5f)
+            val names = listOf("off", "low", "medium", "high")
+            fun penmanship() {
+                canvas?.penmanship = ShapeGeometry.Settings(
+                    strengths[pLines], strengths[pShapes], strengths[pLevel], listOf(300L, 500L, 800L, 1200L)[pHold],
+                )
+            }
+            Button(onClick = { pLines = (pLines + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Lines: ${names[pLines]}", softWrap = false) }
+            Button(onClick = { pShapes = (pShapes + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Shapes: ${names[pShapes]}", softWrap = false) }
+            Button(onClick = { pLevel = (pLevel + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Level: ${names[pLevel]}", softWrap = false) }
+            Button(onClick = { pHold = (pHold + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) {
+                Text("Hold: ${listOf("0.3", "0.5", "0.8", "1.2")[pHold]} s", softWrap = false)
+            }
             Button(onClick = { infinite = !infinite; apply() }, Modifier.padding(start = 8.dp)) {
                 Text(if (infinite) "Canvas" else "Page")
             }

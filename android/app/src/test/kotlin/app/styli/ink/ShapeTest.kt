@@ -179,6 +179,49 @@ class ShapeTest {
     }
 
     @Test
+    fun linesShapesAndLevelAreSeparateSettings() {
+        val line = trace(listOf(0f to 0f, 5000f to 80f))
+        val circle = trace(ellipse(2000f, 2000f))
+        assertNull(ShapeGeometry.snap(line, ShapeGeometry.Settings(lines = 0f)))
+        assertNotNull(ShapeGeometry.snap(circle, ShapeGeometry.Settings(lines = 0f)))
+        assertNull(ShapeGeometry.snap(circle, ShapeGeometry.Settings(shapes = 0f)))
+        assertNotNull(ShapeGeometry.snap(line, ShapeGeometry.Settings(shapes = 0f)))
+        // Level off: the 1 degree slope stays; level on: it is made flat.
+        val slope = ShapeGeometry.snap(line, ShapeGeometry.Settings(level = 0f))!!
+        assertTrue(abs(slope[1].y - slope[0].y) > 50f)
+        // A rectangle 2 degrees off level keeps its tilt with level off.
+        val tilted = ShapeGeometry.snap(trace(turned(box(5000f, 3000f), 2.0)), ShapeGeometry.Settings(level = 0f))!!
+        assertTrue(tilted.dropLast(1).map { Math.round(it.x) }.distinct().size == 4)
+    }
+
+    private fun lobed(wobble: Float) = (0..66).map { val t = 2 * PI * it / 66; val r = 2000f * (1 + wobble * sin(5 * t).toFloat()); (r * cos(t)).toFloat() to (r * sin(t)).toFloat() }
+
+    @Test
+    fun lowMediumAndHighReallyDiffer() {
+        val low = 0.25f; val high = 2.5f
+        // An ordinary hand: a line bowed 3% and a circle that wobbles 12%.
+        val bowed = trace((0..20).map { it * 250f to (5000f * 0.03f * sin(PI * it / 20)).toFloat() })
+        assertNull(ShapeGeometry.snap(bowed, ShapeGeometry.Settings(lines = low)))
+        assertNotNull(ShapeGeometry.snap(bowed, ShapeGeometry.Settings(lines = 1f)))
+        val loop = trace(lobed(0.12f))
+        assertNull(ShapeGeometry.snap(loop, ShapeGeometry.Settings(shapes = low)))
+        assertNotNull(ShapeGeometry.snap(loop, ShapeGeometry.Settings(shapes = 1f)))
+        // A rough one: a line bowed 12% and a circle that wobbles 60%, taken only at high.
+        val rough = trace((0..20).map { it * 250f to (5000f * 0.12f * sin(PI * it / 20)).toFloat() })
+        assertNull(ShapeGeometry.snap(rough, ShapeGeometry.Settings(lines = 1f)))
+        assertNotNull(ShapeGeometry.snap(rough, ShapeGeometry.Settings(lines = high)))
+        val sloppy = trace(lobed(0.6f))
+        assertNull(ShapeGeometry.snap(sloppy, ShapeGeometry.Settings(shapes = 1f)))
+        assertNotNull(ShapeGeometry.snap(sloppy, ShapeGeometry.Settings(shapes = high)))
+        // Level: a line 4 degrees off level is made level at medium, not at low.
+        val slant = trace(listOf(0f to 0f, 5000f to 350f))
+        val medium = ShapeGeometry.snap(slant, ShapeGeometry.Settings(level = 1f))!!
+        val strict = ShapeGeometry.snap(slant, ShapeGeometry.Settings(level = low))!!
+        assertEquals(medium[0].y, medium[1].y, 0f)
+        assertTrue(abs(strict[1].y - strict[0].y) > 100f)
+    }
+
+    @Test
     fun holdStartsAgainOnlyWhenThePenMovesMoreThanOneMillimetre() {
         val h = ShapeGeometry.HoldTracker()
         h.start(0f, 0f)

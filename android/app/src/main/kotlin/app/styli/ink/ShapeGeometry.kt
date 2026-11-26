@@ -48,35 +48,46 @@ object ShapeGeometry {
     }
 
     /**
-     * The clean points for [pts], or null if the stroke is not a line or a shape (or is too small). [k] is how
-     * forgiving to be: 1 is the normal setting, less asks for a neater drawing, more takes a sloppier one.
+     * The person's penmanship settings, each separate. [lines] and [shapes] say how forgiving to be about what
+     * counts as a line or a shape (0 turns it off, 1 is normal, less asks for a neater drawing, more takes a
+     * sloppier one); [level] the same for snapping to level and upright; [holdMs] how long the pen is held.
      */
-    fun snap(pts: List<Pt>, k: Float = 1f): List<Pt>? {
+    data class Settings(val lines: Float = 1f, val shapes: Float = 1f, val level: Float = 1f, val holdMs: Long = HOLD_MS)
+
+    /** The clean points for [pts], or null if the stroke is not a line or a shape (or is too small). */
+    fun snap(pts: List<Pt>, k: Float): List<Pt>? = snap(pts, Settings(k, k, k))
+
+    fun snap(pts: List<Pt>, s: Settings = Settings()): List<Pt>? {
         if (pts.size < 3) return null
         val poly = pts.map { it.x to it.y }
         val path = length(poly)
         val gap = hypot(poly.last().first - poly.first().first, poly.last().second - poly.first().second)
-        val xy = (if (gap <= CLOSE_GAP * k * path) shape(poly, k) else line(poly, path, k)) ?: return null
+        val closed = gap <= min(CLOSE_GAP * s.shapes, 0.35f) * path
+        val xy = (if (closed) shape(poly, s) else line(poly, path, s)) ?: return null
         val end = pts.last().t
         return xy.mapIndexed { i, p -> Pt(p.first, p.second, end * i / max(1, xy.size - 1), 1f) }
     }
 
-    private fun line(poly: List<P>, path: Float, k: Float): List<P>? {
+    private fun line(poly: List<P>, path: Float, s: Settings): List<P>? {
+        val k = s.lines
+        if (k <= 0f) return null
         val (sx, sy) = poly.first()
         val (ex, ey) = poly.last()
         val chord = hypot(ex - sx, ey - sy)
         if (chord < MIN_SIZE || path > chord * (1 + 0.4f * k)) return null
         for ((x, y) in poly) if (abs((ex - sx) * (y - sy) - (ey - sy) * (x - sx)) / chord > LINE_TOL * k * chord) return null
-        return listOf(sx to sy, LineGeometry.end(sx, sy, ex, ey, LEVEL_DEG * k))
+        return listOf(sx to sy, LineGeometry.end(sx, sy, ex, ey, LEVEL_DEG * s.level))
     }
 
-    private fun shape(poly: List<P>, k: Float): List<P>? {
+    private fun shape(poly: List<P>, set: Settings): List<P>? {
+        val k = set.shapes
+        if (k <= 0f) return null
         val s = resample(poly + poly.first(), SAMPLES)
         val w = s.maxOf { it.first } - s.minOf { it.first }
         val h = s.maxOf { it.second } - s.minOf { it.second }
         val diag = hypot(w, h)
         if (diag < MIN_SIZE) return null
-        val candidates = listOfNotNull(ellipse(s, k), rectangle(s, k), triangle(s))
+        val candidates = listOfNotNull(ellipse(s, k, set.level), rectangle(s, set.level), triangle(s))
         val best = candidates.minBy { it.first }
         return if (best.first / s.size / diag <= SHAPE_TOL * k) best.second else null
     }
@@ -105,12 +116,12 @@ object ShapeGeometry {
      * Level, or upright, if within [SNAP_DEG] of it. Not wrapped (90 stays 90, 180 stays 180): the box's two
      * half-sizes belong to the frame's own axes, so snapping 88 to 0 would swap width and height.
      */
-    private fun levelled(deg: Int, k: Float): Int {
+    private fun levelled(deg: Int, level: Float): Int {
         val r = deg % 90
-        return if (min(r, 90 - r) <= SNAP_DEG * k) Math.round(deg / 90.0).toInt() * 90 else deg
+        return if (min(r, 90 - r) <= SNAP_DEG * level) Math.round(deg / 90.0).toInt() * 90 else deg
     }
 
-    private fun ellipse(s: List<P>, k: Float): Pair<Float, List<P>>? {
+    private fun ellipse(s: List<P>, k: Float, level: Float): Pair<Float, List<P>>? {
         var best: Triple<Float, Int, Frame>? = null
         for (deg in 0 until 180 step 3) {
             val f = frame(s, deg)
@@ -128,7 +139,7 @@ object ShapeGeometry {
         var a = f.a
         var b = f.b
         var deg = deg0
-        if (abs(a - b) <= CIRCLE_RATIO * k * max(a, b)) { a = (a + b) / 2; b = a } else deg = levelled(deg, k)
+        if (abs(a - b) <= CIRCLE_RATIO * k * max(a, b)) { a = (a + b) / 2; b = a } else deg = levelled(deg, level)
         // Turn the box's middle with the new angle: the middle is fixed in the page, not in the frame.
         val mid = unturn(f.cu, f.cv, deg0)
         val pts = (0 until ELLIPSE_POINTS).map {
@@ -139,7 +150,7 @@ object ShapeGeometry {
         return sum to pts + pts.first()
     }
 
-    private fun rectangle(s: List<P>, k: Float): Pair<Float, List<P>>? {
+    private fun rectangle(s: List<P>, level: Float): Pair<Float, List<P>>? {
         var best: Triple<Float, Int, Frame>? = null
         for (deg in 0 until 90 step 3) {
             val f = frame(s, deg)
@@ -153,7 +164,7 @@ object ShapeGeometry {
             if (best == null || sum < best.first) best = Triple(sum, deg, f)
         }
         val (sum, deg0, f) = best ?: return null
-        val deg = levelled(deg0, k)
+        val deg = levelled(deg0, level)
         val mid = unturn(f.cu, f.cv, deg0)
         val corners = listOf(-1f to -1f, 1f to -1f, 1f to 1f, -1f to 1f).map { (sx, sy) ->
             val (x, y) = unturn(sx * f.a, sy * f.b, deg)

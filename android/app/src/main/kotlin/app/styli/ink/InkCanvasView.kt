@@ -65,12 +65,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     var highlighterColor = 0x99FFEB3B.toInt() // a see-through yellow, so the writing shows through
     var highlighterWidth = 400 // 4 mm
 
-    /**
-     * Hold the pen still at the end of a pen stroke and a line or shape is drawn clean. 0 is off; 1 is normal,
-     * less is stricter about what counts as a line or shape, more is more forgiving (see [ShapeGeometry.snap]).
-     */
-    var straightenStrength = 1f
-    private val autoStraighten get() = straightenStrength > 0f
+    /** Hold the pen still at the end of a pen stroke and a line or shape is drawn clean (see [ShapeGeometry.Settings]). */
+    var penmanship = ShapeGeometry.Settings()
+    private val autoStraighten get() = penmanship.lines > 0f || penmanship.shapes > 0f
 
     val canUndo get() = model.canUndo
     val canRedo get() = model.canRedo
@@ -261,7 +258,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private val holdCheck = Runnable {
         val id = strokeId ?: return@Runnable
         if (!autoStraighten || liveTool != StrokeTool.TOOL_PEN) return@Runnable
-        val clean = ShapeGeometry.snap(drawn, straightenStrength) ?: return@Runnable
+        val clean = ShapeGeometry.snap(drawn, penmanship) ?: return@Runnable
         liveLayer.cancelStroke(id, null)
         strokeId = null
         snapped = clean
@@ -302,7 +299,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val i = event.findPointerIndex(pointerId)
         when (event.actionMasked) {
             MotionEvent.ACTION_MOVE -> if (i >= 0 && collect(event, i)) {
-                ShapeGeometry.snap(drawn, straightenStrength)?.let { snapped = it } // moved on: the clean shape follows
+                ShapeGeometry.snap(drawn, penmanship)?.let { snapped = it } // moved on: the clean shape follows
                 pageLayer.invalidate()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
@@ -399,7 +396,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 hold.start(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
                 collect(event, i)
                 removeCallbacks(holdCheck)
-                if (autoStraighten && liveTool == StrokeTool.TOOL_PEN) postDelayed(holdCheck, ShapeGeometry.HOLD_MS)
+                if (autoStraighten && liveTool == StrokeTool.TOOL_PEN) postDelayed(holdCheck, penmanship.holdMs)
                 return true
             }
             if (!isPen(event.getToolType(i)) && strokeId == null && (action == MotionEvent.ACTION_DOWN || gestureActive)) {
@@ -651,7 +648,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     val k = event.findPointerIndex(pointerId)
                     if (k >= 0 && collect(event, k)) { // moved on: the hold starts again
                         removeCallbacks(holdCheck)
-                        if (autoStraighten && liveTool == StrokeTool.TOOL_PEN) postDelayed(holdCheck, ShapeGeometry.HOLD_MS)
+                        if (autoStraighten && liveTool == StrokeTool.TOOL_PEN) postDelayed(holdCheck, penmanship.holdMs)
                     }
                     liveLayer.addToStroke(event, pointerId, id, predicted)
                 }
