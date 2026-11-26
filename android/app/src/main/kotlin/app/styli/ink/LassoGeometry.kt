@@ -175,6 +175,19 @@ object LassoGeometry {
         }.mapTo(HashSet()) { it.id }
     }
 
+    /** The pictures more than half inside the loop by area, judged like shapes (in the picture's own frame). */
+    fun selectedPictures(pictures: List<Picture>, poly: FloatArray): Set<String> {
+        if (poly.size < 6) return emptySet()
+        return pictures.filter { p ->
+            var inside = 0
+            for (i in 0 until GRID) for (j in 0 until GRID) {
+                val (x, y) = p.toPage(p.width * (i + 0.5f) / GRID, p.height * (j + 0.5f) / GRID)
+                if (contains(poly, x, y)) inside++
+            }
+            inside * 2 > GRID * GRID
+        }.mapTo(HashSet()) { it.id }
+    }
+
     /** The fills more than half inside the loop by area (judged on a grid over each fill's box, counting only what is painted). */
     fun selectedFills(fills: List<Fill>, poly: FloatArray): Set<String> {
         if (poly.size < 6) return emptySet()

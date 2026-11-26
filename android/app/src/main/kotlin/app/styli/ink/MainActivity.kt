@@ -2,7 +2,12 @@ package app.styli.ink
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -21,6 +26,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
@@ -105,6 +112,17 @@ private fun InkScreen() {
     var naming by remember { mutableStateOf<Clip?>(null) } // the clip being named
     var nameText by remember { mutableStateOf("") }
 
+    val context = LocalContext.current
+    // The system photo picker: no storage permission is needed.
+    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            val data = context.contentResolver.openInputStream(uri)?.use { it.readNBytes(PictureStore.MAX_BYTES + 1) }
+            val ok = data != null && data.size <= PictureStore.MAX_BYTES &&
+                canvas?.insertPicture(data, PictureDecoder.extension(context.contentResolver.getType(uri))) == true
+            if (!ok) Toast.makeText(context, if (data != null && data.size > PictureStore.MAX_BYTES) "That picture is over 25 MB, so it was not added" else "That file could not be read as a picture", Toast.LENGTH_LONG).show()
+        }
+    }
+
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
         canvas?.setPage(PageSet.newBuilder().setWidth(w).setHeight(h).setTemplate(template).setInfinite(infinite).build())
@@ -118,6 +136,7 @@ private fun InkScreen() {
                     it.onLatency = { text -> latency = text }
                     it.onZoom = { percent -> zoom = percent }
                     it.onPlacing = { c -> placing = c }
+                    it.onToolChanged = { t -> tool = t }
                     it.onPageChanged = {
                         // The page buttons show the page that is now current.
                         val p = it.page
@@ -139,6 +158,9 @@ private fun InkScreen() {
             Button(onClick = { canvas?.undoPage() }, gap) { Text("Undo page change") }
             Button(onClick = { canvas?.redoPage() }, gap) { Text("Redo page change") }
             Button(onClick = { canvas?.deleteSelection() }, gap) { Text("Delete") }
+            Button(onClick = { canvas?.toggleCrop() }, gap) { Text("Crop") }
+            Button(onClick = { canvas?.resetCrop() }, gap) { Text("Reset crop") }
+            Button(onClick = { pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, gap) { Text("Image") }
 
             // The tool, then whatever that tool needs.
             Menu("Tool: " + toolName(tool)) { close ->
@@ -262,7 +284,7 @@ private fun InkScreen() {
                 Heading(if (clips.isEmpty()) "Nothing saved yet (lasso something, then save it)" else "Pick one, then tap a page with the pen")
                 for (c in clips) DropdownMenuItem(
                     text = { Text(c.name) },
-                    leadingIcon = { ClipPreview(c) },
+                    leadingIcon = { ClipPreview(c) { sha -> canvas?.pictureThumb(sha) } },
                     onClick = { canvas?.placeClip(c); close() },
                     trailingIcon = {
                         Row {
@@ -493,7 +515,7 @@ private fun eraseLabel(e: EraseOnly) = when (e) {
  * drawing, which is tied to the page view. Enough to tell clips apart.
  */
 @Composable
-private fun ClipPreview(c: Clip) {
+private fun ClipPreview(c: Clip, thumb: (String) -> android.graphics.Bitmap?) {
     Canvas(Modifier.size(48.dp)) {
         val k = minOf(size.width / maxOf(c.width, 1f), size.height / maxOf(c.height, 1f))
         fun p(x: Float, y: Float) = Offset(x * k, y * k)
@@ -503,9 +525,26 @@ private fun ClipPreview(c: Clip) {
                 drawLine(Color.DarkGray, p(ax, ay), p(bx, by), 2f)
             }
         }
+        for (pic in c.pictures) { // the picture itself, cropped and turned as it is
+            val bmp = thumb(pic.sha)
+            if (bmp == null) poly(pic.corners(), true)
+            else drawIntoCanvas { cv ->
+                val n = cv.nativeCanvas
+                n.save()
+                n.translate(pic.x * k, pic.y * k)
+                n.rotate(Math.toDegrees(pic.angle.toDouble()).toFloat())
+                val src = android.graphics.Rect(
+                    Math.round(pic.cropX * bmp.width), Math.round(pic.cropY * bmp.height),
+                    Math.round((pic.cropX + pic.cropW) * bmp.width), Math.round((pic.cropY + pic.cropH) * bmp.height),
+                )
+                n.drawBitmap(bmp, src, android.graphics.RectF(0f, 0f, pic.width * k, pic.height * k), null)
+                n.restore()
+            }
+        }
         for (i in c.items) poly(i.pts.map { it.x to it.y }, false)
         for (t in c.tables) poly(listOf(t.x to t.y, t.x + t.width to t.y, t.x + t.width to t.y + t.height, t.x to t.y + t.height), true)
         for (s in c.shapes) poly(s.corners(), true)
+        for (p in c.pictures) poly(p.corners(), true)
         for (t in c.texts) poly(t.corners(t.fontSize * 1.3f), true)
         for (f in c.fills) for (r in f.rings) poly(r, true)
         for (n in c.connectors) poly(n.path { id -> c.shapes.firstOrNull { it.id == id } }, false)

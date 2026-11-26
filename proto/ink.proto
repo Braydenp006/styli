@@ -55,6 +55,8 @@ message Event {
     ConnectorRemoved connector_removed = 22;
     FillSet fill_set = 23;
     FillRemoved fill_removed = 24;
+    ImageSet image_set = 25;
+    ImageRemoved image_removed = 26;
   }
 }
 
@@ -147,7 +149,7 @@ message TableRemoved {}
 
 // Layers. A page's objects (strokes, text boxes, tables, shapes, connectors, fills) sit
 // in one order, bottom to top. A reader keeps a list: a new stroke, text box,
-// shape or connector goes on top, a new table or fill goes at the bottom, a
+// shape, connector or picture goes on top, a new table or fill goes at the bottom, a
 // removed one leaves the list.
 // ZMoved then puts the object named by Event.id just above the object `above`,
 // or at the very bottom if `above` is empty. A writer emits one wherever the
@@ -297,3 +299,34 @@ message FillSet {
 }
 
 message FillRemoved {}
+
+// A picture on the page. The whole state of it, written like a shape (the last
+// event wins). The pixels are not in the log: the picture's own file (as it
+// was picked, never changed) is an attached file of the note's group, named by
+// its hash, and this only points at it. Drawn in the page's layers.
+message ImageSet {
+  // Where the picture is on the page and how big, in page units; `angle` in
+  // 0.01 degrees clockwise about the top left corner, like a text box.
+  sint32 x = 1;
+  sint32 y = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  sint32 angle = 5;
+  // The part of the file that shows, as a whole number of 1/10000 of the
+  // file's width and height (so cropping hides the rest and loses nothing).
+  // A zero width or height, so a log with none, shows the whole file.
+  uint32 crop_x = 6;
+  uint32 crop_y = 7;
+  uint32 crop_w = 8;
+  uint32 crop_h = 9;
+  // The attached file's path relative to the page's log, and the SHA-256 of its
+  // bytes: the sync layer names and checks the file by this hash.
+  string file = 10;
+  bytes sha256 = 11;
+  // The file's size in pixels, after any rotation its metadata asks for, so a
+  // reader can lay the picture out without opening the file.
+  uint32 src_width = 12;
+  uint32 src_height = 13;
+}
+
+message ImageRemoved {}

@@ -16,6 +16,9 @@ class Notebook(first: PageModel = PageModel()) {
     private val madeOrder = ArrayList<PageModel>() // in the order they were added
     private val from = HashMap<PageModel, PageModel>() // the page each one was added from
 
+    /** The bytes of every picture on any page of this notebook, by hash (pictures move between pages by their hash). */
+    val pictureFiles = PictureStore()
+
     var current: PageModel = first
         private set
 

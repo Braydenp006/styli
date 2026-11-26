@@ -323,6 +323,41 @@ func TestShapesConnectorsFills(t *testing.T) {
 	}
 }
 
+// A picture reads back whole, its crop is a plain set of numbers (zero meaning the whole file), and it dumps readably.
+func TestImageSetAndRemoved(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	sum := bytes.Repeat([]byte{0xab}, 32)
+	img := &inkpb.ImageSet{X: -50, Y: 80, Width: 6000, Height: 4000, Angle: 900, CropX: 1000, CropY: 500, CropW: 8000, CropH: 9000,
+		File: "page-001.assets/ab.jpg", Sha256: sum, SrcWidth: 4032, SrcHeight: 3024}
+	whole := &inkpb.ImageSet{Width: 100, Height: 100, File: "a.png", Sha256: sum}
+	evs := []*inkpb.Event{
+		{Id: id, Device: "d", Seq: 1, Kind: &inkpb.Event_ImageSet{ImageSet: img}},
+		{Id: id, Device: "d", Seq: 2, Kind: &inkpb.Event_ImageSet{ImageSet: whole}},
+		{Id: id, Device: "d", Seq: 3, Kind: &inkpb.Event_ImageRemoved{ImageRemoved: &inkpb.ImageRemoved{}}},
+	}
+	if err := Append(p, evs...); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 3 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[0].GetImageSet(), img) || !proto.Equal(l.Events[1].GetImageSet(), whole) {
+		t.Error("an event changed on the way")
+	}
+	if g := l.Events[1].GetImageSet(); g.CropW != 0 || g.CropH != 0 {
+		t.Error("an absent crop must read as zero, the whole file")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"image-set", "at=(-50,80) size=6000x4000 angle=900 crop=(1000,500,8000,9000) src=4032x3024 page-001.assets/ab.jpg " + strings.Repeat("ab", 32), "image-removed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // A dotted stroke is an ordinary stroke event with its own tool; it reads back and dumps by name.
 func TestDottedStroke(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p")

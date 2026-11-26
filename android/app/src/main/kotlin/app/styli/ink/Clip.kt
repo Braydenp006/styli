@@ -2,7 +2,7 @@ package app.styli.ink
 
 /**
  * A saved group of things from a page, to put down again later. Everything is kept as the page's own kinds
- * (strokes, text boxes, tables, shapes, connectors, fills), moved so the group's top-left corner is (0, 0).
+ * (strokes, text boxes, tables, shapes, connectors, fills, pictures), moved so the group's top-left corner is (0, 0).
  * [order] is the layers, bottom first. Never changes once made. In memory only for now.
  */
 class Clip(
@@ -16,10 +16,11 @@ class Clip(
     val connectors: List<Connector>,
     val fills: List<Fill>,
     val order: List<String>,
+    val pictures: List<Picture> = emptyList(),
 ) {
     val isEmpty get() = order.isEmpty()
 
-    fun named(n: String) = Clip(n, width, height, items, texts, tables, shapes, connectors, fills, order)
+    fun named(n: String) = Clip(n, width, height, items, texts, tables, shapes, connectors, fills, order, pictures)
 
     /**
      * The same group moved by (dx, dy), every ID changed by [rename] (the same old ID must give the same new one,
@@ -37,6 +38,7 @@ class Clip(
             connectors.map { Connector(rename(it.id), end(it.from), end(it.to), it.fromHead, it.toHead, it.color, it.lineWidth, it.dashed, it.route, it.bend, it.via.map { (x, y) -> m.x(x, y) to m.y(x, y) }) },
             fills.map { f -> f.map(m).let { Fill(rename(f.id), it.color, it.rings) } },
             order.map(rename),
+            pictures.map { it.moved(m).copy(id = rename(it.id)) },
         )
     }
 
@@ -61,6 +63,7 @@ class Clip(
                 model.items.filter { it.id in ids }, model.texts.filter { it.id in ids }, model.tables.filter { it.id in ids },
                 model.shapes.filter { it.id in ids }, conns, model.fills.filter { it.id in ids },
                 model.order.filter { it in ids },
+                model.pictures.filter { it.id in ids },
             ).moved(-l.toFloat(), -t.toFloat()) { it }
         }
     }

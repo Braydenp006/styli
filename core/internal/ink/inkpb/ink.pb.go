@@ -488,6 +488,8 @@ type Event struct {
 	//	*Event_ConnectorRemoved
 	//	*Event_FillSet
 	//	*Event_FillRemoved
+	//	*Event_ImageSet
+	//	*Event_ImageRemoved
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -693,6 +695,24 @@ func (x *Event) GetFillRemoved() *FillRemoved {
 	return nil
 }
 
+func (x *Event) GetImageSet() *ImageSet {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ImageSet); ok {
+			return x.ImageSet
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetImageRemoved() *ImageRemoved {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ImageRemoved); ok {
+			return x.ImageRemoved
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -757,6 +777,14 @@ type Event_FillRemoved struct {
 	FillRemoved *FillRemoved `protobuf:"bytes,24,opt,name=fill_removed,json=fillRemoved,proto3,oneof"`
 }
 
+type Event_ImageSet struct {
+	ImageSet *ImageSet `protobuf:"bytes,25,opt,name=image_set,json=imageSet,proto3,oneof"`
+}
+
+type Event_ImageRemoved struct {
+	ImageRemoved *ImageRemoved `protobuf:"bytes,26,opt,name=image_removed,json=imageRemoved,proto3,oneof"`
+}
+
 func (*Event_StrokeAdded) isEvent_Kind() {}
 
 func (*Event_StrokeErased) isEvent_Kind() {}
@@ -786,6 +814,10 @@ func (*Event_ConnectorRemoved) isEvent_Kind() {}
 func (*Event_FillSet) isEvent_Kind() {}
 
 func (*Event_FillRemoved) isEvent_Kind() {}
+
+func (*Event_ImageSet) isEvent_Kind() {}
+
+func (*Event_ImageRemoved) isEvent_Kind() {}
 
 type StrokeAdded struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1325,7 +1357,7 @@ func (*TableRemoved) Descriptor() ([]byte, []int) {
 
 // Layers. A page's objects (strokes, text boxes, tables, shapes, connectors, fills) sit
 // in one order, bottom to top. A reader keeps a list: a new stroke, text box,
-// shape or connector goes on top, a new table or fill goes at the bottom, a
+// shape, connector or picture goes on top, a new table or fill goes at the bottom, a
 // removed one leaves the list.
 // ZMoved then puts the object named by Event.id just above the object `above`,
 // or at the very bottom if `above` is empty. A writer emits one wherever the
@@ -2083,6 +2115,195 @@ func (*FillRemoved) Descriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{19}
 }
 
+// A picture on the page. The whole state of it, written like a shape (the last
+// event wins). The pixels are not in the log: the picture's own file (as it
+// was picked, never changed) is an attached file of the note's group, named by
+// its hash, and this only points at it. Drawn in the page's layers.
+type ImageSet struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Where the picture is on the page and how big, in page units; `angle` in
+	// 0.01 degrees clockwise about the top left corner, like a text box.
+	X      int32  `protobuf:"zigzag32,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y      int32  `protobuf:"zigzag32,2,opt,name=y,proto3" json:"y,omitempty"`
+	Width  uint32 `protobuf:"varint,3,opt,name=width,proto3" json:"width,omitempty"`
+	Height uint32 `protobuf:"varint,4,opt,name=height,proto3" json:"height,omitempty"`
+	Angle  int32  `protobuf:"zigzag32,5,opt,name=angle,proto3" json:"angle,omitempty"`
+	// The part of the file that shows, as a whole number of 1/10000 of the
+	// file's width and height (so cropping hides the rest and loses nothing).
+	// A zero width or height, so a log with none, shows the whole file.
+	CropX uint32 `protobuf:"varint,6,opt,name=crop_x,json=cropX,proto3" json:"crop_x,omitempty"`
+	CropY uint32 `protobuf:"varint,7,opt,name=crop_y,json=cropY,proto3" json:"crop_y,omitempty"`
+	CropW uint32 `protobuf:"varint,8,opt,name=crop_w,json=cropW,proto3" json:"crop_w,omitempty"`
+	CropH uint32 `protobuf:"varint,9,opt,name=crop_h,json=cropH,proto3" json:"crop_h,omitempty"`
+	// The attached file's path relative to the page's log, and the SHA-256 of its
+	// bytes: the sync layer names and checks the file by this hash.
+	File   string `protobuf:"bytes,10,opt,name=file,proto3" json:"file,omitempty"`
+	Sha256 []byte `protobuf:"bytes,11,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// The file's size in pixels, after any rotation its metadata asks for, so a
+	// reader can lay the picture out without opening the file.
+	SrcWidth      uint32 `protobuf:"varint,12,opt,name=src_width,json=srcWidth,proto3" json:"src_width,omitempty"`
+	SrcHeight     uint32 `protobuf:"varint,13,opt,name=src_height,json=srcHeight,proto3" json:"src_height,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImageSet) Reset() {
+	*x = ImageSet{}
+	mi := &file_ink_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImageSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImageSet) ProtoMessage() {}
+
+func (x *ImageSet) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImageSet.ProtoReflect.Descriptor instead.
+func (*ImageSet) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ImageSet) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *ImageSet) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *ImageSet) GetWidth() uint32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *ImageSet) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *ImageSet) GetAngle() int32 {
+	if x != nil {
+		return x.Angle
+	}
+	return 0
+}
+
+func (x *ImageSet) GetCropX() uint32 {
+	if x != nil {
+		return x.CropX
+	}
+	return 0
+}
+
+func (x *ImageSet) GetCropY() uint32 {
+	if x != nil {
+		return x.CropY
+	}
+	return 0
+}
+
+func (x *ImageSet) GetCropW() uint32 {
+	if x != nil {
+		return x.CropW
+	}
+	return 0
+}
+
+func (x *ImageSet) GetCropH() uint32 {
+	if x != nil {
+		return x.CropH
+	}
+	return 0
+}
+
+func (x *ImageSet) GetFile() string {
+	if x != nil {
+		return x.File
+	}
+	return ""
+}
+
+func (x *ImageSet) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+func (x *ImageSet) GetSrcWidth() uint32 {
+	if x != nil {
+		return x.SrcWidth
+	}
+	return 0
+}
+
+func (x *ImageSet) GetSrcHeight() uint32 {
+	if x != nil {
+		return x.SrcHeight
+	}
+	return 0
+}
+
+type ImageRemoved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImageRemoved) Reset() {
+	*x = ImageRemoved{}
+	mi := &file_ink_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImageRemoved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImageRemoved) ProtoMessage() {}
+
+func (x *ImageRemoved) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImageRemoved.ProtoReflect.Descriptor instead.
+func (*ImageRemoved) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{21}
+}
+
 var File_ink_proto protoreflect.FileDescriptor
 
 const file_ink_proto_rawDesc = "" +
@@ -2093,7 +2314,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x05event\x18\x02 \x01(\v2\x13.styli.ink.v1.EventH\x00R\x05eventB\x06\n" +
 	"\x04body\"\"\n" +
 	"\x06Header\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\"\x87\b\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\"\x81\t\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\tR\x06device\x12\x10\n" +
@@ -2115,7 +2336,9 @@ const file_ink_proto_rawDesc = "" +
 	"\rconnector_set\x18\x15 \x01(\v2\x1a.styli.ink.v1.ConnectorSetH\x00R\fconnectorSet\x12M\n" +
 	"\x11connector_removed\x18\x16 \x01(\v2\x1e.styli.ink.v1.ConnectorRemovedH\x00R\x10connectorRemoved\x122\n" +
 	"\bfill_set\x18\x17 \x01(\v2\x15.styli.ink.v1.FillSetH\x00R\afillSet\x12>\n" +
-	"\ffill_removed\x18\x18 \x01(\v2\x19.styli.ink.v1.FillRemovedH\x00R\vfillRemovedB\x06\n" +
+	"\ffill_removed\x18\x18 \x01(\v2\x19.styli.ink.v1.FillRemovedH\x00R\vfillRemoved\x125\n" +
+	"\timage_set\x18\x19 \x01(\v2\x16.styli.ink.v1.ImageSetH\x00R\bimageSet\x12A\n" +
+	"\rimage_removed\x18\x1a \x01(\v2\x1a.styli.ink.v1.ImageRemovedH\x00R\fimageRemovedB\x06\n" +
 	"\x04kind\"\xd9\x01\n" +
 	"\vStrokeAdded\x12&\n" +
 	"\x04tool\x18\x01 \x01(\x0e2\x12.styli.ink.v1.ToolR\x04tool\x12\x14\n" +
@@ -2221,7 +2444,24 @@ const file_ink_proto_rawDesc = "" +
 	"\aFillSet\x12\x14\n" +
 	"\x05color\x18\x01 \x01(\rR\x05color\x12(\n" +
 	"\x05rings\x18\x02 \x03(\v2\x12.styli.ink.v1.RingR\x05rings\"\r\n" +
-	"\vFillRemoved*;\n" +
+	"\vFillRemoved\"\xae\x02\n" +
+	"\bImageSet\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x11R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x11R\x01y\x12\x14\n" +
+	"\x05width\x18\x03 \x01(\rR\x05width\x12\x16\n" +
+	"\x06height\x18\x04 \x01(\rR\x06height\x12\x14\n" +
+	"\x05angle\x18\x05 \x01(\x11R\x05angle\x12\x15\n" +
+	"\x06crop_x\x18\x06 \x01(\rR\x05cropX\x12\x15\n" +
+	"\x06crop_y\x18\a \x01(\rR\x05cropY\x12\x15\n" +
+	"\x06crop_w\x18\b \x01(\rR\x05cropW\x12\x15\n" +
+	"\x06crop_h\x18\t \x01(\rR\x05cropH\x12\x12\n" +
+	"\x04file\x18\n" +
+	" \x01(\tR\x04file\x12\x16\n" +
+	"\x06sha256\x18\v \x01(\fR\x06sha256\x12\x1b\n" +
+	"\tsrc_width\x18\f \x01(\rR\bsrcWidth\x12\x1d\n" +
+	"\n" +
+	"src_height\x18\r \x01(\rR\tsrcHeight\"\x0e\n" +
+	"\fImageRemoved*;\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
 	"\x10TOOL_HIGHLIGHTER\x10\x01\x12\x0f\n" +
@@ -2265,7 +2505,7 @@ func file_ink_proto_rawDescGZIP() []byte {
 }
 
 var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_ink_proto_goTypes = []any{
 	(Tool)(0),                // 0: styli.ink.v1.Tool
 	(Template)(0),            // 1: styli.ink.v1.Template
@@ -2293,6 +2533,8 @@ var file_ink_proto_goTypes = []any{
 	(*Ring)(nil),             // 23: styli.ink.v1.Ring
 	(*FillSet)(nil),          // 24: styli.ink.v1.FillSet
 	(*FillRemoved)(nil),      // 25: styli.ink.v1.FillRemoved
+	(*ImageSet)(nil),         // 26: styli.ink.v1.ImageSet
+	(*ImageRemoved)(nil),     // 27: styli.ink.v1.ImageRemoved
 }
 var file_ink_proto_depIdxs = []int32{
 	7,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
@@ -2312,22 +2554,24 @@ var file_ink_proto_depIdxs = []int32{
 	22, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
 	24, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
 	25, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
-	0,  // 17: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
-	1,  // 18: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
-	3,  // 19: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
-	2,  // 20: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
-	20, // 21: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
-	20, // 22: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
-	4,  // 23: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
-	4,  // 24: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
-	2,  // 25: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
-	5,  // 26: styli.ink.v1.ConnectorSet.route:type_name -> styli.ink.v1.ConnectorRoute
-	23, // 27: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	26, // 17: styli.ink.v1.Event.image_set:type_name -> styli.ink.v1.ImageSet
+	27, // 18: styli.ink.v1.Event.image_removed:type_name -> styli.ink.v1.ImageRemoved
+	0,  // 19: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
+	1,  // 20: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
+	3,  // 21: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
+	2,  // 22: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
+	20, // 23: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
+	20, // 24: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
+	4,  // 25: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
+	4,  // 26: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
+	2,  // 27: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
+	5,  // 28: styli.ink.v1.ConnectorSet.route:type_name -> styli.ink.v1.ConnectorRoute
+	23, // 29: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
+	30, // [30:30] is the sub-list for method output_type
+	30, // [30:30] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_ink_proto_init() }
@@ -2355,6 +2599,8 @@ func file_ink_proto_init() {
 		(*Event_ConnectorRemoved)(nil),
 		(*Event_FillSet)(nil),
 		(*Event_FillRemoved)(nil),
+		(*Event_ImageSet)(nil),
+		(*Event_ImageRemoved)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2362,7 +2608,7 @@ func file_ink_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ink_proto_rawDesc), len(file_ink_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

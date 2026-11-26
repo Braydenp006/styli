@@ -166,6 +166,10 @@ func kind(e *inkpb.Event) string {
 		return "fill-set"
 	case *inkpb.Event_FillRemoved:
 		return "fill-removed"
+	case *inkpb.Event_ImageSet:
+		return "image-set"
+	case *inkpb.Event_ImageRemoved:
+		return "image-removed"
 	case *inkpb.Event_PageSet:
 		return "page-set"
 	}
@@ -206,6 +210,9 @@ func detail(e *inkpb.Event) string {
 		return fmt.Sprintf("%s -> %s heads=%s,%s line=%08x/%d/%s route=%s bend=%d via=%d", end(c.From), end(c.To), strings.ToLower(strings.TrimPrefix(c.FromHead.String(), "ARROW_")), strings.ToLower(strings.TrimPrefix(c.ToHead.String(), "ARROW_")), c.Color, c.LineWidth, strings.ToLower(strings.TrimPrefix(c.LineStyle.String(), "LINE_")), strings.ToLower(strings.TrimPrefix(c.Route.String(), "ROUTE_")), c.Bend, len(c.Via)/2)
 	case *inkpb.Event_FillSet:
 		return fmt.Sprintf("color=%08x rings=%d", k.FillSet.Color, len(k.FillSet.Rings))
+	case *inkpb.Event_ImageSet:
+		m := k.ImageSet
+		return fmt.Sprintf("at=(%d,%d) size=%dx%d angle=%d crop=(%d,%d,%d,%d) src=%dx%d %s %x", m.X, m.Y, m.Width, m.Height, m.Angle, m.CropX, m.CropY, m.CropW, m.CropH, m.SrcWidth, m.SrcHeight, m.File, m.Sha256)
 	case *inkpb.Event_ZMoved:
 		if len(k.ZMoved.Above) == 0 {
 			return "to the bottom"

@@ -2,6 +2,7 @@ package app.styli.ink
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
@@ -181,6 +182,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             addingBend = false
             field = v
             selection.clear() // a selection only lives while the lasso is the tool
+            cropId = null
             if (pendingClip != null) { pendingClip = null; onPlacing?.invoke(null) }
             pageLayer.invalidate()
         }
@@ -285,6 +287,149 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         canvas.restore()
     }
 
+    // ---- Cropping: with one picture selected, Crop shows the whole file faintly round the part that shows, with a
+    // handle on each corner and side; dragging one moves that edge. Each drag is one undo step. ----
+
+    private var cropId: String? = null // the picture being cropped, while crop is on and it is the lone selection
+    private var cropBase: Picture? = null // as it was when the drag began
+    private var cropPreview: Picture? = null // as it would be now
+    private var cropHandle = 0
+    private val cropGhost = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply { alpha = 80 }
+
+    private fun cropTarget(): Picture? = cropId?.takeIf { selection.size == 1 && it in selection }?.let { model.pictureOf(it) }
+
+    /** Turns crop on for the one selected picture, or off. False if no picture alone is selected. */
+    fun toggleCrop(): Boolean {
+        if (cropTarget() != null) { cropId = null; pageLayer.invalidate(); return true }
+        val pic = selection.singleOrNull()?.let { model.pictureOf(it) } ?: return false
+        cropId = pic.id
+        pageLayer.invalidate()
+        return true
+    }
+
+    /** Shows the whole file again in the one selected picture, with what showed kept where it was. One undo step. */
+    fun resetCrop(): Boolean {
+        val pic = selection.singleOrNull()?.let { model.pictureOf(it) }?.takeIf { it.isCropped } ?: return false
+        model.setPicture(pic.uncropped())
+        changed(true)
+        return true
+    }
+
+    /** The eight handles on the part that shows: the corners from the top left clockwise, then the top, right, bottom and left middles (page points). */
+    private fun cropHandles(p: Picture): List<Pair<Float, Float>> = listOf(
+        p.toPage(0f, 0f), p.toPage(p.width, 0f), p.toPage(p.width, p.height), p.toPage(0f, p.height),
+        p.toPage(p.width / 2, 0f), p.toPage(p.width, p.height / 2), p.toPage(p.width / 2, p.height), p.toPage(0f, p.height / 2),
+    )
+
+    private fun drawCropOverlay(canvas: Canvas) {
+        val pic = cropPreview ?: cropTarget() ?: return
+        val g = geometry
+        fun screen(p: Pair<Float, Float>) = g.toScreenX(p.first.toDouble()).toFloat() to g.toScreenY(p.second.toDouble()).toFloat()
+        fun outline(c: List<Pair<Float, Float>>) = android.graphics.Path().apply {
+            c.map(::screen).forEachIndexed { k, (x, y) -> if (k == 0) moveTo(x, y) else lineTo(x, y) }
+            close()
+        }
+        val full = pic.uncropped()
+        val bmp = pictureBitmap(pic.sha)
+        if (bmp != null) { // the hidden part, faintly, round the part that shows
+            canvas.save()
+            canvas.clipPath(outline(full.corners()).also { it.op(outline(pic.corners()), android.graphics.Path.Op.DIFFERENCE) })
+            toScreen.setScale(g.scale.toFloat(), g.scale.toFloat())
+            toScreen.postTranslate(g.tx.toFloat(), g.ty.toFloat())
+            canvas.concat(toScreen)
+            canvas.translate(full.x, full.y)
+            canvas.rotate(Math.toDegrees(full.angle.toDouble()).toFloat())
+            canvas.drawBitmap(bmp, null, RectF(0f, 0f, full.width, full.height), cropGhost)
+            canvas.restore()
+        }
+        canvas.drawPath(outline(full.corners()), dashed)
+        canvas.drawPath(outline(pic.corners()), dashed)
+        for (h in cropHandles(pic)) screen(h).let { (x, y) -> canvas.drawCircle(x, y, 12f, handle) }
+    }
+
+    /** The drawable copy of a picture's file, for a preview of it elsewhere (null if it is gone). */
+    fun pictureThumb(sha: String): Bitmap? = pictureBitmap(sha)
+
+    private var penSeenAt = -100000L // when the pen last touched down
+
+    /** Called when the tool is changed by the canvas itself (a tap on a picture picks the lasso). */
+    var onToolChanged: ((Tool) -> Unit)? = null
+
+    /** Makes the lasso the tool and selects just [id] on the working page. */
+    private fun selectOnly(id: String) {
+        tool = Tool.LASSO // a selection only lives while the lasso is the tool, and setting it clears the old one
+        onToolChanged?.invoke(Tool.LASSO)
+        selection.add(id)
+        pageLayer.invalidate()
+    }
+
+    /** A finger tap at the screen point: if it lands on a picture (the topmost), that picture is selected with the lasso. */
+    private fun tapPicture(sx: Float, sy: Float) {
+        val wx = vp.toPageX(sx.toDouble()); val wy = vp.toPageY(sy.toDouble())
+        val l = layout
+        val page = if (l == null) work else l.pageAt(wx, wy) ?: return
+        val (ox, oy) = l?.origin(page) ?: (0.0 to 0.0)
+        val px = (wx - ox).toFloat(); val py = (wy - oy).toFloat()
+        val pic = page.order.asReversed().firstNotNullOfOrNull { page.pictureOf(it)?.takeIf { p -> p.contains(px, py) } } ?: return
+        if (page !== work) becomeWork(page)
+        selectOnly(pic.id)
+    }
+
+    // ---- Pictures: the file's bytes are in the notebook's store; a copy of at most 2048 pixels across is drawn. ----
+
+    private val pictureBitmaps = object : android.util.LruCache<String, Bitmap>(64 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+    private val picturePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val pictureMissing = Paint().apply { color = 0xFFE0E0E0.toInt() }
+
+    /** The drawable copy of a picture's file; decoded again if the cache let it go. Null if the file is gone or unreadable. */
+    private fun pictureBitmap(sha: String): Bitmap? =
+        pictureBitmaps.get(sha) ?: notebook.pictureFiles.get(sha)?.let { PictureDecoder.decode(it)?.bitmap }?.also { pictureBitmaps.put(sha, it) }
+
+    private fun drawPicture(canvas: Canvas, pic: Picture, vl: Float, vt: Float, vr: Float, vb: Float) {
+        val corners = pic.corners()
+        if (corners.maxOf { it.first } < vl || corners.minOf { it.first } > vr || corners.maxOf { it.second } < vt || corners.minOf { it.second } > vb) return
+        val moved = dragMap?.takeIf { pic.id in selection }
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        canvas.translate(pic.x, pic.y)
+        canvas.rotate(Math.toDegrees(pic.angle.toDouble()).toFloat())
+        val bmp = pictureBitmap(pic.sha)
+        if (bmp == null) canvas.drawRect(0f, 0f, pic.width, pic.height, pictureMissing)
+        else {
+            val src = android.graphics.Rect(
+                Math.round(pic.cropX * bmp.width), Math.round(pic.cropY * bmp.height),
+                Math.round((pic.cropX + pic.cropW) * bmp.width), Math.round((pic.cropY + pic.cropH) * bmp.height),
+            )
+            canvas.drawBitmap(bmp, src, RectF(0f, 0f, pic.width, pic.height), picturePaint)
+        }
+        canvas.restore()
+    }
+
+    /**
+     * Puts a picture on the working page from the bytes of a picked file ([extension] names its kind): 60% of the page's
+     * width across, centred on the part of the page in view. One undo step. False if the bytes are not a picture or
+     * are over [PictureStore.MAX_BYTES]; nothing is added then.
+     */
+    fun insertPicture(data: ByteArray, extension: String): Boolean {
+        if (data.size > PictureStore.MAX_BYTES) return false
+        val d = PictureDecoder.decode(data) ?: return false
+        finishText()
+        val sha = notebook.pictureFiles.put(data)
+        pictureBitmaps.put(sha, d.bitmap)
+        val pw = work.page.width.toFloat(); val ph = work.page.height.toFloat()
+        // The middle of the screen, kept on the page: where the picture lands when the page is only partly in view.
+        val cx = geometry.toPageX(width / 2.0).toFloat().coerceIn(0f, pw)
+        val cy = geometry.toPageY(height / 2.0).toFloat().coerceIn(0f, ph)
+        val pic = work.addPicture { id ->
+            Picture.placed(id, "$sha.$extension", sha, d.width, d.height, pw, ph).let { it.copy(x = cx - it.width / 2, y = cy - it.height / 2) }
+        }
+        changed(true)
+        selectOnly(pic.id) // so it can be moved at once
+        return true
+    }
+
     /** Draws one thing of the active page (in page units: the canvas already has the page's matrix). */
     private fun drawObject(canvas: Canvas, id: String, vl: Float, vt: Float, vr: Float, vb: Float) {
         val table = model.tableOf(id)
@@ -306,6 +451,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (fill != null) { drawFill(canvas, fill); return }
         val shape = model.shapeOf(id)
         if (shape != null) { drawShape(canvas, shape); return }
+        val pic = model.pictureOf(id)
+        if (pic != null) { drawPicture(canvas, cropPreview?.takeIf { it.id == pic.id } ?: pic, vl, vt, vr, vb); return }
         val conn = model.connectorOf(id)
         if (conn != null) { drawConnector(canvas, conn); return }
         val box = model.textOf(id) ?: return
@@ -516,7 +663,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         dottedPaths.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         placed.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         layouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.texts.map { it.id } })
-        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id } + model.shapes.map { it.id } + model.fills.map { it.id } + model.connectors.map { it.id })
+        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id } + model.shapes.map { it.id } + model.fills.map { it.id } + model.connectors.map { it.id } + model.pictures.map { it.id })
         fillPaths.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.fills.map { it.id } })
         shapeLayouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.shapes.map { it.id } })
         cellSel = cellSel?.takeIf { (r, c) -> lineTable()?.let { r < it.rows && c < it.cols } == true }
@@ -650,6 +797,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             val i = event.actionIndex
             if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !shaping && !bucketing && !connecting && !dotting && !textTapping && !tabling) {
                 gestureActive = false // a pen landing after a palm takes over
+                penSeenAt = event.eventTime
                 pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
@@ -1517,7 +1665,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private val selection = HashSet<String>()
     private var lassoing = false
-    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE, LINE, CONN_FROM, CONN_TO, CONN_BEND, CONN_VIA, ADD, SHAPE_VERTEX, SHAPE_CORNER }
+    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE, LINE, CONN_FROM, CONN_TO, CONN_BEND, CONN_VIA, ADD, SHAPE_VERTEX, SHAPE_CORNER, CROP }
     private var drag = Drag.LOOP
     private val loop = ArrayList<Float>() // page units: x0, y0, x1, y1, ...
     private var dragStartX = 0.0
@@ -1604,6 +1752,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         model.textOf(id)?.let { return textRect(it) }
         model.tableOf(id)?.let { return Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }
         model.shapeOf(id)?.let { return shapeRect(it) }
+        model.pictureOf(id)?.let { p -> val c = p.corners(); return Box(c.minOf { it.first }.toDouble(), c.minOf { it.second }.toDouble(), c.maxOf { it.first }.toDouble(), c.maxOf { it.second }.toDouble()) }
         model.fillOf(id)?.let { return it.box() }
         model.connectorOf(id)?.let { c ->
             val p = c.path(model::shapeOf)
@@ -1629,11 +1778,12 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val shapes = model.shapes.filter { it.id in selection }
         val fills = model.fills.filter { it.id in selection }
         val conns = model.connectors.filter { it.id in selection }
-        val angles = boxes.map { it.angle } + shapes.map { it.angle }
+        val pics = model.pictures.filter { it.id in selection }
+        val angles = boxes.map { it.angle } + shapes.map { it.angle } + pics.map { it.angle }
         val base = if (strokes.isEmpty() && tables.isEmpty() && fills.isEmpty() && conns.isEmpty() && angles.isNotEmpty() && angles.all { LassoGeometry.sameTurn(it, angles[0]) }) {
-            LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) } + shapes.flatMap { it.corners() }, angles[0])
+            LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) } + shapes.flatMap { it.corners() } + pics.flatMap { it.corners() }, angles[0])
         } else {
-            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + shapes.map(::shapeRect) + fills.mapNotNull { it.box() } + conns.mapNotNull { boxOf(it.id) } + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
+            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + shapes.map(::shapeRect) + pics.mapNotNull { boxOf(it.id) } + fills.mapNotNull { it.box() } + conns.mapNotNull { boxOf(it.id) } + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
         }
         return dragMap?.let { base.map(it) } ?: base
     }
@@ -1659,6 +1809,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             for (m in if (c.via.isEmpty()) listOf(Routes.middle(path)) else c.via) canvas.drawRect(sx(m) - 10f, sy(m) - 10f, sx(m) + 10f, sy(m) + 10f, handle)
             return
         }
+        if (cropTarget() != null) { drawCropOverlay(canvas); return }
         val q = selectionQuad() ?: return
         val outline = android.graphics.Path()
         for ((k, c) in listOf(0, 1, 3, 2).withIndex()) {
@@ -1760,7 +1911,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     /** The table that is selected on its own (as it would be now), whose lines can be dragged; null otherwise. */
     private fun lineTable(): Table? {
-        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection } || model.shapes.any { it.id in selection } || model.fills.any { it.id in selection } || model.connectors.any { it.id in selection }) return null
+        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection } || model.shapes.any { it.id in selection } || model.fills.any { it.id in selection } || model.pictures.any { it.id in selection } || model.connectors.any { it.id in selection }) return null
         val t = model.tables.filter { it.id in selection }.singleOrNull() ?: return null
         return linePreview?.takeIf { it.id == t.id } ?: t
     }
@@ -1778,6 +1929,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         connBase = null
         shapePreview = null
         shapeBase = null
+        cropPreview = null
+        cropBase = null
         guides = emptyList()
         val conn = connectorAlone()
         if (conn == null) addingBend = false
@@ -1799,6 +1952,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         } else if (box != null) {
             // A shape on its own has handles on its corners (a polygon) or its corner radius (a rectangle). One that is
             // nearer than every frame corner wins (a tie too), so a polygon's corner on the frame's corner can still be had.
+            cropTarget()?.let { pic -> // crop handles come first: they sit on the frame's corners
+                val hit = cropHandles(pic).mapIndexed { k, p -> k to kotlin.math.hypot(g.toScreenX(p.first.toDouble()) - sx, g.toScreenY(p.second.toDouble()) - sy) }
+                    .filter { it.second < HANDLE_PX }.minByOrNull { it.second }
+                if (hit != null) { drag = Drag.CROP; cropHandle = hit.first; cropBase = pic; cropPreview = pic; return }
+            }
             val shape = shapeAlone()
             if (shape != null) {
                 val near = geometryHandles(shape)
@@ -1866,6 +2024,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                             c.copy(to = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.to, other) }
                         }
                         Drag.ADD -> {}
+                        Drag.CROP -> cropBase?.let { b -> cropPreview = b.cropDragged(cropHandle, px.toFloat(), py.toFloat()) }
                         Drag.SHAPE_VERTEX -> shapeBase?.let { b ->
                             val e = ShapeEdit.moveVertex(b, geoIndex, px.toFloat(), py.toFloat(), SNAP_PX / geometry.scale.toFloat())
                             shapePreview = e.shape; guides = e.guides
@@ -1918,7 +2077,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         val table = model.tables.lastOrNull { it.nearLine(loop[0], loop[1], tol) }
                         if (table != null) selection.add(table.id)
                         else model.order.asReversed().firstOrNull { // a tap in a shape or a fill picks it, the topmost
-                            model.shapeOf(it)?.contains(loop[0], loop[1]) == true || model.fillOf(it)?.contains(loop[0], loop[1]) == true ||
+                            model.shapeOf(it)?.contains(loop[0], loop[1]) == true || model.pictureOf(it)?.contains(loop[0], loop[1]) == true || model.fillOf(it)?.contains(loop[0], loop[1]) == true ||
                                 model.connectorOf(it)?.let { c -> LassoGeometry.distToPath(loop[0], loop[1], c.path(model::shapeOf)) <= tol } == true
                         }?.let { selection.add(it) }
                     } else if (!cancelled) {
@@ -1926,11 +2085,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         selection.addAll(LassoGeometry.selectedBoxes(model.texts.map { it to layoutOf(it).height.toFloat() }, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedTables(model.tables, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedShapes(model.shapes, loop.toFloatArray()))
+                        selection.addAll(LassoGeometry.selectedPictures(model.pictures, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedFills(model.fills, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedLines(model.connectors.map { c -> c.id to c.path(model::shapeOf) }, loop.toFloatArray()))
                     }
                     Drag.LINE -> if (!cancelled) linePreview?.takeIf { it !== lineBase }?.let { model.setTable(it) }
                     Drag.SHAPE_VERTEX, Drag.SHAPE_CORNER -> if (!cancelled) shapePreview?.takeIf { it !== shapeBase }?.let { model.setShape(it) }
+                    Drag.CROP -> { if (!cancelled) cropPreview?.takeIf { it !== cropBase }?.let { model.setPicture(it) }; cropPreview = null; cropBase = null }
                     Drag.ADD -> if (!cancelled) addBendAt(dragStartX.toFloat(), dragStartY.toFloat()) else addingBend = false
                     Drag.CONN_FROM, Drag.CONN_TO, Drag.CONN_BEND, Drag.CONN_VIA -> if (!cancelled) connPreview?.takeIf { it !== connBase }?.let { c ->
                         val (a, b) = c.resolve(model::shapeOf) // the ends remember where they landed
@@ -2432,6 +2593,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 }
             }
         }
+        // A clean finger tap on a picture (not seen from afar, not a palm, not just after the pen) selects it.
+        if (action == MotionEvent.ACTION_UP && !pinched && moveTotal < TAP_PX * 1.5 && carryPage == null &&
+            event.eventTime - penSeenAt > PEN_QUIET_MS && event.getTouchMajor(0) < 15 * resources.displayMetrics.xdpi / 25.4f &&
+            (layout == null || vp.infinite || vp.percent(maxOf(1, work.page.width)) >= ZOOMED_OUT_PERCENT)) tapPicture(lastX, lastY)
         if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; pullDrawX = 0.0; pullDrawY = 0.0; pullReachedAt = 0L; velocity?.recycle(); velocity = null; pageLayer.invalidate() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) gestureActive = false
         return true
@@ -2882,6 +3047,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val ROTATE_STEM_PX = 56f
         const val PULL_SHIFT = 0.4f // how much of a pull the surface follows
         const val CARRY_HOLD_MS = 500L // a finger held this long on a page, seen from afar, lifts it
+        const val PEN_QUIET_MS = 1500L // a finger tap this soon after the pen is taken for a palm
         const val TAP_PX = 10.0 // a touch that moved less than this on screen is a tap
         const val PULL_HOLD_MS = 400L // a pull must be held this long past its distance before letting go adds a page
         const val PEEK = 0.12 // after a page is added the view slides this share of the screen past the gap towards it
