@@ -188,6 +188,19 @@ object LassoGeometry {
         }.mapTo(HashSet()) { it.id }
     }
 
+    /** The charts more than half inside the loop by area, judged like pictures (in the chart's own frame). */
+    fun selectedCharts(charts: List<Chart>, poly: FloatArray): Set<String> {
+        if (poly.size < 6) return emptySet()
+        return charts.filter { ch ->
+            var inside = 0
+            for (i in 0 until GRID) for (j in 0 until GRID) {
+                val (x, y) = ch.toPage(ch.width * (i + 0.5f) / GRID, ch.height * (j + 0.5f) / GRID)
+                if (contains(poly, x, y)) inside++
+            }
+            inside * 2 > GRID * GRID
+        }.mapTo(HashSet()) { it.id }
+    }
+
     /** The fills more than half inside the loop by area (judged on a grid over each fill's box, counting only what is painted). */
     fun selectedFills(fills: List<Fill>, poly: FloatArray): Set<String> {
         if (poly.size < 6) return emptySet()

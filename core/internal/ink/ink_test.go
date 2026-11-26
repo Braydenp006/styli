@@ -358,6 +358,46 @@ func TestImageSetAndRemoved(t *testing.T) {
 	}
 }
 
+// A chart reads back whole: its numbers are whole thousandths, blanks are listed, and a link to a table is plain numbers.
+func TestChartSetAndRemoved(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	tbl := []byte("fedcba9876543210")
+	chart := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_LINE, X: 10, Y: -20, Width: 9000, Height: 6000, Angle: -300, Title: "Sales",
+		Categories: []string{"Jan", "Feb", "Mar"}, XLabel: "Month", YLabel: "Units", HideLegend: true, Stacked: true, TextColor: 0xff000000, FontSize: 400,
+		Series: []*inkpb.ChartSeries{
+			{Name: "A", Color: 0xff1565c0, Values: []int64{12500, -3000, 0}, Missing: []uint32{2}},
+			{Name: "B", Color: 0xffc62828, Values: []int64{1, 2, 3}},
+		},
+		SourceTable: tbl, SrcRow: 1, SrcCol: 2, SrcRows: 4, SrcCols: 3, SeriesInRows: true}
+	plain := &inkpb.ChartSet{Kind: inkpb.ChartKind_CHART_PIE, Width: 100, Height: 100}
+	evs := []*inkpb.Event{
+		{Id: id, Device: "d", Seq: 1, Kind: &inkpb.Event_ChartSet{ChartSet: chart}},
+		{Id: id, Device: "d", Seq: 2, Kind: &inkpb.Event_ChartSet{ChartSet: plain}},
+		{Id: id, Device: "d", Seq: 3, Kind: &inkpb.Event_ChartRemoved{ChartRemoved: &inkpb.ChartRemoved{}}},
+	}
+	if err := Append(p, evs...); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 3 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[0].GetChartSet(), chart) || !proto.Equal(l.Events[1].GetChartSet(), plain) {
+		t.Error("an event changed on the way")
+	}
+	if g := l.Events[1].GetChartSet(); g.HideLegend || g.HideGrid || g.Stacked || len(g.SourceTable) != 0 {
+		t.Error("absent options must read as the defaults: legend and grid shown, side by side, no source")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"chart-set", `line at=(10,-20) size=9000x6000 angle=-300 categories=3 series=2 source=66656463626139383736353433323130@(1,2 4x3) "Sales"`, `pie at=(0,0) size=100x100 angle=0 categories=0 series=0 source=none ""`, "chart-removed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // A dotted stroke is an ordinary stroke event with its own tool; it reads back and dumps by name.
 func TestDottedStroke(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p")

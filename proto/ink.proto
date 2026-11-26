@@ -57,6 +57,8 @@ message Event {
     FillRemoved fill_removed = 24;
     ImageSet image_set = 25;
     ImageRemoved image_removed = 26;
+    ChartSet chart_set = 27;
+    ChartRemoved chart_removed = 28;
   }
 }
 
@@ -149,7 +151,7 @@ message TableRemoved {}
 
 // Layers. A page's objects (strokes, text boxes, tables, shapes, connectors, fills) sit
 // in one order, bottom to top. A reader keeps a list: a new stroke, text box,
-// shape, connector or picture goes on top, a new table or fill goes at the bottom, a
+// shape, connector, picture or chart goes on top, a new table or fill goes at the bottom, a
 // removed one leaves the list.
 // ZMoved then puts the object named by Event.id just above the object `above`,
 // or at the very bottom if `above` is empty. A writer emits one wherever the
@@ -330,3 +332,62 @@ message ImageSet {
 }
 
 message ImageRemoved {}
+
+enum ChartKind {
+  CHART_BAR = 0;
+  CHART_LINE = 1;
+  CHART_PIE = 2;
+}
+
+// One series of a chart: a name, a colour and one value per category. Values
+// are whole numbers in thousandths (12.5 is 12500), so no float is stored.
+message ChartSeries {
+  string name = 1;
+  uint32 color = 2;  // 0xAARRGGBB as on a light page
+  repeated sint64 values = 3 [packed = true];
+  // Indices of the categories this series has no value for (left blank; the
+  // number in `values` at that place is ignored). A line skips it, a bar is not drawn.
+  repeated uint32 missing = 4 [packed = true];
+}
+
+// A chart on the page, drawn from its data. The whole state of it, written like
+// a shape (the last event wins). The data is always here, so a reader that does
+// not know where it came from can still draw it; with a source table the app
+// refreshes it from the table's typed cells and writes a new event.
+message ChartSet {
+  ChartKind kind = 1;
+  // The box on the page in page units, `angle` as for a text box.
+  sint32 x = 2;
+  sint32 y = 3;
+  uint32 width = 4;
+  uint32 height = 5;
+  sint32 angle = 6;
+  string title = 7;
+  // The x axis labels (the slices of a pie), and the series. A pie draws the first series.
+  repeated string categories = 8;
+  repeated ChartSeries series = 9;
+  string x_label = 10;
+  string y_label = 11;
+  // Set to turn off what is on unless said otherwise, so a log with none of
+  // these shows the legend and the gridlines.
+  bool hide_legend = 12;
+  bool hide_grid = 13;
+  // Bars: stacked instead of side by side.
+  bool stacked = 14;
+  // Text colour (0xAARRGGBB; zero alpha means the page's ordinary ink colour) and
+  // the base font size in page units (zero: the reader's choice).
+  uint32 text_color = 15;
+  uint32 font_size = 16;
+  // Where the data came from, if it follows a table: the table's ID and the
+  // block of its cells (first row and column, how many of each) read as the
+  // categories and series; with `series_in_rows` each row is a series, otherwise
+  // each column is. The first row and column of the block are the labels.
+  bytes source_table = 17;
+  uint32 src_row = 18;
+  uint32 src_col = 19;
+  uint32 src_rows = 20;
+  uint32 src_cols = 21;
+  bool series_in_rows = 22;
+}
+
+message ChartRemoved {}

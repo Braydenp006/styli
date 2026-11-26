@@ -79,6 +79,9 @@ sealed interface Ev {
     /** A picture was added or changed (moved, resized, turned, cropped): the whole new state. */
     data class PictureSet(val picture: Picture) : Ev
     data class PictureRemoved(val id: String) : Ev
+    /** A chart was added or changed (moved, resized, new data or look): the whole new state. */
+    data class ChartSet(val chart: Chart) : Ev
+    data class ChartRemoved(val id: String) : Ev
     /** The page's size, template or fixed-or-infinite changed; the whole new state. */
     data class PageChanged(val page: PageSet) : Ev
     /** Object [id] now sits just above [above] in the layers, or at the very bottom if [above] is null. */
@@ -123,6 +126,9 @@ class PageModel(page: PageSet = A4_LINED) {
     var pictures: List<Picture> = emptyList()
         private set
 
+    var charts: List<Chart> = emptyList()
+        private set
+
     /**
      * Every object's ID (strokes, text boxes, tables, shapes, connectors, fills), bottom layer first: the drawing
      * order. A new stroke, text box, shape or connector goes on top and a new table or fill at the bottom;
@@ -142,6 +148,8 @@ class PageModel(page: PageSet = A4_LINED) {
     private val fillIndex = Index<Fill> { it.id }
     private val pictureIndex = Index<Picture> { it.id }
     fun pictureOf(id: String): Picture? = pictureIndex.of(pictures)[id]
+    private val chartIndex = Index<Chart> { it.id }
+    fun chartOf(id: String): Chart? = chartIndex.of(charts)[id]
     fun shapeOf(id: String): Shape? = shapeIndex.of(shapes)[id]
     fun connectorOf(id: String): Connector? = connectorIndex.of(connectors)[id]
     fun fillOf(id: String): Fill? = fillIndex.of(fills)[id]
@@ -165,12 +173,12 @@ class PageModel(page: PageSet = A4_LINED) {
     private data class Snap(
         val items: List<Item>, val texts: List<TextBox>, val tables: List<Table>,
         val shapes: List<Shape>, val connectors: List<Connector>, val fills: List<Fill>,
-        val order: List<String>, val page: PageSet, val pictures: List<Picture>,
+        val order: List<String>, val page: PageSet, val pictures: List<Picture>, val charts: List<Chart>,
     )
 
     private class Step(val before: Snap, val after: Snap, val tf: Tf? = null)
 
-    private fun now() = Snap(items, texts, tables, shapes, connectors, fills, order, page, pictures)
+    private fun now() = Snap(items, texts, tables, shapes, connectors, fills, order, page, pictures, charts)
 
     private val undoStack = ArrayDeque<Step>()
     private val redoStack = ArrayDeque<Step>()
@@ -411,7 +419,7 @@ class PageModel(page: PageSet = A4_LINED) {
     fun transform(ids: Set<String>, map: Affine): Boolean {
         endErase()
         if (map.isIdentity || (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids } &&
-                shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids } && pictures.none { it.id in ids })) return false
+                shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids } && pictures.none { it.id in ids } && charts.none { it.id in ids })) return false
         val after = items.map { if (it.id in ids) Item(it.id, it.tool, it.color, it.width, it.pts.map(map::apply)) else it }
         val scale = sqrt(abs(map.a * map.d - map.b * map.c)).toFloat()
         val turn = atan2(map.b, map.a).toFloat()
@@ -427,8 +435,9 @@ class PageModel(page: PageSet = A4_LINED) {
         val connectorsAfter = connectors.map { if (it.id in ids) it.copy(from = end(it.from), to = end(it.to), bend = it.bend * scale, via = it.via.map { (x, y) -> map.x(x, y) to map.y(x, y) }) else it }
         val fillsAfter = fills.map { if (it.id in ids) it.map(map) else it }
         val picturesAfter = pictures.map { if (it.id in ids) it.moved(map) else it }
+        val chartsAfter = charts.map { if (it.id in ids) it.moved(map) else it }
         commit(
-            now().copy(items = after, texts = textsAfter, tables = tablesAfter, shapes = shapesAfter, connectors = connectorsAfter, fills = fillsAfter, pictures = picturesAfter),
+            now().copy(items = after, texts = textsAfter, tables = tablesAfter, shapes = shapesAfter, connectors = connectorsAfter, fills = fillsAfter, pictures = picturesAfter, charts = chartsAfter),
             Tf(items.filter { it.id in ids }.map { it.id }, map),
         )
         return true
@@ -445,7 +454,7 @@ class PageModel(page: PageSet = A4_LINED) {
         val c = clip.moved(x, y) { ids.getOrPut(it) { newId() } }
         commit(now().copy(
             items = items + c.items, texts = texts + c.texts, tables = tables + c.tables,
-            shapes = shapes + c.shapes, connectors = connectors + c.connectors, fills = fills + c.fills, pictures = pictures + c.pictures, order = order + c.order,
+            shapes = shapes + c.shapes, connectors = connectors + c.connectors, fills = fills + c.fills, pictures = pictures + c.pictures, charts = charts + c.charts, order = order + c.order,
         ))
         return ids.values.toSet()
     }
@@ -457,12 +466,12 @@ class PageModel(page: PageSet = A4_LINED) {
     fun delete(ids: Set<String>): Boolean {
         endErase()
         if (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids } &&
-            shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids } && pictures.none { it.id in ids }) return false
+            shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids } && pictures.none { it.id in ids } && charts.none { it.id in ids }) return false
         val kept = withEndsFreed(connectors.filter { it.id !in ids }, shapes.filter { it.id in ids }.mapTo(HashSet()) { it.id })
         commit(now().copy(
             items = items.filter { it.id !in ids }, texts = texts.filter { it.id !in ids }, tables = tables.filter { it.id !in ids },
             shapes = shapes.filter { it.id !in ids }, connectors = kept, fills = fills.filter { it.id !in ids },
-            pictures = pictures.filter { it.id !in ids },
+            pictures = pictures.filter { it.id !in ids }, charts = charts.filter { it.id !in ids },
         ))
         return true
     }
@@ -504,6 +513,25 @@ class PageModel(page: PageSet = A4_LINED) {
     }
 
     fun setPicture(pic: Picture) = setPictures(listOf(pic))
+
+    /** A new chart, made by [make] from its new ID. It goes on top of the layers. One undo step. */
+    fun addChart(make: (String) -> Chart): Chart {
+        endErase()
+        val chart = make(newId())
+        commit(now().copy(charts = charts + chart))
+        return chart
+    }
+
+    /** Replaces every chart with the same ID as one in [list], all in one undo step (new data, a restyle). False if none matches. */
+    fun setCharts(list: List<Chart>): Boolean {
+        endErase()
+        val by = list.associateBy { it.id }
+        if (charts.none { it.id in by }) return false
+        commit(now().copy(charts = charts.map { by[it.id] ?: it }))
+        return true
+    }
+
+    fun setChart(chart: Chart) = setCharts(listOf(chart))
 
     /** A new connector, made by [make] from its new ID. One undo step. */
     fun addConnector(make: (String) -> Connector): Connector {
@@ -549,7 +577,7 @@ class PageModel(page: PageSet = A4_LINED) {
         val after = now()
         // commit() sets the new state and writes the log from the difference, so put the old one back first.
         items = before.items; texts = before.texts; tables = before.tables
-        shapes = before.shapes; connectors = before.connectors; fills = before.fills; order = before.order; pictures = before.pictures
+        shapes = before.shapes; connectors = before.connectors; fills = before.fills; order = before.order; pictures = before.pictures; charts = before.charts
         commit(after)
     }
 
@@ -574,7 +602,7 @@ class PageModel(page: PageSet = A4_LINED) {
         val before = now()
         val settled = if (after.order === before.order) after.copy(order = settle(before.order, after)) else after
         if (before.items === settled.items && before.texts === settled.texts && before.tables === settled.tables &&
-            before.shapes === settled.shapes && before.connectors === settled.connectors && before.fills === settled.fills && before.pictures === settled.pictures && before.order === settled.order && before.page == settled.page) return
+            before.shapes === settled.shapes && before.connectors === settled.connectors && before.fills === settled.fills && before.pictures === settled.pictures && before.charts === settled.charts && before.order === settled.order && before.page == settled.page) return
         undoStack.addLast(Step(before, settled, tf))
         redoStack.clear()
         move(before, settled, tf)
@@ -584,12 +612,12 @@ class PageModel(page: PageSet = A4_LINED) {
     private fun settle(old: List<String>, to: Snap): List<String> {
         val have = HashSet<String>()
         to.items.mapTo(have) { it.id }; to.texts.mapTo(have) { it.id }; to.tables.mapTo(have) { it.id }
-        to.shapes.mapTo(have) { it.id }; to.connectors.mapTo(have) { it.id }; to.fills.mapTo(have) { it.id }; to.pictures.mapTo(have) { it.id }
+        to.shapes.mapTo(have) { it.id }; to.connectors.mapTo(have) { it.id }; to.fills.mapTo(have) { it.id }; to.pictures.mapTo(have) { it.id }; to.charts.mapTo(have) { it.id }
         val known = old.toHashSet()
         val kept = old.filter { it in have }
         val top = to.items.filter { it.id !in known }.map { it.id } + to.texts.filter { it.id !in known }.map { it.id } +
             to.shapes.filter { it.id !in known }.map { it.id } + to.connectors.filter { it.id !in known }.map { it.id } +
-            to.pictures.filter { it.id !in known }.map { it.id }
+            to.pictures.filter { it.id !in known }.map { it.id } + to.charts.filter { it.id !in known }.map { it.id }
         val bottom = to.fills.filter { it.id !in known }.map { it.id } + to.tables.filter { it.id !in known }.map { it.id }
         return if (kept.size == old.size && top.isEmpty() && bottom.isEmpty()) old else bottom + kept + top
     }
@@ -664,6 +692,10 @@ class PageModel(page: PageSet = A4_LINED) {
         val picWas = from.pictures.associateBy { it.id }
         from.pictures.filter { it.id !in picNow }.forEach { log.add(Ev.PictureRemoved(it.id)) }
         to.pictures.filter { picWas[it.id] !== it }.forEach { log.add(Ev.PictureSet(it)) }
+        val chartNow = to.charts.mapTo(HashSet()) { it.id }
+        val chartWas = from.charts.associateBy { it.id }
+        from.charts.filter { it.id !in chartNow }.forEach { log.add(Ev.ChartRemoved(it.id)) }
+        to.charts.filter { chartWas[it.id] !== it }.forEach { log.add(Ev.ChartSet(it)) }
         if (toPage != from.page) log.add(Ev.PageChanged(toPage))
         logLayers(from, to)
         items = to.items
@@ -673,6 +705,7 @@ class PageModel(page: PageSet = A4_LINED) {
         connectors = to.connectors
         fills = to.fills
         pictures = to.pictures
+        charts = to.charts
         page = toPage
         order = to.order
     }
@@ -688,6 +721,7 @@ class PageModel(page: PageSet = A4_LINED) {
         to.shapes.filter { it.id !in was }.forEach { plain.add(it.id) }
         to.connectors.filter { it.id !in was }.forEach { plain.add(it.id) }
         to.pictures.filter { it.id !in was }.forEach { plain.add(it.id) }
+        to.charts.filter { it.id !in was }.forEach { plain.add(it.id) }
         to.fills.filter { it.id !in was }.forEach { plain.add(0, it.id) }
         if (plain.size != to.order.size) return
         for (i in to.order.indices) {

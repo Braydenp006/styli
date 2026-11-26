@@ -59,7 +59,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, DOTTED, LINE_DOTTED, LASER, TEXT, TABLE, SHAPE, BUCKET, CONNECTOR }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, DOTTED, LINE_DOTTED, LASER, TEXT, TABLE, SHAPE, BUCKET, CONNECTOR, CHART }
 
     /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
     val notebook = Notebook()
@@ -179,6 +179,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         set(v) {
             if (v != Tool.TEXT) finishText()
             tabling = false
+            charting = false
             addingBend = false
             field = v
             selection.clear() // a selection only lives while the lasso is the tool
@@ -253,6 +254,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawShapeDragPreview(canvas)
                 drawConnectorPreview(canvas)
                 drawTableDragPreview(canvas)
+                drawChartDragPreview(canvas)
                 canvas.restore() // the pull's shift
                 drawPullHint(canvas)
                 drawCarry(canvas)
@@ -439,16 +441,16 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         pageLayer.invalidate()
     }
 
-    /** A finger tap at the screen point: if it lands on a picture (the topmost), that picture is selected with the lasso. */
+    /** A finger tap at the screen point: if it lands on a picture or chart (the topmost), it is selected with the lasso. */
     private fun tapPicture(sx: Float, sy: Float) {
         val wx = vp.toPageX(sx.toDouble()); val wy = vp.toPageY(sy.toDouble())
         val l = layout
         val page = if (l == null) work else l.pageAt(wx, wy) ?: return
         val (ox, oy) = l?.origin(page) ?: (0.0 to 0.0)
         val px = (wx - ox).toFloat(); val py = (wy - oy).toFloat()
-        val pic = page.order.asReversed().firstNotNullOfOrNull { page.pictureOf(it)?.takeIf { p -> p.contains(px, py) } } ?: return
+        val id = page.order.asReversed().firstOrNull { page.pictureOf(it)?.contains(px, py) == true || page.chartOf(it)?.contains(px, py) == true } ?: return
         if (page !== work) becomeWork(page)
-        selectOnly(pic.id)
+        selectOnly(id)
     }
 
     // ---- Pictures: the file's bytes are in the notebook's store; a copy of at most 2048 pixels across is drawn. ----
@@ -527,6 +529,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (fill != null) { drawFill(canvas, fill); return }
         val shape = model.shapeOf(id)
         if (shape != null) { drawShape(canvas, shape); return }
+        val chart = model.chartOf(id)
+        if (chart != null) { drawChart(canvas, chart, vl, vt, vr, vb); return }
         val pic = model.pictureOf(id)
         if (pic != null) { drawPicture(canvas, cropPreview?.takeIf { it.id == pic.id } ?: pic, vl, vt, vr, vb); return }
         val conn = model.connectorOf(id)
@@ -739,7 +743,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         dottedPaths.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         placed.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         layouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.texts.map { it.id } })
-        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id } + model.shapes.map { it.id } + model.fills.map { it.id } + model.connectors.map { it.id } + model.pictures.map { it.id })
+        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id } + model.shapes.map { it.id } + model.fills.map { it.id } + model.connectors.map { it.id } + model.pictures.map { it.id } + model.charts.map { it.id })
         fillPaths.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.fills.map { it.id } })
         shapeLayouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.shapes.map { it.id } })
         cellSel = cellSel?.takeIf { (r, c) -> lineTable()?.let { r < it.rows && c < it.cols } == true }
@@ -872,7 +876,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (rulerGrab(event)) return true
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !shaping && !bucketing && !connecting && !dotting && !textTapping && !tabling) {
+            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !lasering && !shaping && !bucketing && !connecting && !dotting && !textTapping && !tabling && !charting) {
                 gestureActive = false // a pen landing after a palm takes over
                 penSeenAt = event.eventTime
                 pullX = 0.0; pullY = 0.0
@@ -907,6 +911,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     shaping = true
                     val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
                     shapeFromX = x; shapeFromY = y; shapeToX = x; shapeToY = y
+                    return true
+                }
+                if (tool == Tool.CHART) {
+                    charting = true
+                    val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                    chartFromX = x; chartFromY = y; chartToX = x; chartToY = y
+                    chartPage = work
                     return true
                 }
                 if (tool == Tool.TABLE) {
@@ -983,6 +994,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (lasering) return laser(event)
         if (textTapping) return textGesture(event)
         if (tabling) return tableGesture(event)
+        if (charting) return chartGesture(event)
         if (shaping) return shapeGesture(event)
         if (bucketing) return bucketGesture(event)
         if (connecting) return connectGesture(event)
@@ -1486,6 +1498,174 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private fun onPage(x: Float, y: Float): Pair<Float, Float> =
         if (geometry.infinite) x to y else x.coerceIn(0f, geometry.pageW.toFloat()) to y.coerceIn(0f, geometry.pageH.toFloat())
 
+    // ---- Charts: drag out a box with the Chart tool, then type the data in a grid (the activity shows it). ----
+
+    private var charting = false
+    private var chartFromX = 0f
+    private var chartFromY = 0f
+    private var chartToX = 0f
+    private var chartToY = 0f
+    private var chartPage: PageModel = work // the page the box was dragged on
+
+    /** Asks for the data grid: the chart to edit, and whether it is new (not on the page yet, so Cancel leaves nothing behind). */
+    var onChartEdit: ((Chart, Boolean) -> Unit)? = null
+
+    /** Puts a chart made in the data grid on the page it was dragged on ([isNew]), or replaces the one with its ID. One undo step. */
+    fun commitChart(chart: Chart, isNew: Boolean) {
+        finishText()
+        val made = if (isNew) chartPage.addChart { chart.copy(id = it) } else null
+        if (made == null) model.setChart(chart)
+        changed(true)
+        if (made != null && chartPage === work) selectOnly(made.id) // so it can be moved at once
+    }
+
+    /** Opens the data window for the one selected chart. False if no chart alone is selected. */
+    fun editChart(): Boolean {
+        val chart = selection.singleOrNull()?.let { model.chartOf(it) } ?: return false
+        onChartEdit?.invoke(chart, false)
+        return true
+    }
+
+    private fun chartGesture(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) {
+                val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                chartToX = x; chartToY = y
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                charting = false
+                val w = Math.abs(chartToX - chartFromX); val h = Math.abs(chartToY - chartFromY)
+                if (event.actionMasked != MotionEvent.ACTION_CANCEL && w >= MIN_CHART_W && h >= MIN_CHART_H) {
+                    onChartEdit?.invoke(
+                        Chart("", ChartKind.BAR, minOf(chartFromX, chartToX), minOf(chartFromY, chartToY), w, h, "",
+                            listOf("A", "B", "C"), listOf(ChartSeries("Series 1", Chart.colourFor(0), listOf(3000L, 5000L, 2000L)))),
+                        true,
+                    )
+                }
+                pageLayer.invalidate()
+            }
+        }
+        return true
+    }
+
+    /** The box being dragged out for a chart, dashed (red while it is too small). */
+    private fun drawChartDragPreview(canvas: Canvas) {
+        if (!charting) return
+        val g = geometry
+        val ok = Math.abs(chartToX - chartFromX) >= MIN_CHART_W && Math.abs(chartToY - chartFromY) >= MIN_CHART_H
+        dragPaint.color = if (ok) 0xFF6750A4.toInt() else 0xFFC62828.toInt()
+        canvas.drawRect(
+            g.toScreenX(minOf(chartFromX, chartToX).toDouble()).toFloat(), g.toScreenY(minOf(chartFromY, chartToY).toDouble()).toFloat(),
+            g.toScreenX(maxOf(chartFromX, chartToX).toDouble()).toFloat(), g.toScreenY(maxOf(chartFromY, chartToY).toDouble()).toFloat(), dragPaint,
+        )
+        dragPaint.color = 0xFF6750A4.toInt()
+    }
+
+    private val chartFill = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
+    private val chartLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val chartSolid = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val chartText = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /** Draws a chart (in page units; the canvas already has the page matrix) from its data, with the parts laid out by [ChartMaths]. */
+    private fun drawChart(canvas: Canvas, c: Chart, vl: Float, vt: Float, vr: Float, vb: Float) {
+        val corners = c.corners()
+        if (corners.maxOf { it.first } < vl || corners.minOf { it.first } > vr || corners.maxOf { it.second } < vt || corners.minOf { it.second } > vb) return
+        val moved = dragMap?.takeIf { c.id in selection }
+        val px = (1.5 / geometry.scale).toFloat() // a hairline: about a pixel and a half on the screen
+        val f = c.textSize
+        val ink = if (c.textColor ushr 24 == 0) Color.BLACK else c.textColor
+        val lay = ChartMaths.layout(c)
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        canvas.translate(c.x, c.y)
+        canvas.rotate(Math.toDegrees(c.angle.toDouble()).toFloat())
+        canvas.drawRect(0f, 0f, c.width, c.height, chartFill)
+        chartLine.strokeWidth = px; chartLine.color = 0xFFBDBDBD.toInt()
+        canvas.drawRect(0f, 0f, c.width, c.height, chartLine)
+        chartText.color = ink
+        fun text(s: String, x: Float, y: Float, size: Float, align: Paint.Align, bold: Boolean = false) {
+            chartText.textSize = size; chartText.textAlign = align; chartText.isFakeBoldText = bold
+            canvas.drawText(s, x, y, chartText)
+        }
+        lay.title?.let { text(c.title, ((it.l + it.r) / 2).toFloat(), (it.b - f * 0.4).toFloat(), f * 1.2f, Paint.Align.CENTER, true) }
+        val p = lay.plot
+        if (c.kind == ChartKind.PIE) {
+            val r = (minOf(p.r - p.l, p.b - p.t) / 2 * 0.95).toFloat()
+            val cx = ((p.l + p.r) / 2).toFloat(); val cy = ((p.t + p.b) / 2).toFloat()
+            val oval = RectF(cx - r, cy - r, cx + r, cy + r)
+            for (s in ChartMaths.pie(c)) {
+                chartSolid.color = Chart.colourFor(s.index)
+                canvas.drawArc(oval, Math.toDegrees(s.start).toFloat(), Math.toDegrees(s.sweep).toFloat(), true, chartSolid)
+                if (s.share >= 0.05) {
+                    val mid = s.start + s.sweep / 2
+                    chartText.color = Color.WHITE
+                    text("${Math.round(s.share * 100)}%", (cx + r * 0.65 * Math.cos(mid)).toFloat(), (cy + r * 0.65 * Math.sin(mid) + f * 0.3).toFloat(), f * 0.9f, Paint.Align.CENTER, true)
+                    chartText.color = ink
+                }
+            }
+        } else {
+            val scale = ChartMaths.scaleFor(c)
+            val left = p.l.toFloat(); val right = p.r.toFloat()
+            for (t in scale.ticks) {
+                val y = ChartMaths.yOf(p, scale, t).toFloat()
+                if (!c.hideGrid) { chartLine.color = 0xFFE0E0E0.toInt(); canvas.drawLine(left, y, right, y, chartLine) }
+                text(ChartMaths.format(t), left - f * 0.4f, y + f * 0.3f, f * 0.8f, Paint.Align.RIGHT)
+            }
+            val n = c.categories.size
+            val slot = if (n == 0) 0.0 else (p.r - p.l) / n
+            for ((i, name) in c.categories.withIndex()) text(name, (p.l + slot * (i + 0.5)).toFloat(), (p.b + f * 1.2).toFloat(), f * 0.8f, Paint.Align.CENTER)
+            if (c.kind == ChartKind.BAR) {
+                for ((j, row) in ChartMaths.bars(c, p, scale).withIndex()) {
+                    chartSolid.color = c.series[j].color
+                    for (b in row) if (b != null) canvas.drawRect(b.l.toFloat(), b.t.toFloat(), b.r.toFloat(), b.b.toFloat(), chartSolid)
+                }
+            } else {
+                chartLine.strokeWidth = f * 0.2f
+                for ((j, pts) in ChartMaths.linePoints(c, p, scale).withIndex()) {
+                    chartLine.color = c.series[j].color; chartSolid.color = c.series[j].color
+                    var prev: Pair<Double, Double>? = null
+                    for (pt in pts) {
+                        if (pt != null && prev != null) canvas.drawLine(prev.first.toFloat(), prev.second.toFloat(), pt.first.toFloat(), pt.second.toFloat(), chartLine)
+                        if (pt != null) canvas.drawCircle(pt.first.toFloat(), pt.second.toFloat(), f * 0.3f, chartSolid)
+                        prev = pt // a blank value breaks the line
+                    }
+                }
+            }
+            chartLine.strokeWidth = px * 1.5f; chartLine.color = ink
+            val zero = ChartMaths.yOf(p, scale, 0.0).coerceIn(p.t, p.b).toFloat()
+            canvas.drawLine(left, zero, right, zero, chartLine)
+            canvas.drawLine(left, p.t.toFloat(), left, p.b.toFloat(), chartLine)
+            lay.xLabel?.let { text(c.xLabel, ((it.l + it.r) / 2).toFloat(), (it.b - f * 0.3).toFloat(), f, Paint.Align.CENTER) }
+            lay.yLabel?.let {
+                canvas.save()
+                canvas.rotate(-90f, ((it.l + it.r) / 2).toFloat(), ((it.t + it.b) / 2).toFloat())
+                text(c.yLabel, ((it.l + it.r) / 2).toFloat(), ((it.t + it.b) / 2 + f * 0.35).toFloat(), f, Paint.Align.CENTER)
+                canvas.restore()
+            }
+        }
+        lay.legend?.let { box ->
+            val names = if (c.kind == ChartKind.PIE) c.categories else c.series.map { it.name }
+            val colours = if (c.kind == ChartKind.PIE) c.categories.indices.map { Chart.colourFor(it) } else c.series.map { it.color }
+            chartText.textSize = f * 0.9f; chartText.textAlign = Paint.Align.LEFT; chartText.isFakeBoldText = false
+            val sw = f * 0.8f
+            val widths = names.map { sw + f * 0.4f + chartText.measureText(it) + f * 1.2f }
+            var x = (((box.l + box.r) / 2) - widths.sum() / 2).coerceAtLeast(box.l).toFloat()
+            val y = ((box.t + box.b) / 2).toFloat()
+            for ((k, name) in names.withIndex()) {
+                if (x + widths[k] > box.r + f) break // no room for the rest
+                chartSolid.color = colours[k]
+                canvas.drawRect(x, y - sw / 2, x + sw, y + sw / 2, chartSolid)
+                chartText.color = ink
+                canvas.drawText(name, x + sw + f * 0.4f, y + f * 0.3f, chartText)
+                x += widths[k]
+            }
+        }
+        canvas.restore()
+    }
+
     private fun tableGesture(event: MotionEvent): Boolean {
         val i = event.findPointerIndex(pointerId)
         when (event.actionMasked) {
@@ -1830,6 +2010,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         model.tableOf(id)?.let { return Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }
         model.shapeOf(id)?.let { return shapeRect(it) }
         model.pictureOf(id)?.let { p -> val c = p.corners(); return Box(c.minOf { it.first }.toDouble(), c.minOf { it.second }.toDouble(), c.maxOf { it.first }.toDouble(), c.maxOf { it.second }.toDouble()) }
+        model.chartOf(id)?.let { p -> val c = p.corners(); return Box(c.minOf { it.first }.toDouble(), c.minOf { it.second }.toDouble(), c.maxOf { it.first }.toDouble(), c.maxOf { it.second }.toDouble()) }
         model.fillOf(id)?.let { return it.box() }
         model.connectorOf(id)?.let { c ->
             val p = c.path(model::shapeOf)
@@ -1856,11 +2037,12 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val fills = model.fills.filter { it.id in selection }
         val conns = model.connectors.filter { it.id in selection }
         val pics = model.pictures.filter { it.id in selection }
-        val angles = boxes.map { it.angle } + shapes.map { it.angle } + pics.map { it.angle }
+        val charts = model.charts.filter { it.id in selection }
+        val angles = boxes.map { it.angle } + shapes.map { it.angle } + pics.map { it.angle } + charts.map { it.angle }
         val base = if (strokes.isEmpty() && tables.isEmpty() && fills.isEmpty() && conns.isEmpty() && angles.isNotEmpty() && angles.all { LassoGeometry.sameTurn(it, angles[0]) }) {
-            LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) } + shapes.flatMap { it.corners() } + pics.flatMap { it.corners() }, angles[0])
+            LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) } + shapes.flatMap { it.corners() } + pics.flatMap { it.corners() } + charts.flatMap { it.corners() }, angles[0])
         } else {
-            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + shapes.map(::shapeRect) + pics.mapNotNull { boxOf(it.id) } + fills.mapNotNull { it.box() } + conns.mapNotNull { boxOf(it.id) } + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
+            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + shapes.map(::shapeRect) + pics.mapNotNull { boxOf(it.id) } + charts.mapNotNull { boxOf(it.id) } + fills.mapNotNull { it.box() } + conns.mapNotNull { boxOf(it.id) } + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
         }
         return dragMap?.let { base.map(it) } ?: base
     }
@@ -1988,7 +2170,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     /** The table that is selected on its own (as it would be now), whose lines can be dragged; null otherwise. */
     private fun lineTable(): Table? {
-        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection } || model.shapes.any { it.id in selection } || model.fills.any { it.id in selection } || model.pictures.any { it.id in selection } || model.connectors.any { it.id in selection }) return null
+        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection } || model.shapes.any { it.id in selection } || model.fills.any { it.id in selection } || model.pictures.any { it.id in selection } || model.charts.any { it.id in selection } || model.connectors.any { it.id in selection }) return null
         val t = model.tables.filter { it.id in selection }.singleOrNull() ?: return null
         return linePreview?.takeIf { it.id == t.id } ?: t
     }
@@ -2154,7 +2336,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         val table = model.tables.lastOrNull { it.nearLine(loop[0], loop[1], tol) }
                         if (table != null) selection.add(table.id)
                         else model.order.asReversed().firstOrNull { // a tap in a shape or a fill picks it, the topmost
-                            model.shapeOf(it)?.contains(loop[0], loop[1]) == true || model.pictureOf(it)?.contains(loop[0], loop[1]) == true || model.fillOf(it)?.contains(loop[0], loop[1]) == true ||
+                            model.shapeOf(it)?.contains(loop[0], loop[1]) == true || model.pictureOf(it)?.contains(loop[0], loop[1]) == true || model.chartOf(it)?.contains(loop[0], loop[1]) == true || model.fillOf(it)?.contains(loop[0], loop[1]) == true ||
                                 model.connectorOf(it)?.let { c -> LassoGeometry.distToPath(loop[0], loop[1], c.path(model::shapeOf)) <= tol } == true
                         }?.let { selection.add(it) }
                     } else if (!cancelled) {
@@ -2163,6 +2345,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         selection.addAll(LassoGeometry.selectedTables(model.tables, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedShapes(model.shapes, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedPictures(model.pictures, loop.toFloatArray()))
+                        selection.addAll(LassoGeometry.selectedCharts(model.charts, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedFills(model.fills, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedLines(model.connectors.map { c -> c.id to c.path(model::shapeOf) }, loop.toFloatArray()))
                     }
@@ -2442,7 +2625,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private val rulerIds = ArrayList<Int>() // the fingers holding the ruler (up to two)
     private val rulerLast = HashMap<Int, Pair<Float, Float>>()
 
-    private val penBusy get() = strokeId != null || lining || erasing || lassoing || lasering || snapped != null || textTapping || tabling
+    private val penBusy get() = strokeId != null || lining || erasing || lassoing || lasering || snapped != null || textTapping || tabling || charting
 
     /** A finger landing on the ruler takes hold of it (instead of scrolling the page). True if it did. */
     private fun rulerGrab(event: MotionEvent): Boolean {
@@ -3125,6 +3308,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val PULL_SHIFT = 0.4f // how much of a pull the surface follows
         const val CARRY_HOLD_MS = 500L // a finger held this long on a page, seen from afar, lifts it
         const val PEN_QUIET_MS = 1500L // a finger tap this soon after the pen is taken for a palm
+        const val MIN_CHART_W = 3000f // a chart box at least 30 mm by 20 mm
+        const val MIN_CHART_H = 2000f
         const val TAP_PX = 10.0 // a touch that moved less than this on screen is a tap
         const val PULL_HOLD_MS = 400L // a pull must be held this long past its distance before letting go adds a page
         const val PEEK = 0.12 // after a page is added the view slides this share of the screen past the gap towards it

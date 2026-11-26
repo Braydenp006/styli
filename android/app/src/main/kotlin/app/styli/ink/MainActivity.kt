@@ -113,6 +113,7 @@ private fun InkScreen() {
     var nameText by remember { mutableStateOf("") }
 
     val context = LocalContext.current
+    var chartEdit by remember { mutableStateOf<Pair<Chart, Boolean>?>(null) } // the chart whose data is being typed, and whether it is new
     // The system photo picker: no storage permission is needed.
     val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
@@ -137,6 +138,7 @@ private fun InkScreen() {
                     it.onZoom = { percent -> zoom = percent }
                     it.onPlacing = { c -> placing = c }
                     it.onToolChanged = { t -> tool = t }
+                    it.onChartEdit = { c, isNew -> chartEdit = c to isNew }
                     it.onPageChanged = {
                         // The page buttons show the page that is now current.
                         val p = it.page
@@ -158,6 +160,7 @@ private fun InkScreen() {
             Button(onClick = { canvas?.undoPage() }, gap) { Text("Undo page change") }
             Button(onClick = { canvas?.redoPage() }, gap) { Text("Redo page change") }
             Button(onClick = { canvas?.deleteSelection() }, gap) { Text("Delete") }
+            Button(onClick = { canvas?.editChart() }, gap) { Text("Edit chart") }
             Button(onClick = { canvas?.toggleCrop() }, gap) { Text("Crop") }
             Button(onClick = { canvas?.resetCrop() }, gap) { Text("Reset crop") }
             Button(onClick = { pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, gap) { Text("Image") }
@@ -403,6 +406,9 @@ private fun InkScreen() {
                 text = { OutlinedTextField(nameText, { nameText = it }, singleLine = true) },
             )
         }
+        chartEdit?.let { (c, isNew) ->
+            ChartDialog(c, onDone = { done -> canvas?.commitChart(done, isNew); chartEdit = null }, onCancel = { chartEdit = null })
+        }
         if (picking != 0) {
             val text = picking == 1 || picking == 3 || picking == 5 // the palette that starts with the default ink colour, not "none"
             val palette = when (picking) { 1, 3, 5 -> TEXT_COLOURS; 2 -> HIGHLIGHTS; 8 -> TEXT_COLOURS.drop(1); 9 -> HIGHLIGHTS.drop(1); else -> FILLS }
@@ -482,6 +488,7 @@ private fun toolName(t: InkCanvasView.Tool) = when (t) {
     InkCanvasView.Tool.SHAPE -> "Shape"
     InkCanvasView.Tool.BUCKET -> "Paint bucket"
     InkCanvasView.Tool.CONNECTOR -> "Connector"
+    InkCanvasView.Tool.CHART -> "Chart"
 }
 
 /** A button that opens a menu. [content] gets a function that closes it (some items leave it open). */
@@ -554,6 +561,7 @@ private fun ClipPreview(c: Clip, thumb: (String) -> android.graphics.Bitmap?) {
         for (t in c.tables) poly(listOf(t.x to t.y, t.x + t.width to t.y, t.x + t.width to t.y + t.height, t.x to t.y + t.height), true)
         for (s in c.shapes) poly(s.corners(), true)
         for (p in c.pictures) poly(p.corners(), true)
+        for (ch in c.charts) poly(ch.corners(), true)
         for (t in c.texts) poly(t.corners(t.fontSize * 1.3f), true)
         for (f in c.fills) for (r in f.rings) poly(r, true)
         for (n in c.connectors) poly(n.path { id -> c.shapes.firstOrNull { it.id == id } }, false)

@@ -131,7 +131,7 @@ class EraseTest {
         for (e in m.log) when (e) {
             is Ev.Added -> replay[e.item.id] = e.item
             is Ev.Erased -> replay.remove(e.id)
-            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved, is Ev.ShapeSet, is Ev.ShapeRemoved, is Ev.ConnectorSet, is Ev.ConnectorRemoved, is Ev.FillSet, is Ev.FillRemoved, is Ev.PictureSet, is Ev.PictureRemoved -> {}
+            is Ev.TextSet, is Ev.TextRemoved, is Ev.PageChanged, is Ev.TableSet, is Ev.TableRemoved, is Ev.ZMoved, is Ev.ShapeSet, is Ev.ShapeRemoved, is Ev.ConnectorSet, is Ev.ConnectorRemoved, is Ev.FillSet, is Ev.FillRemoved, is Ev.PictureSet, is Ev.PictureRemoved, is Ev.ChartSet, is Ev.ChartRemoved -> {}
             is Ev.Transformed -> {}
         }
         assertEquals(m.items.map { it.id }, replay.keys.toList())

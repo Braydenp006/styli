@@ -330,6 +330,55 @@ func (ConnectorRoute) EnumDescriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{5}
 }
 
+type ChartKind int32
+
+const (
+	ChartKind_CHART_BAR  ChartKind = 0
+	ChartKind_CHART_LINE ChartKind = 1
+	ChartKind_CHART_PIE  ChartKind = 2
+)
+
+// Enum value maps for ChartKind.
+var (
+	ChartKind_name = map[int32]string{
+		0: "CHART_BAR",
+		1: "CHART_LINE",
+		2: "CHART_PIE",
+	}
+	ChartKind_value = map[string]int32{
+		"CHART_BAR":  0,
+		"CHART_LINE": 1,
+		"CHART_PIE":  2,
+	}
+)
+
+func (x ChartKind) Enum() *ChartKind {
+	p := new(ChartKind)
+	*p = x
+	return p
+}
+
+func (x ChartKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ChartKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_ink_proto_enumTypes[6].Descriptor()
+}
+
+func (ChartKind) Type() protoreflect.EnumType {
+	return &file_ink_proto_enumTypes[6]
+}
+
+func (x ChartKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ChartKind.Descriptor instead.
+func (ChartKind) EnumDescriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{6}
+}
+
 type Record struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -490,6 +539,8 @@ type Event struct {
 	//	*Event_FillRemoved
 	//	*Event_ImageSet
 	//	*Event_ImageRemoved
+	//	*Event_ChartSet
+	//	*Event_ChartRemoved
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -713,6 +764,24 @@ func (x *Event) GetImageRemoved() *ImageRemoved {
 	return nil
 }
 
+func (x *Event) GetChartSet() *ChartSet {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ChartSet); ok {
+			return x.ChartSet
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetChartRemoved() *ChartRemoved {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ChartRemoved); ok {
+			return x.ChartRemoved
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -785,6 +854,14 @@ type Event_ImageRemoved struct {
 	ImageRemoved *ImageRemoved `protobuf:"bytes,26,opt,name=image_removed,json=imageRemoved,proto3,oneof"`
 }
 
+type Event_ChartSet struct {
+	ChartSet *ChartSet `protobuf:"bytes,27,opt,name=chart_set,json=chartSet,proto3,oneof"`
+}
+
+type Event_ChartRemoved struct {
+	ChartRemoved *ChartRemoved `protobuf:"bytes,28,opt,name=chart_removed,json=chartRemoved,proto3,oneof"`
+}
+
 func (*Event_StrokeAdded) isEvent_Kind() {}
 
 func (*Event_StrokeErased) isEvent_Kind() {}
@@ -818,6 +895,10 @@ func (*Event_FillRemoved) isEvent_Kind() {}
 func (*Event_ImageSet) isEvent_Kind() {}
 
 func (*Event_ImageRemoved) isEvent_Kind() {}
+
+func (*Event_ChartSet) isEvent_Kind() {}
+
+func (*Event_ChartRemoved) isEvent_Kind() {}
 
 type StrokeAdded struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1357,7 +1438,7 @@ func (*TableRemoved) Descriptor() ([]byte, []int) {
 
 // Layers. A page's objects (strokes, text boxes, tables, shapes, connectors, fills) sit
 // in one order, bottom to top. A reader keeps a list: a new stroke, text box,
-// shape, connector or picture goes on top, a new table or fill goes at the bottom, a
+// shape, connector, picture or chart goes on top, a new table or fill goes at the bottom, a
 // removed one leaves the list.
 // ZMoved then puts the object named by Event.id just above the object `above`,
 // or at the very bottom if `above` is empty. A writer emits one wherever the
@@ -2304,6 +2385,341 @@ func (*ImageRemoved) Descriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{21}
 }
 
+// One series of a chart: a name, a colour and one value per category. Values
+// are whole numbers in thousandths (12.5 is 12500), so no float is stored.
+type ChartSeries struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Name   string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Color  uint32                 `protobuf:"varint,2,opt,name=color,proto3" json:"color,omitempty"` // 0xAARRGGBB as on a light page
+	Values []int64                `protobuf:"zigzag64,3,rep,packed,name=values,proto3" json:"values,omitempty"`
+	// Indices of the categories this series has no value for (left blank; the
+	// number in `values` at that place is ignored). A line skips it, a bar is not drawn.
+	Missing       []uint32 `protobuf:"varint,4,rep,packed,name=missing,proto3" json:"missing,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChartSeries) Reset() {
+	*x = ChartSeries{}
+	mi := &file_ink_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChartSeries) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChartSeries) ProtoMessage() {}
+
+func (x *ChartSeries) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChartSeries.ProtoReflect.Descriptor instead.
+func (*ChartSeries) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ChartSeries) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ChartSeries) GetColor() uint32 {
+	if x != nil {
+		return x.Color
+	}
+	return 0
+}
+
+func (x *ChartSeries) GetValues() []int64 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *ChartSeries) GetMissing() []uint32 {
+	if x != nil {
+		return x.Missing
+	}
+	return nil
+}
+
+// A chart on the page, drawn from its data. The whole state of it, written like
+// a shape (the last event wins). The data is always here, so a reader that does
+// not know where it came from can still draw it; with a source table the app
+// refreshes it from the table's typed cells and writes a new event.
+type ChartSet struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Kind  ChartKind              `protobuf:"varint,1,opt,name=kind,proto3,enum=styli.ink.v1.ChartKind" json:"kind,omitempty"`
+	// The box on the page in page units, `angle` as for a text box.
+	X      int32  `protobuf:"zigzag32,2,opt,name=x,proto3" json:"x,omitempty"`
+	Y      int32  `protobuf:"zigzag32,3,opt,name=y,proto3" json:"y,omitempty"`
+	Width  uint32 `protobuf:"varint,4,opt,name=width,proto3" json:"width,omitempty"`
+	Height uint32 `protobuf:"varint,5,opt,name=height,proto3" json:"height,omitempty"`
+	Angle  int32  `protobuf:"zigzag32,6,opt,name=angle,proto3" json:"angle,omitempty"`
+	Title  string `protobuf:"bytes,7,opt,name=title,proto3" json:"title,omitempty"`
+	// The x axis labels (the slices of a pie), and the series. A pie draws the first series.
+	Categories []string       `protobuf:"bytes,8,rep,name=categories,proto3" json:"categories,omitempty"`
+	Series     []*ChartSeries `protobuf:"bytes,9,rep,name=series,proto3" json:"series,omitempty"`
+	XLabel     string         `protobuf:"bytes,10,opt,name=x_label,json=xLabel,proto3" json:"x_label,omitempty"`
+	YLabel     string         `protobuf:"bytes,11,opt,name=y_label,json=yLabel,proto3" json:"y_label,omitempty"`
+	// Set to turn off what is on unless said otherwise, so a log with none of
+	// these shows the legend and the gridlines.
+	HideLegend bool `protobuf:"varint,12,opt,name=hide_legend,json=hideLegend,proto3" json:"hide_legend,omitempty"`
+	HideGrid   bool `protobuf:"varint,13,opt,name=hide_grid,json=hideGrid,proto3" json:"hide_grid,omitempty"`
+	// Bars: stacked instead of side by side.
+	Stacked bool `protobuf:"varint,14,opt,name=stacked,proto3" json:"stacked,omitempty"`
+	// Text colour (0xAARRGGBB; zero alpha means the page's ordinary ink colour) and
+	// the base font size in page units (zero: the reader's choice).
+	TextColor uint32 `protobuf:"varint,15,opt,name=text_color,json=textColor,proto3" json:"text_color,omitempty"`
+	FontSize  uint32 `protobuf:"varint,16,opt,name=font_size,json=fontSize,proto3" json:"font_size,omitempty"`
+	// Where the data came from, if it follows a table: the table's ID and the
+	// block of its cells (first row and column, how many of each) read as the
+	// categories and series; with `series_in_rows` each row is a series, otherwise
+	// each column is. The first row and column of the block are the labels.
+	SourceTable   []byte `protobuf:"bytes,17,opt,name=source_table,json=sourceTable,proto3" json:"source_table,omitempty"`
+	SrcRow        uint32 `protobuf:"varint,18,opt,name=src_row,json=srcRow,proto3" json:"src_row,omitempty"`
+	SrcCol        uint32 `protobuf:"varint,19,opt,name=src_col,json=srcCol,proto3" json:"src_col,omitempty"`
+	SrcRows       uint32 `protobuf:"varint,20,opt,name=src_rows,json=srcRows,proto3" json:"src_rows,omitempty"`
+	SrcCols       uint32 `protobuf:"varint,21,opt,name=src_cols,json=srcCols,proto3" json:"src_cols,omitempty"`
+	SeriesInRows  bool   `protobuf:"varint,22,opt,name=series_in_rows,json=seriesInRows,proto3" json:"series_in_rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChartSet) Reset() {
+	*x = ChartSet{}
+	mi := &file_ink_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChartSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChartSet) ProtoMessage() {}
+
+func (x *ChartSet) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChartSet.ProtoReflect.Descriptor instead.
+func (*ChartSet) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ChartSet) GetKind() ChartKind {
+	if x != nil {
+		return x.Kind
+	}
+	return ChartKind_CHART_BAR
+}
+
+func (x *ChartSet) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *ChartSet) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *ChartSet) GetWidth() uint32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *ChartSet) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *ChartSet) GetAngle() int32 {
+	if x != nil {
+		return x.Angle
+	}
+	return 0
+}
+
+func (x *ChartSet) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ChartSet) GetCategories() []string {
+	if x != nil {
+		return x.Categories
+	}
+	return nil
+}
+
+func (x *ChartSet) GetSeries() []*ChartSeries {
+	if x != nil {
+		return x.Series
+	}
+	return nil
+}
+
+func (x *ChartSet) GetXLabel() string {
+	if x != nil {
+		return x.XLabel
+	}
+	return ""
+}
+
+func (x *ChartSet) GetYLabel() string {
+	if x != nil {
+		return x.YLabel
+	}
+	return ""
+}
+
+func (x *ChartSet) GetHideLegend() bool {
+	if x != nil {
+		return x.HideLegend
+	}
+	return false
+}
+
+func (x *ChartSet) GetHideGrid() bool {
+	if x != nil {
+		return x.HideGrid
+	}
+	return false
+}
+
+func (x *ChartSet) GetStacked() bool {
+	if x != nil {
+		return x.Stacked
+	}
+	return false
+}
+
+func (x *ChartSet) GetTextColor() uint32 {
+	if x != nil {
+		return x.TextColor
+	}
+	return 0
+}
+
+func (x *ChartSet) GetFontSize() uint32 {
+	if x != nil {
+		return x.FontSize
+	}
+	return 0
+}
+
+func (x *ChartSet) GetSourceTable() []byte {
+	if x != nil {
+		return x.SourceTable
+	}
+	return nil
+}
+
+func (x *ChartSet) GetSrcRow() uint32 {
+	if x != nil {
+		return x.SrcRow
+	}
+	return 0
+}
+
+func (x *ChartSet) GetSrcCol() uint32 {
+	if x != nil {
+		return x.SrcCol
+	}
+	return 0
+}
+
+func (x *ChartSet) GetSrcRows() uint32 {
+	if x != nil {
+		return x.SrcRows
+	}
+	return 0
+}
+
+func (x *ChartSet) GetSrcCols() uint32 {
+	if x != nil {
+		return x.SrcCols
+	}
+	return 0
+}
+
+func (x *ChartSet) GetSeriesInRows() bool {
+	if x != nil {
+		return x.SeriesInRows
+	}
+	return false
+}
+
+type ChartRemoved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChartRemoved) Reset() {
+	*x = ChartRemoved{}
+	mi := &file_ink_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChartRemoved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChartRemoved) ProtoMessage() {}
+
+func (x *ChartRemoved) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChartRemoved.ProtoReflect.Descriptor instead.
+func (*ChartRemoved) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{24}
+}
+
 var File_ink_proto protoreflect.FileDescriptor
 
 const file_ink_proto_rawDesc = "" +
@@ -2314,7 +2730,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x05event\x18\x02 \x01(\v2\x13.styli.ink.v1.EventH\x00R\x05eventB\x06\n" +
 	"\x04body\"\"\n" +
 	"\x06Header\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\"\x81\t\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\"\xfb\t\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\tR\x06device\x12\x10\n" +
@@ -2338,7 +2754,9 @@ const file_ink_proto_rawDesc = "" +
 	"\bfill_set\x18\x17 \x01(\v2\x15.styli.ink.v1.FillSetH\x00R\afillSet\x12>\n" +
 	"\ffill_removed\x18\x18 \x01(\v2\x19.styli.ink.v1.FillRemovedH\x00R\vfillRemoved\x125\n" +
 	"\timage_set\x18\x19 \x01(\v2\x16.styli.ink.v1.ImageSetH\x00R\bimageSet\x12A\n" +
-	"\rimage_removed\x18\x1a \x01(\v2\x1a.styli.ink.v1.ImageRemovedH\x00R\fimageRemovedB\x06\n" +
+	"\rimage_removed\x18\x1a \x01(\v2\x1a.styli.ink.v1.ImageRemovedH\x00R\fimageRemoved\x125\n" +
+	"\tchart_set\x18\x1b \x01(\v2\x16.styli.ink.v1.ChartSetH\x00R\bchartSet\x12A\n" +
+	"\rchart_removed\x18\x1c \x01(\v2\x1a.styli.ink.v1.ChartRemovedH\x00R\fchartRemovedB\x06\n" +
 	"\x04kind\"\xd9\x01\n" +
 	"\vStrokeAdded\x12&\n" +
 	"\x04tool\x18\x01 \x01(\x0e2\x12.styli.ink.v1.ToolR\x04tool\x12\x14\n" +
@@ -2461,7 +2879,41 @@ const file_ink_proto_rawDesc = "" +
 	"\tsrc_width\x18\f \x01(\rR\bsrcWidth\x12\x1d\n" +
 	"\n" +
 	"src_height\x18\r \x01(\rR\tsrcHeight\"\x0e\n" +
-	"\fImageRemoved*;\n" +
+	"\fImageRemoved\"q\n" +
+	"\vChartSeries\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05color\x18\x02 \x01(\rR\x05color\x12\x1a\n" +
+	"\x06values\x18\x03 \x03(\x12B\x02\x10\x01R\x06values\x12\x1c\n" +
+	"\amissing\x18\x04 \x03(\rB\x02\x10\x01R\amissing\"\xf7\x04\n" +
+	"\bChartSet\x12+\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x17.styli.ink.v1.ChartKindR\x04kind\x12\f\n" +
+	"\x01x\x18\x02 \x01(\x11R\x01x\x12\f\n" +
+	"\x01y\x18\x03 \x01(\x11R\x01y\x12\x14\n" +
+	"\x05width\x18\x04 \x01(\rR\x05width\x12\x16\n" +
+	"\x06height\x18\x05 \x01(\rR\x06height\x12\x14\n" +
+	"\x05angle\x18\x06 \x01(\x11R\x05angle\x12\x14\n" +
+	"\x05title\x18\a \x01(\tR\x05title\x12\x1e\n" +
+	"\n" +
+	"categories\x18\b \x03(\tR\n" +
+	"categories\x121\n" +
+	"\x06series\x18\t \x03(\v2\x19.styli.ink.v1.ChartSeriesR\x06series\x12\x17\n" +
+	"\ax_label\x18\n" +
+	" \x01(\tR\x06xLabel\x12\x17\n" +
+	"\ay_label\x18\v \x01(\tR\x06yLabel\x12\x1f\n" +
+	"\vhide_legend\x18\f \x01(\bR\n" +
+	"hideLegend\x12\x1b\n" +
+	"\thide_grid\x18\r \x01(\bR\bhideGrid\x12\x18\n" +
+	"\astacked\x18\x0e \x01(\bR\astacked\x12\x1d\n" +
+	"\n" +
+	"text_color\x18\x0f \x01(\rR\ttextColor\x12\x1b\n" +
+	"\tfont_size\x18\x10 \x01(\rR\bfontSize\x12!\n" +
+	"\fsource_table\x18\x11 \x01(\fR\vsourceTable\x12\x17\n" +
+	"\asrc_row\x18\x12 \x01(\rR\x06srcRow\x12\x17\n" +
+	"\asrc_col\x18\x13 \x01(\rR\x06srcCol\x12\x19\n" +
+	"\bsrc_rows\x18\x14 \x01(\rR\asrcRows\x12\x19\n" +
+	"\bsrc_cols\x18\x15 \x01(\rR\asrcCols\x12$\n" +
+	"\x0eseries_in_rows\x18\x16 \x01(\bR\fseriesInRows\"\x0e\n" +
+	"\fChartRemoved*;\n" +
 	"\x04Tool\x12\f\n" +
 	"\bTOOL_PEN\x10\x00\x12\x14\n" +
 	"\x10TOOL_HIGHLIGHTER\x10\x01\x12\x0f\n" +
@@ -2489,7 +2941,12 @@ const file_ink_proto_rawDesc = "" +
 	"\x0eConnectorRoute\x12\x12\n" +
 	"\x0eROUTE_STRAIGHT\x10\x00\x12\x0f\n" +
 	"\vROUTE_ELBOW\x10\x01\x12\x0f\n" +
-	"\vROUTE_CURVE\x10\x02B6\n" +
+	"\vROUTE_CURVE\x10\x02*9\n" +
+	"\tChartKind\x12\r\n" +
+	"\tCHART_BAR\x10\x00\x12\x0e\n" +
+	"\n" +
+	"CHART_LINE\x10\x01\x12\r\n" +
+	"\tCHART_PIE\x10\x02B6\n" +
 	"\x13app.styli.ink.protoP\x01Z\x1dstyli/core/internal/ink/inkpbb\x06proto3"
 
 var (
@@ -2504,8 +2961,8 @@ func file_ink_proto_rawDescGZIP() []byte {
 	return file_ink_proto_rawDescData
 }
 
-var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_ink_proto_goTypes = []any{
 	(Tool)(0),                // 0: styli.ink.v1.Tool
 	(Template)(0),            // 1: styli.ink.v1.Template
@@ -2513,65 +2970,73 @@ var file_ink_proto_goTypes = []any{
 	(ShapeKind)(0),           // 3: styli.ink.v1.ShapeKind
 	(Arrowhead)(0),           // 4: styli.ink.v1.Arrowhead
 	(ConnectorRoute)(0),      // 5: styli.ink.v1.ConnectorRoute
-	(*Record)(nil),           // 6: styli.ink.v1.Record
-	(*Header)(nil),           // 7: styli.ink.v1.Header
-	(*Event)(nil),            // 8: styli.ink.v1.Event
-	(*StrokeAdded)(nil),      // 9: styli.ink.v1.StrokeAdded
-	(*StrokeErased)(nil),     // 10: styli.ink.v1.StrokeErased
-	(*Transformed)(nil),      // 11: styli.ink.v1.Transformed
-	(*TextBoxSet)(nil),       // 12: styli.ink.v1.TextBoxSet
-	(*TextBoxRemoved)(nil),   // 13: styli.ink.v1.TextBoxRemoved
-	(*TableSet)(nil),         // 14: styli.ink.v1.TableSet
-	(*TableRemoved)(nil),     // 15: styli.ink.v1.TableRemoved
-	(*ZMoved)(nil),           // 16: styli.ink.v1.ZMoved
-	(*PageSet)(nil),          // 17: styli.ink.v1.PageSet
-	(*ShapeSet)(nil),         // 18: styli.ink.v1.ShapeSet
-	(*ShapeRemoved)(nil),     // 19: styli.ink.v1.ShapeRemoved
-	(*ConnectorEnd)(nil),     // 20: styli.ink.v1.ConnectorEnd
-	(*ConnectorSet)(nil),     // 21: styli.ink.v1.ConnectorSet
-	(*ConnectorRemoved)(nil), // 22: styli.ink.v1.ConnectorRemoved
-	(*Ring)(nil),             // 23: styli.ink.v1.Ring
-	(*FillSet)(nil),          // 24: styli.ink.v1.FillSet
-	(*FillRemoved)(nil),      // 25: styli.ink.v1.FillRemoved
-	(*ImageSet)(nil),         // 26: styli.ink.v1.ImageSet
-	(*ImageRemoved)(nil),     // 27: styli.ink.v1.ImageRemoved
+	(ChartKind)(0),           // 6: styli.ink.v1.ChartKind
+	(*Record)(nil),           // 7: styli.ink.v1.Record
+	(*Header)(nil),           // 8: styli.ink.v1.Header
+	(*Event)(nil),            // 9: styli.ink.v1.Event
+	(*StrokeAdded)(nil),      // 10: styli.ink.v1.StrokeAdded
+	(*StrokeErased)(nil),     // 11: styli.ink.v1.StrokeErased
+	(*Transformed)(nil),      // 12: styli.ink.v1.Transformed
+	(*TextBoxSet)(nil),       // 13: styli.ink.v1.TextBoxSet
+	(*TextBoxRemoved)(nil),   // 14: styli.ink.v1.TextBoxRemoved
+	(*TableSet)(nil),         // 15: styli.ink.v1.TableSet
+	(*TableRemoved)(nil),     // 16: styli.ink.v1.TableRemoved
+	(*ZMoved)(nil),           // 17: styli.ink.v1.ZMoved
+	(*PageSet)(nil),          // 18: styli.ink.v1.PageSet
+	(*ShapeSet)(nil),         // 19: styli.ink.v1.ShapeSet
+	(*ShapeRemoved)(nil),     // 20: styli.ink.v1.ShapeRemoved
+	(*ConnectorEnd)(nil),     // 21: styli.ink.v1.ConnectorEnd
+	(*ConnectorSet)(nil),     // 22: styli.ink.v1.ConnectorSet
+	(*ConnectorRemoved)(nil), // 23: styli.ink.v1.ConnectorRemoved
+	(*Ring)(nil),             // 24: styli.ink.v1.Ring
+	(*FillSet)(nil),          // 25: styli.ink.v1.FillSet
+	(*FillRemoved)(nil),      // 26: styli.ink.v1.FillRemoved
+	(*ImageSet)(nil),         // 27: styli.ink.v1.ImageSet
+	(*ImageRemoved)(nil),     // 28: styli.ink.v1.ImageRemoved
+	(*ChartSeries)(nil),      // 29: styli.ink.v1.ChartSeries
+	(*ChartSet)(nil),         // 30: styli.ink.v1.ChartSet
+	(*ChartRemoved)(nil),     // 31: styli.ink.v1.ChartRemoved
 }
 var file_ink_proto_depIdxs = []int32{
-	7,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
-	8,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
-	9,  // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
-	10, // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
-	11, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
-	12, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
-	13, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
-	17, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
-	14, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
-	15, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
-	16, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
-	18, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
-	19, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
-	21, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
-	22, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
-	24, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
-	25, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
-	26, // 17: styli.ink.v1.Event.image_set:type_name -> styli.ink.v1.ImageSet
-	27, // 18: styli.ink.v1.Event.image_removed:type_name -> styli.ink.v1.ImageRemoved
-	0,  // 19: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
-	1,  // 20: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
-	3,  // 21: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
-	2,  // 22: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
-	20, // 23: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
-	20, // 24: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
-	4,  // 25: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
-	4,  // 26: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
-	2,  // 27: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
-	5,  // 28: styli.ink.v1.ConnectorSet.route:type_name -> styli.ink.v1.ConnectorRoute
-	23, // 29: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	8,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
+	9,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
+	10, // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
+	11, // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
+	12, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
+	13, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
+	14, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
+	18, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
+	15, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
+	16, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
+	17, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
+	19, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
+	20, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
+	22, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
+	23, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
+	25, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
+	26, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
+	27, // 17: styli.ink.v1.Event.image_set:type_name -> styli.ink.v1.ImageSet
+	28, // 18: styli.ink.v1.Event.image_removed:type_name -> styli.ink.v1.ImageRemoved
+	30, // 19: styli.ink.v1.Event.chart_set:type_name -> styli.ink.v1.ChartSet
+	31, // 20: styli.ink.v1.Event.chart_removed:type_name -> styli.ink.v1.ChartRemoved
+	0,  // 21: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
+	1,  // 22: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
+	3,  // 23: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
+	2,  // 24: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
+	21, // 25: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
+	21, // 26: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
+	4,  // 27: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
+	4,  // 28: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
+	2,  // 29: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
+	5,  // 30: styli.ink.v1.ConnectorSet.route:type_name -> styli.ink.v1.ConnectorRoute
+	24, // 31: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
+	6,  // 32: styli.ink.v1.ChartSet.kind:type_name -> styli.ink.v1.ChartKind
+	29, // 33: styli.ink.v1.ChartSet.series:type_name -> styli.ink.v1.ChartSeries
+	34, // [34:34] is the sub-list for method output_type
+	34, // [34:34] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_ink_proto_init() }
@@ -2601,14 +3066,16 @@ func file_ink_proto_init() {
 		(*Event_FillRemoved)(nil),
 		(*Event_ImageSet)(nil),
 		(*Event_ImageRemoved)(nil),
+		(*Event_ChartSet)(nil),
+		(*Event_ChartRemoved)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ink_proto_rawDesc), len(file_ink_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   22,
+			NumEnums:      7,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
