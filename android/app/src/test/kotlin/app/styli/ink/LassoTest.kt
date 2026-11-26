@@ -24,19 +24,44 @@ class LassoTest {
         assertFalse(LassoGeometry.contains(c, 60f, 50f))
     }
 
+    private fun line(x0: Float, y0: Float, x1: Float, y1: Float) = listOf(Pt(x0, y0, 0, 1f), Pt(x1, y1, 10, 1f))
+
     @Test
-    fun moreThanHalfOfThePointsMustBeInside() {
+    fun moreThanHalfOfTheLengthMustBeInside() {
         val m = PageModel()
         val inside = m.add(Tool.TOOL_PEN, 0, 40, stroke(10f, 50f))       // x 10..50, all inside
-        val half = m.add(Tool.TOOL_PEN, 0, 40, stroke(80f, 50f, 4))     // x 80,90,100,110: two of four in
-        val most = m.add(Tool.TOOL_PEN, 0, 40, stroke(70f, 20f, 4))     // x 70,80,90,100: all on or inside... 100 is the edge
+        val half = m.add(Tool.TOOL_PEN, 0, 40, line(50f, 50f, 150f, 50f)) // exactly half in: not more than half
         val out = m.add(Tool.TOOL_PEN, 0, 40, stroke(200f, 50f))
         val got = LassoGeometry.selected(m.items, square)
         assertTrue(inside.id in got)
         assertFalse("exactly half is not more than half", half.id in got)
         assertFalse(out.id in got)
-        assertNotNull(most)
         assertEquals(emptySet<String>(), LassoGeometry.selected(m.items, floatArrayOf(0f, 0f, 10f, 10f))) // under three points
+    }
+
+    @Test
+    fun aTwoPointLineIsJudgedByLengthNotByItsPoints() {
+        val m = PageModel()
+        val whole = m.add(Tool.TOOL_PEN, 0, 40, line(10f, 50f, 90f, 50f))      // both ends in
+        val mostly = m.add(Tool.TOOL_PEN, 0, 40, line(10f, 50f, 140f, 50f))    // one end out, 90/130 = 69% in
+        val barely = m.add(Tool.TOOL_PEN, 0, 40, line(80f, 50f, 300f, 50f))    // one end in, 20/220 = 9% in
+        val across = m.add(Tool.TOOL_PEN, 0, 40, line(-1000f, 50f, 1000f, 50f)) // both ends out, 5% in
+        val got = LassoGeometry.selected(m.items, square)
+        assertTrue(whole.id in got)
+        assertTrue(mostly.id in got)
+        assertFalse(barely.id in got)
+        assertFalse(across.id in got)
+    }
+
+    @Test
+    fun aLongSparseStrokeWithItsEndsOutsideButMostlyInsideIsSelected() {
+        // Three points a long way apart: the middle is in the loop and the path is mostly in it, which a count of points misses.
+        val big = floatArrayOf(0f, 0f, 1000f, 0f, 1000f, 1000f, 0f, 1000f)
+        val m = PageModel()
+        val s = m.add(Tool.TOOL_PEN, 0, 40, listOf(Pt(-10f, 500f, 0, 1f), Pt(500f, 500f, 5, 1f), Pt(1010f, 500f, 9, 1f)))
+        assertTrue(s.id in LassoGeometry.selected(m.items, big))
+        assertEquals(1.0, LassoGeometry.insideShare(listOf(Pt(5f, 5f, 0, 1f)), big), 0.0) // a dot inside
+        assertEquals(0.0, LassoGeometry.insideShare(listOf(Pt(5f, 5f, 0, 1f)), square.map { it + 500f }.toFloatArray()), 0.0)
     }
 
     @Test

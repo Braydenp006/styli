@@ -3,6 +3,7 @@ package app.styli.ink
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.round
 import kotlin.math.sin
@@ -63,11 +64,36 @@ object LassoGeometry {
         return inside
     }
 
-    /** The strokes with more than half of their points inside the loop. A loop under three points catches nothing. */
+    /**
+     * The strokes with more than half of their length inside the loop (so a straight line, which is only two
+     * points, works like any other). A loop under three points catches nothing. The length is judged by
+     * testing the middle of every piece of path up to [STEP] long.
+     */
     fun selected(items: List<Item>, poly: FloatArray): Set<String> {
         if (poly.size < 6) return emptySet()
-        return items.filter { item -> item.pts.count { contains(poly, it.x, it.y) } * 2 > item.pts.size }.mapTo(HashSet()) { it.id }
+        return items.filter { insideShare(it.pts, poly) > 0.5 }.mapTo(HashSet()) { it.id }
     }
+
+    /** 0 to 1: how much of the path's length is inside the loop. A dot counts as all or nothing. */
+    fun insideShare(pts: List<Pt>, poly: FloatArray): Double {
+        var total = 0.0
+        var inside = 0.0
+        for (i in 1 until pts.size) {
+            val a = pts[i - 1]
+            val b = pts[i]
+            val len = hypot((b.x - a.x).toDouble(), (b.y - a.y).toDouble())
+            val n = kotlin.math.ceil(len / STEP).toInt().coerceIn(1, 4000)
+            for (k in 0 until n) {
+                val t = (k + 0.5f) / n
+                total += len / n
+                if (contains(poly, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) inside += len / n
+            }
+        }
+        if (total == 0.0) return if (pts.isNotEmpty() && contains(poly, pts[0].x, pts[0].y)) 1.0 else 0.0
+        return inside / total
+    }
+
+    private const val STEP = 50.0 // 0.5 mm
 
     /** The box round these strokes, padded by half the widest pen so the ink is inside it. Null if there are none. */
     fun bounds(items: List<Item>): Box? {
