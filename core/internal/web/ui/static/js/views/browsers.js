@@ -110,6 +110,7 @@ export function browsersCard() {
       qr(link.qr_svg, "QR code of the sign-in link"),
       h("div", { class: "grow" },
         h("p", {}, "Scan the code with the other device's camera, or open the link in the browser you're adding."),
+        h("p", { class: "hint" }, "On an iPhone, scan with the Camera app and open the link in Safari. The Code Scanner in Control Center opens links in its own window, which doesn't keep you signed in."),
         h("label", { class: "sty-field", for: "join-url" }, h("span", {}, "Sign-in link"), url),
         h("p", { class: "hint" }, `It works once, until ${until}. Anyone who has it can sign in, so only open it on your own device.`),
         here ? h("p", { class: "hint" }, "For now this atrium can only be reached from this computer, so the link only works in a browser here.") : null,
