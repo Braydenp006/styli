@@ -269,9 +269,21 @@ class RouteTest {
     @Test
     fun anElbowsBendSnapsToCentreOrToAnEnd() {
         val a = 0f to 0f; val b = 4000f to 1000f
-        assertEquals(0f, Routes.snappedBend(Route.ELBOW, a, right, b, left, 20f, 40f), 0.01f) // back to the middle
-        assertEquals(300f, Routes.snappedBend(Route.ELBOW, a, right, b, left, 300f, 40f), 0.01f) // far from a snap: as dragged
-        assertEquals(-2000f, Routes.snappedBend(Route.ELBOW, a, right, b, left, -1985f, 40f), 0.01f) // in line with the first end (x = 0)
-        assertEquals(123f, Routes.snappedBend(Route.CURVE, a, right, b, left, 123f, 40f), 0f) // other routes untouched
+        assertEquals(0f, Routes.snappedBend(Route.ELBOW, a, right, b, left, 20f, 40f).first, 0.01f) // back to the middle
+        assertEquals(300f, Routes.snappedBend(Route.ELBOW, a, right, b, left, 300f, 40f).first, 0.01f) // far from a snap: as dragged
+        assertEquals(-2000f, Routes.snappedBend(Route.ELBOW, a, right, b, left, -1985f, 40f).first, 0.01f) // in line with the first end (x = 0)
+        assertEquals(123f, Routes.snappedBend(Route.CURVE, a, right, b, left, 123f, 40f).first, 0f) // other routes untouched
+    }
+
+    @Test
+    fun snapsSayWhatTheyLinedUpWith() {
+        val sn = Routes.snapPointWith(2980f to 40f, listOf(0f to 0f, 3000f to 1000f), 50f)
+        assertEquals(3000f to 1000f, sn.xFrom)
+        assertEquals(0f to 0f, sn.yFrom)
+        assertEquals(3000f to 0f, sn.p)
+        assertEquals(null, Routes.snapPointWith(1500f to 500f, listOf(0f to 0f), 50f).xFrom)
+        assertEquals(0f, Routes.snappedBend(Route.ELBOW, 0f to 0f, right, 4000f to 1000f, left, 20f, 40f).first, 0.01f)
+        assertEquals(2000f, Routes.snappedBend(Route.ELBOW, 0f to 0f, right, 4000f to 1000f, left, 20f, 40f).second!!, 0.01f) // the centre line
+        assertEquals(null, Routes.snappedBend(Route.ELBOW, 0f to 0f, right, 4000f to 1000f, left, 300f, 40f).second)
     }
 }

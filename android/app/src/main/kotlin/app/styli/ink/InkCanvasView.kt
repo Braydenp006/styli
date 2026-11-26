@@ -149,6 +149,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 }
                 activate(work)
                 drawLassoOverlay(canvas)
+                drawGuides(canvas)
                 drawLinePreview(canvas)
                 drawSnapPreview(canvas)
                 drawTextDragPreview(canvas)
@@ -640,6 +641,42 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private val shapeLayouts = HashMap<String, Pair<Shape, StaticLayout>>()
     private var editShape: Shape? = null // the shape whose text is being typed
 
+    /** The shape being reshaped by a handle, as it would be now (saved when the pen lifts), and as it was when the drag began. */
+    private var shapePreview: Shape? = null
+    private var shapeBase: Shape? = null
+    private var geoIndex = 0 // which corner a drag has hold of
+
+    /** Lines to draw while something snaps (page units); empty otherwise. */
+    private var guides: List<ShapeEdit.Guide> = emptyList()
+    private val guidePaint = Paint().apply {
+        style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xFFE91E63.toInt(); isAntiAlias = true
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 8f), 0f)
+    }
+
+    private fun drawGuides(canvas: Canvas) {
+        val g = geometry
+        for (l in guides) canvas.drawLine(
+            g.toScreenX(l.x1.toDouble()).toFloat(), g.toScreenY(l.y1.toDouble()).toFloat(),
+            g.toScreenX(l.x2.toDouble()).toFloat(), g.toScreenY(l.y2.toDouble()).toFloat(), guidePaint,
+        )
+    }
+
+    private fun guide(a: Pair<Float, Float>, b: Pair<Float, Float>) = ShapeEdit.Guide(a.first, a.second, b.first, b.second)
+
+    /** The shape that is selected on its own (as it would be now): its corners or corner radius get handles. */
+    private fun shapeAlone(): Shape? {
+        if (selection.size != 1) return null
+        val s = model.shapeOf(selection.first()) ?: return null
+        return shapePreview?.takeIf { it.id == s.id } ?: s
+    }
+
+    /** The handles that edit a shape's geometry: (drag, index, where on the page). */
+    private fun geometryHandles(s: Shape): List<Triple<Drag, Int, Pair<Float, Float>>> = when (s.kind) {
+        ShapeKind.POLYGON -> s.vertices.mapIndexed { k, (fx, fy) -> Triple(Drag.SHAPE_VERTEX, k, s.spot(fx, fy)) }
+        ShapeKind.RECT -> listOf(Triple(Drag.SHAPE_CORNER, 0, ShapeEdit.cornerHandle(s, CORNER_INSET_PX / geometry.scale.toFloat())))
+        ShapeKind.ELLIPSE -> emptyList()
+    }
+
     private fun shapeGesture(event: MotionEvent): Boolean {
         val i = event.findPointerIndex(pointerId)
         when (event.actionMasked) {
@@ -651,9 +688,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
                 shaping = false
-                val w = Math.abs(shapeToX - shapeFromX); val h = Math.abs(shapeToY - shapeFromY)
+                val (l, t, w, h) = draggedBox()
                 if (event.actionMasked != MotionEvent.ACTION_CANCEL && w >= SHAPE_MIN && h >= SHAPE_MIN) { // a tap or a sliver makes nothing
-                    model.addShape { shapePreset.make(it, minOf(shapeFromX, shapeToX), minOf(shapeFromY, shapeToY), w, h, penWidth.toFloat(), penColor) }
+                    model.addShape { shapePreset.make(it, l, t, w, h, penWidth.toFloat(), penColor) }
                     changed(true)
                 }
                 pageLayer.invalidate()
@@ -662,12 +699,18 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         return true
     }
 
+    /** The box dragged out so far: left, top, width, height. A square or circle takes the longer side both ways, towards where the pen is. */
+    private fun draggedBox(): List<Float> {
+        var w = Math.abs(shapeToX - shapeFromX); var h = Math.abs(shapeToY - shapeFromY)
+        if (shapePreset.locked) { val d = maxOf(w, h); w = d; h = d }
+        return listOf(if (shapeToX >= shapeFromX) shapeFromX else shapeFromX - w, if (shapeToY >= shapeFromY) shapeFromY else shapeFromY - h, w, h)
+    }
+
     /** The shape being dragged out, in the drag colour. */
     private fun drawShapeDragPreview(canvas: Canvas) {
         if (!shaping) return
         val g = geometry
-        val l = minOf(shapeFromX, shapeToX); val t = minOf(shapeFromY, shapeToY)
-        val w = Math.abs(shapeToX - shapeFromX); val h = Math.abs(shapeToY - shapeFromY)
+        val (l, t, w, h) = draggedBox()
         if (w < 1f || h < 1f) return
         canvas.save()
         canvas.translate(g.toScreenX(l.toDouble()).toFloat(), g.toScreenY(t.toDouble()).toFloat())
@@ -700,7 +743,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     }
 
     /** Draws a shape (in page units; the canvas already has the page matrix): fill, outline, then its text. */
-    private fun drawShape(canvas: Canvas, s: Shape) {
+    private fun drawShape(canvas: Canvas, s0: Shape) {
+        val s = shapePreview?.takeIf { it.id == s0.id } ?: s0
         val moved = dragMap?.takeIf { s.id in selection }
         canvas.save()
         if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
@@ -772,6 +816,16 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         return End(null, 0, s.first, s.second)
     }
 
+    /** Guide lines from a free end to [other] for the ways it lines up with it. */
+    private fun freeGuides(e: End, other: Pair<Float, Float>): List<ShapeEdit.Guide> = when {
+        e.shape != null -> emptyList()
+        e.x == other.first && e.y == other.second -> emptyList()
+        else -> listOfNotNull(
+            if (e.x == other.first) guide(e.x to e.y, other) else null,
+            if (e.y == other.second) guide(e.x to e.y, other) else null,
+        )
+    }
+
     private fun endAt(p: Pair<Float, Float>): End {
         val shape = model.order.asReversed().firstNotNullOfOrNull { model.shapeOf(it)?.takeIf { s -> s.near(p.first, p.second, CONNECT_REACH) } }
             ?: return End(null, 0, p.first, p.second)
@@ -795,8 +849,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
-                connecting = false
                 val c = if (event.actionMasked == MotionEvent.ACTION_CANCEL) null else previewConnector("")
+                connecting = false
+                guides = emptyList()
                 if (c != null) {
                     val (a, b) = c.resolve(model::shapeOf)
                     // Too short to be a line: a tap makes nothing.
@@ -816,7 +871,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val from = endAt(connectFrom)
         val to = endAt(connectTo)
         // Drawing a right-angle connector, a free end lines up with the start.
-        return Connector(id, from, snapFree(to, connectorRoute, connectFrom), connectorFromHead, connectorToHead, penColor, penWidth.toFloat(), false, connectorRoute)
+        val snapped = snapFree(to, connectorRoute, connectFrom)
+        if (connecting) guides = freeGuides(snapped, connectFrom)
+        return Connector(id, from, snapped, connectorFromHead, connectorToHead, penColor, penWidth.toFloat(), false, connectorRoute)
     }
 
     /** The shape as the lasso is moving it, so what is joined to it follows. */
@@ -1319,7 +1376,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private val selection = HashSet<String>()
     private var lassoing = false
-    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE, LINE, CONN_FROM, CONN_TO, CONN_BEND, CONN_VIA, ADD }
+    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE, LINE, CONN_FROM, CONN_TO, CONN_BEND, CONN_VIA, ADD, SHAPE_VERTEX, SHAPE_CORNER }
     private var drag = Drag.LOOP
     private val loop = ArrayList<Float>() // page units: x0, y0, x1, y1, ...
     private var dragStartX = 0.0
@@ -1346,6 +1403,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             pageLayer.invalidate()
         }
     private val handle = Paint().apply { color = 0xFF1565C0.toInt() }
+    private val geoHandle = Paint().apply { color = 0xFFEF6C00.toInt(); isAntiAlias = true } // geometry handles are orange, frame handles blue
 
     fun deleteSelection() {
         if (model.delete(selection)) {
@@ -1444,6 +1502,14 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             val (hx, hy) = q.corner(c)
             canvas.drawCircle(g.toScreenX(hx).toFloat(), g.toScreenY(hy).toFloat(), 9f, handle)
         }
+        // A shape on its own: diamonds on a polygon's corners, a ring for a rectangle's corner radius.
+        shapeAlone()?.takeIf { dragMap == null }?.let { s ->
+            for ((d, _, p) in geometryHandles(s)) {
+                val x = g.toScreenX(p.first.toDouble()).toFloat(); val y = g.toScreenY(p.second.toDouble()).toFloat()
+                if (d == Drag.SHAPE_CORNER) canvas.drawCircle(x, y, 11f, geoHandle)
+                else canvas.save().also { canvas.rotate(45f, x, y); canvas.drawRect(x - 8f, y - 8f, x + 8f, y + 8f, geoHandle); canvas.restore() }
+            }
+        }
         // The cell that was tapped (for the row and column buttons).
         val tbl = lineTable()
         val cell = cellSel
@@ -1532,6 +1598,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         linePreview = null
         connPreview = null
         connBase = null
+        shapePreview = null
+        shapeBase = null
+        guides = emptyList()
         val conn = connectorAlone()
         if (conn == null) addingBend = false
         if (conn != null && addingBend) { drag = Drag.ADD; dragStartX = px; dragStartY = py; return } // the tap says where
@@ -1550,6 +1619,16 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             }
             if (LassoGeometry.distToPath(px.toFloat(), py.toFloat(), path) * g.scale < HANDLE_PX) { drag = Drag.MOVE; dragStartX = px; dragStartY = py; return }
         } else if (box != null) {
+            // A shape on its own has handles on its corners (a polygon) or its corner radius (a rectangle). One that is
+            // nearer than every frame corner wins (a tie too), so a polygon's corner on the frame's corner can still be had.
+            val shape = shapeAlone()
+            if (shape != null) {
+                val near = geometryHandles(shape)
+                    .map { (d, k, p) -> Triple(d, k, kotlin.math.hypot(g.toScreenX(p.first.toDouble()) - sx, g.toScreenY(p.second.toDouble()) - sy)) }
+                    .filter { it.third < HANDLE_PX }.minByOrNull { it.third }
+                val frame = (0..3).minOf { c -> box.corner(c).let { kotlin.math.hypot(g.toScreenX(it.first) - sx, g.toScreenY(it.second) - sy) } }
+                if (near != null && near.third <= frame) { drag = near.first; geoIndex = near.second; shapeBase = shape; shapePreview = shape; return }
+            }
             // A line's handle wins over a corner's only if it is nearer, so neither can hide the other.
             val table = lineTable()
             val lineHit = table?.lineHandles()
@@ -1601,18 +1680,29 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         Drag.RESIZE -> dragMap = LassoGeometry.scaleFromCorner(dragBox!!, dragCorner, px, py)
                         Drag.LINE -> linePreview = lineBase!!.moveLine(lineVertical, lineIndex, (if (lineVertical) px - dragStartX else py - dragStartY).toFloat())
                         Drag.CONN_FROM -> connPreview = connBase!!.let { c ->
-                            c.copy(from = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, c.via.firstOrNull() ?: c.ends(model::shapeOf).b))
+                            val other = c.via.firstOrNull() ?: c.ends(model::shapeOf).b
+                            c.copy(from = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.from, other) }
                         }
                         Drag.CONN_TO -> connPreview = connBase!!.let { c ->
-                            c.copy(to = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, c.via.lastOrNull() ?: c.ends(model::shapeOf).a))
+                            val other = c.via.lastOrNull() ?: c.ends(model::shapeOf).a
+                            c.copy(to = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.to, other) }
                         }
                         Drag.ADD -> {}
+                        Drag.SHAPE_VERTEX -> shapeBase?.let { b ->
+                            val e = ShapeEdit.moveVertex(b, geoIndex, px.toFloat(), py.toFloat(), SNAP_PX / geometry.scale.toFloat())
+                            shapePreview = e.shape; guides = e.guides
+                        }
+                        Drag.SHAPE_CORNER -> shapeBase?.let { b ->
+                            shapePreview = ShapeEdit.setCorner(b, px.toFloat(), py.toFloat(), CORNER_INSET_PX / geometry.scale.toFloat(), SNAP_PX / geometry.scale.toFloat())
+                        }
                         Drag.CONN_VIA -> connPreview = connBase!!.let { c ->
                             var at = px.toFloat() to py.toFloat()
                             if (c.route == Route.ELBOW) { // right angles line up with the points on either side
                                 val e = c.ends(model::shapeOf)
                                 val chain = listOf(e.a) + c.via + listOf(e.b) // only the two points either side of this one count
-                                at = Routes.snapPoint(at, listOf(chain[connViaIndex], chain[connViaIndex + 2]), SNAP_PX / geometry.scale.toFloat())
+                                val sn = Routes.snapPointWith(at, listOf(chain[connViaIndex], chain[connViaIndex + 2]), SNAP_PX / geometry.scale.toFloat())
+                                at = sn.p
+                                guides = listOfNotNull(sn.xFrom?.let { guide(at, it) }, sn.yFrom?.let { guide(at, it) })
                             }
                             c.copy(via = c.via.toMutableList().also { it[connViaIndex] = at })
                         }
@@ -1621,7 +1711,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                             val e = c.ends(model::shapeOf)
                             val route = if (c.route == Route.STRAIGHT) Route.CURVE else c.route // pulling a straight line bends it into a curve
                             val bend = Routes.bendFor(route, e.a, e.da, e.b, e.db, px.toFloat() to py.toFloat())
-                            connPreview = c.copy(route = route, bend = Routes.snappedBend(route, e.a, e.da, e.b, e.db, bend, SNAP_PX / geometry.scale.toFloat()))
+                            val (snapped, at) = Routes.snappedBend(route, e.a, e.da, e.b, e.db, bend, SNAP_PX / geometry.scale.toFloat())
+                            connPreview = c.copy(route = route, bend = snapped)
+                            // The line it lined up on, along the span between the ends.
+                            guides = if (at == null) emptyList() else {
+                                val vertical = Routes.middle(Routes.path(route, e.a, e.da, e.b, e.db, snapped)).let { m -> Math.abs(m.first - at) < Math.abs(m.second - at) }
+                                listOf(if (vertical) guide(at to e.a.second, at to e.b.second) else guide(e.a.first to at, e.b.first to at))
+                            }
                         }
                         Drag.ROTATE -> {
                             val (cx, cy) = dragBox!!.centre
@@ -1656,6 +1752,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         selection.addAll(LassoGeometry.selectedLines(model.connectors.map { c -> c.id to c.path(model::shapeOf) }, loop.toFloatArray()))
                     }
                     Drag.LINE -> if (!cancelled) linePreview?.takeIf { it !== lineBase }?.let { model.setTable(it) }
+                    Drag.SHAPE_VERTEX, Drag.SHAPE_CORNER -> if (!cancelled) shapePreview?.takeIf { it !== shapeBase }?.let { model.setShape(it) }
                     Drag.ADD -> if (!cancelled) addBendAt(dragStartX.toFloat(), dragStartY.toFloat()) else addingBend = false
                     Drag.CONN_FROM, Drag.CONN_TO, Drag.CONN_BEND, Drag.CONN_VIA -> if (!cancelled) connPreview?.takeIf { it !== connBase }?.let { c ->
                         val (a, b) = c.resolve(model::shapeOf) // the ends remember where they landed
@@ -1676,6 +1773,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 lineBase = null
                 connPreview = null
                 connBase = null
+                shapePreview = null
+                shapeBase = null
+                guides = emptyList()
                 lassoing = false
                 changed(true)
             }
@@ -2123,6 +2223,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val SLIDE_MIN_PX = 8.0 // a finger gesture that moved sideways less than this does not settle onto a page
         const val TEXT_MIN_WIDTH = 1000f // a dragged box narrower than 10 mm is not a box
         const val TEXT_SIZE = 400f // text 4 mm high
+        const val CORNER_INSET_PX = 26f // a rectangle's corner-radius handle sits this far in from the corner, clear of the resize handle
         const val SNAP_PX = 24f // right-angle connectors line up with their neighbours within this many screen pixels
         const val BEND_REACH_PX = 80f // a tap this close (on screen) to a connector's line adds a bend point on it
         const val CONNECT_SNAP = 500f // a connector end this close (5 mm) to the middle of a side lands on it

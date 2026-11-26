@@ -196,20 +196,25 @@ object Routes {
     }
 
     /** [p] with its x pulled onto the x of any of [others] within [tol], and likewise its y: so right-angle runs line up. */
-    fun snapPoint(p: P, others: List<P>, tol: Float): P {
-        val x = others.map { it.first }.minByOrNull { abs(it - p.first) }?.takeIf { abs(it - p.first) <= tol } ?: p.first
-        val y = others.map { it.second }.minByOrNull { abs(it - p.second) }?.takeIf { abs(it - p.second) <= tol } ?: p.second
-        return x to y
+    fun snapPoint(p: P, others: List<P>, tol: Float): P = snapPointWith(p, others, tol).p
+
+    /** The snapped point, and the points whose x and y it lined up with (for a guide line); null where it did not snap. */
+    class Snap(val p: P, val xFrom: P?, val yFrom: P?)
+
+    fun snapPointWith(p: P, others: List<P>, tol: Float): Snap {
+        val bx = others.minByOrNull { abs(it.first - p.first) }?.takeIf { abs(it.first - p.first) <= tol }
+        val by = others.minByOrNull { abs(it.second - p.second) }?.takeIf { abs(it.second - p.second) <= tol }
+        return Snap((bx?.first ?: p.first) to (by?.second ?: p.second), bx, by)
     }
 
-    /** An elbow's [bend] pulled to centre the middle run, or to line it up with either end, when within [tol]. Other routes are left alone. */
-    fun snappedBend(route: Route, a: P, da: P?, b: P, db: P?, bend: Float, tol: Float): Float {
-        if (route != Route.ELBOW) return bend
+    /** An elbow's [bend] pulled to centre the middle run, or to line it up with either end, when within [tol], and the coordinate it snapped to (x if the middle run is vertical, else y; null if it did not snap). Other routes are left alone. */
+    fun snappedBend(route: Route, a: P, da: P?, b: P, db: P?, bend: Float, tol: Float): Pair<Float, Float?> {
+        if (route != Route.ELBOW) return bend to null
         val p = plan(a, da, b, db)
-        val onX = p.middleOnX ?: return bend
+        val onX = p.middleOnX ?: return bend to null
         val targets = if (onX) listOf(p.base, a.first, b.first) else listOf(p.base, a.second, b.second)
         val t = targets.minByOrNull { abs(p.base + bend - it) }!!
-        return if (abs(p.base + bend - t) <= tol) t - p.base else bend
+        return if (abs(p.base + bend - t) <= tol) (t - p.base) to t else bend to null
     }
 
     /** How far along [path] (its length up to there) the point [at], taken to be on it, is. */

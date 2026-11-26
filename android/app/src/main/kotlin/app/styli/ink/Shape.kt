@@ -233,10 +233,12 @@ class Shape(
 }
 
 /** The premade shapes. Each is a kind and, for a polygon, its corners as fractions of the box. */
-enum class ShapePreset(val kind: ShapeKind, val vertices: List<Pair<Float, Float>> = emptyList(), val rounded: Boolean = false) {
+enum class ShapePreset(val kind: ShapeKind, val vertices: List<Pair<Float, Float>> = emptyList(), val rounded: Boolean = false, val locked: Boolean = false) {
     RECTANGLE(ShapeKind.RECT),
+    SQUARE(ShapeKind.RECT, locked = true),
     ROUNDED(ShapeKind.RECT, rounded = true),
     ELLIPSE(ShapeKind.ELLIPSE),
+    CIRCLE(ShapeKind.ELLIPSE, locked = true),
     TRIANGLE(ShapeKind.POLYGON, listOf(.5f to 0f, 1f to 1f, 0f to 1f)),
     DIAMOND(ShapeKind.POLYGON, listOf(.5f to 0f, 1f to .5f, .5f to 1f, 0f to .5f)),
     PARALLELOGRAM(ShapeKind.POLYGON, listOf(.25f to 0f, 1f to 0f, .75f to 1f, 0f to 1f)),
@@ -245,7 +247,7 @@ enum class ShapePreset(val kind: ShapeKind, val vertices: List<Pair<Float, Float
     STAR(ShapeKind.POLYGON, star()),
     ARROW(ShapeKind.POLYGON, listOf(0f to .3f, .6f to .3f, .6f to 0f, 1f to .5f, .6f to 1f, .6f to .7f, 0f to .7f));
 
-    /** A new shape of this kind filling the box at (x, y), [width] by [height]. */
+    /** A new shape of this kind filling the box at (x, y), [width] by [height] ([locked] presets, a square and a circle, are made equal by the caller). */
     fun make(id: String, x: Float, y: Float, width: Float, height: Float, lineWidth: Float = 40f, color: Int = 0, fill: Int = 0) =
         Shape(id, kind, x, y, width, height, 0f, color, lineWidth, false, fill, if (rounded) minOf(width, height) * 0.2f else 0f, vertices)
 }
@@ -266,4 +268,64 @@ private fun fit(p: List<Pair<Double, Double>>): List<Pair<Float, Float>> {
     val x0 = p.minOf { it.first }; val x1 = p.maxOf { it.first }
     val y0 = p.minOf { it.second }; val y1 = p.maxOf { it.second }
     return p.map { ((it.first - x0) / (x1 - x0)).toFloat() to ((it.second - y0) / (y1 - y0)).toFloat() }
+}
+
+/** Editing a shape's geometry with handles: a polygon's corners, a rectangle's corner radius. Pure maths. */
+object ShapeEdit {
+    /** A line to draw while something snaps, in page units. */
+    class Guide(val x1: Float, val y1: Float, val x2: Float, val y2: Float)
+
+    class Edited(val shape: Shape, val guides: List<Guide>)
+
+    /** Where a corner-radius handle sits for radius r: on the way in from the corner, [inset] further so it clears the resize handle. */
+    fun cornerHandle(s: Shape, inset: Float): Pair<Float, Float> {
+        val k = s.corner * 0.2929f + inset // the middle of the rounded corner is 0.29 of the radius in from each side
+        return s.toPage(k, k)
+    }
+
+    /**
+     * Polygon corner [index] dragged to the page point, which may be outside the box (the box grows to take it in), and snaps (within [tol] page units)
+     * to the sides and middle lines of the box and to the x or y of the other corners, with a guide for each snap.
+     */
+    fun moveVertex(s: Shape, index: Int, px: Float, py: Float, tol: Float): Edited {
+        if (s.kind != ShapeKind.POLYGON || index !in s.vertices.indices || s.width <= 0f || s.height <= 0f) return Edited(s, emptyList())
+        val (lx, ly) = s.toLocal(px, py)
+        var fx = lx / s.width // may be outside 0 to 1: the box then grows to take the corner in
+        var fy = ly / s.height
+        val others = s.vertices.filterIndexed { i, _ -> i != index }
+        // Candidates: (the line's value, the other corner it comes from or null for a side or middle line).
+        fun pick(v: Float, size: Float, from: List<Pair<Float, Pair<Float, Float>?>>): Pair<Float, Pair<Float, Float>?>? =
+            from.minByOrNull { Math.abs(it.first - v) }?.takeIf { Math.abs(it.first - v) * size <= tol }
+        val sx = pick(fx, s.width, others.map { it.first to it } + listOf(0f, .5f, 1f).map { it to null })
+        val sy = pick(fy, s.height, others.map { it.second to it } + listOf(0f, .5f, 1f).map { it to null })
+        sx?.let { fx = it.first }
+        sy?.let { fy = it.first }
+        val guides = ArrayList<Guide>()
+        fun line(a: Pair<Float, Float>, b: Pair<Float, Float>) = s.spot(a.first, a.second).let { p -> s.spot(b.first, b.second).let { q -> guides.add(Guide(p.first, p.second, q.first, q.second)) } }
+        sx?.let { line(fx to fy, if (it.second != null) fx to it.second!!.second else fx to (if (fy < .5f) 1f else 0f)) }
+        sy?.let { line(fx to fy, if (it.second != null) it.second!!.first to fy else (if (fx < .5f) 1f else 0f) to fy) }
+        val moved = s.vertices.toMutableList().also { it[index] = fx to fy }
+        return Edited(reframed(s, moved), guides)
+    }
+
+    /**
+     * The shape with corners [v] (fractions of its box, which may lie outside it), its box grown (never shrunk) to take
+     * them all in. Every corner keeps its place on the page, so the outline is what [v] says.
+     */
+    private fun reframed(s: Shape, v: List<Pair<Float, Float>>): Shape {
+        val w = s.width; val h = s.height
+        val l = minOf(0f, v.minOf { it.first } * w); val t = minOf(0f, v.minOf { it.second } * h)
+        val r = maxOf(w, v.maxOf { it.first } * w); val b = maxOf(h, v.maxOf { it.second } * h)
+        if (l == 0f && t == 0f && r == w && b == h) return s.copy(vertices = v)
+        val (nx, ny) = s.toPage(l, t) // the new top-left corner, turned with the shape
+        return s.copy(x = nx, y = ny, width = r - l, height = b - t, vertices = v.map { (fx, fy) -> (fx * w - l) / (r - l) to (fy * h - t) / (b - t) })
+    }
+
+    /** The rectangle's corner radius for a handle dragged to the page point (0 up to half the shorter side); a tiny one snaps to square. */
+    fun setCorner(s: Shape, px: Float, py: Float, inset: Float, tol: Float): Shape {
+        if (s.kind != ShapeKind.RECT) return s
+        val (lx, ly) = s.toLocal(px, py)
+        val r = (((lx - inset) + (ly - inset)) / 2 / 0.2929f).coerceIn(0f, minOf(s.width, s.height) / 2)
+        return s.copy(corner = if (r <= tol) 0f else r)
+    }
 }
