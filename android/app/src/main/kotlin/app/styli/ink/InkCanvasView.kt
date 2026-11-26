@@ -323,7 +323,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private val selection = HashSet<String>()
     private var lassoing = false
-    private enum class Drag { LOOP, MOVE, RESIZE }
+    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE }
     private var drag = Drag.LOOP
     private val loop = ArrayList<Float>() // page units: x0, y0, x1, y1, ...
     private var dragStartX = 0.0
@@ -346,7 +346,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private fun selectionBox(): Box? {
         val box = LassoGeometry.bounds(model.items.filter { it.id in selection }) ?: return null
-        val m = dragMap ?: return box
+        val m = dragMap?.takeIf { drag != Drag.ROTATE } ?: return box // a turned box is drawn tilted, see the overlay
         return Box(m.x(box.l.toFloat(), box.t.toFloat()).toDouble(), m.y(box.l.toFloat(), box.t.toFloat()).toDouble(),
             m.x(box.r.toFloat(), box.b.toFloat()).toDouble(), m.y(box.r.toFloat(), box.b.toFloat()).toDouble())
     }
@@ -363,12 +363,31 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             canvas.drawPath(path, dashed)
         }
         val box = selectionBox() ?: return
+        val turn = dragMap?.takeIf { drag == Drag.ROTATE }
+        if (turn != null) {
+            val path = android.graphics.Path()
+            for ((k, c) in listOf(0, 1, 3, 2).withIndex()) {
+                val (hx, hy) = LassoGeometry.corner(box, c)
+                val x = g.toScreenX(turn.x(hx.toFloat(), hy.toFloat()).toDouble()).toFloat()
+                val y = g.toScreenY(turn.y(hx.toFloat(), hy.toFloat()).toDouble()).toFloat()
+                if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            path.close()
+            canvas.drawPath(path, dashed)
+            return
+        }
         canvas.drawRect(g.toScreenX(box.l).toFloat(), g.toScreenY(box.t).toFloat(), g.toScreenX(box.r).toFloat(), g.toScreenY(box.b).toFloat(), dashed)
+        val (rx, ry) = rotateHandle(box)
+        canvas.drawLine(g.toScreenX((box.l + box.r) / 2).toFloat(), g.toScreenY(box.t).toFloat(), g.toScreenX(rx).toFloat(), g.toScreenY(ry).toFloat(), dashed)
+        canvas.drawCircle(g.toScreenX(rx).toFloat(), g.toScreenY(ry).toFloat(), 12f, handle)
         for (c in 0..3) {
             val (hx, hy) = LassoGeometry.corner(box, c)
             canvas.drawCircle(g.toScreenX(hx).toFloat(), g.toScreenY(hy).toFloat(), 9f, handle)
         }
     }
+
+    /** The round handle above the middle of the top edge, a fixed distance on screen away from it. */
+    private fun rotateHandle(box: Box) = (box.l + box.r) / 2 to box.t - ROTATE_STEM_PX / geometry.scale
 
     private fun startLasso(event: MotionEvent, i: Int) {
         val g = geometry
@@ -379,6 +398,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val box = selectionBox()
         dragMap = null
         if (box != null) {
+            val (rx, ry) = rotateHandle(box)
+            if (kotlin.math.hypot(g.toScreenX(rx) - sx, g.toScreenY(ry) - sy) < HANDLE_PX) {
+                drag = Drag.ROTATE; dragBox = box; dragStartX = px; dragStartY = py
+                return
+            }
             // Corners first (a fingertip-sized target), then anywhere inside the box.
             for (c in 0..3) {
                 val (hx, hy) = LassoGeometry.corner(box, c)
@@ -411,6 +435,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         Drag.LOOP -> { loop.add(px.toFloat()); loop.add(py.toFloat()) }
                         Drag.MOVE -> dragMap = Affine.translate(px - dragStartX, py - dragStartY)
                         Drag.RESIZE -> dragMap = LassoGeometry.scaleFromCorner(dragBox!!, dragCorner, px, py)
+                        Drag.ROTATE -> {
+                            val b = dragBox!!
+                            val cx = (b.l + b.r) / 2
+                            val cy = (b.t + b.b) / 2
+                            val turn = LassoGeometry.snap(LassoGeometry.turn(cx, cy, dragStartX, dragStartY, px, py))
+                            dragMap = Affine.rotateAbout(turn, cx, cy)
+                        }
                     }
                 }
                 for (h in 0 until event.historySize) at(event.getHistoricalX(i, h), event.getHistoricalY(i, h))
@@ -539,5 +570,6 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val LINED_STEP = 800 // 8 mm
         const val GRID_STEP = 500 // 5 mm
         const val HANDLE_PX = 36f
+        const val ROTATE_STEM_PX = 56f
     }
 }

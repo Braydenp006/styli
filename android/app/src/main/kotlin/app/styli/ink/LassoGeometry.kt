@@ -1,6 +1,11 @@
 package app.styli.ink
 
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.round
+import kotlin.math.sin
 
 /** The map x' = a*x + c*y + e, y' = b*x + d*y + f, as in the ink format's Transformed event. */
 data class Affine(
@@ -27,6 +32,13 @@ data class Affine(
     companion object {
         val IDENTITY = Affine()
         fun translate(dx: Double, dy: Double) = Affine(e = dx, f = dy)
+        /** Turns by [angle] radians (positive is clockwise on screen, where y points down) round (ox, oy). */
+        fun rotateAbout(angle: Double, ox: Double, oy: Double): Affine {
+            val co = cos(angle)
+            val si = sin(angle)
+            return Affine(co, si, -si, co, ox - (co * ox - si * oy), oy - (si * ox + co * oy))
+        }
+
         fun scaleAbout(s: Double, ox: Double, oy: Double) = Affine(s, 0.0, 0.0, s, ox - s * ox, oy - s * oy)
     }
 }
@@ -67,6 +79,21 @@ object LassoGeometry {
             for (p in it.pts) { l = minOf(l, p.x.toDouble()); r = maxOf(r, p.x.toDouble()); t = minOf(t, p.y.toDouble()); b = maxOf(b, p.y.toDouble()) }
         }
         return Box(l - pad, t - pad, r + pad, b + pad)
+    }
+
+    /** The angle (radians, from -pi to pi) that takes the line centre-to-start round to the line centre-to-now. */
+    fun turn(cx: Double, cy: Double, startX: Double, startY: Double, x: Double, y: Double): Double {
+        var d = atan2(y - cy, x - cx) - atan2(startY - cy, startX - cx)
+        while (d > PI) d -= 2 * PI
+        while (d <= -PI) d += 2 * PI
+        return d
+    }
+
+    /** Within [tolDeg] of a multiple of [stepDeg], the angle jumps onto it, so a turn is easy to put back to straight. */
+    fun snap(angle: Double, stepDeg: Double = 15.0, tolDeg: Double = 3.0): Double {
+        val step = Math.toRadians(stepDeg)
+        val near = round(angle / step) * step
+        return if (kotlin.math.abs(angle - near) <= Math.toRadians(tolDeg)) near else angle
     }
 
     /** The corner's position: 0 top left, 1 top right, 2 bottom left, 3 bottom right. */

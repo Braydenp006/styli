@@ -153,4 +153,50 @@ class LassoTest {
             }
         }
     }
+
+    @Test
+    fun rotatingAQuarterTurnClockwiseOnScreen() {
+        // y points down, so a clockwise quarter turn about (10, 10) takes the point to its right to the one below.
+        val m = Affine.rotateAbout(Math.PI / 2, 10.0, 10.0)
+        assertEquals(10f, m.x(20f, 10f), 1e-4f)
+        assertEquals(20f, m.y(20f, 10f), 1e-4f)
+        assertEquals(10f, m.x(10f, 10f), 1e-4f) // the centre stays
+        assertEquals(10f, m.y(10f, 10f), 1e-4f)
+        val back = m.inverse().apply(m.apply(Pt(3f, 4f, 0, 1f)))
+        assertEquals(3f, back.x, 1e-3f)
+        assertEquals(4f, back.y, 1e-3f)
+    }
+
+    @Test
+    fun turnIsTheAngleBetweenTwoPointersAndWrapsTheShortWay() {
+        assertEquals(Math.PI / 2, LassoGeometry.turn(0.0, 0.0, 10.0, 0.0, 0.0, 10.0), 1e-9)
+        // From just above the negative x axis to just below it is a small turn, not almost a full circle.
+        val t = LassoGeometry.turn(0.0, 0.0, -10.0, -1.0, -10.0, 1.0)
+        assertTrue(Math.abs(t) < 0.3)
+    }
+
+    @Test
+    fun snapJumpsOntoFifteenDegreeStepsOnlyWhenClose() {
+        assertEquals(0.0, LassoGeometry.snap(Math.toRadians(2.0)), 1e-9)
+        assertEquals(Math.toRadians(90.0), LassoGeometry.snap(Math.toRadians(88.0)), 1e-9)
+        assertEquals(Math.toRadians(-45.0), LassoGeometry.snap(Math.toRadians(-47.5)), 1e-9)
+        assertEquals(Math.toRadians(7.5), LassoGeometry.snap(Math.toRadians(7.5)), 1e-9) // halfway between two steps: left alone
+    }
+
+    @Test
+    fun rotatedStrokesUndoExactlyAndTheLogReplays() {
+        val m = PageModel()
+        val a = m.add(Tool.TOOL_PEN, 0, 40, stroke(0f, 0f))
+        m.transform(setOf(a.id), Affine.rotateAbout(Math.toRadians(30.0), 20.0, 0.0))
+        val replay = LinkedHashMap<String, Item>()
+        for (e in m.log) when (e) {
+            is Ev.Added -> replay[e.item.id] = e.item
+            is Ev.Erased -> replay.remove(e.id)
+            is Ev.Transformed -> for (id in e.ids) replay[id]?.let { replay[id] = Item(it.id, it.tool, it.color, it.width, it.pts.map(e.map::apply)) }
+        }
+        assertEquals(m.items[0].pts[4].x, replay.getValue(a.id).pts[4].x, 0.01f)
+        assertEquals(m.items[0].pts[4].y, replay.getValue(a.id).pts[4].y, 0.01f)
+        assertTrue(m.undo())
+        assertSame(a, m.items[0])
+    }
 }
