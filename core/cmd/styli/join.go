@@ -106,8 +106,9 @@ func join(args []string, in io.Reader, stdout, stderr io.Writer) int {
 	// device ends up paired with.
 	candidates := []string(given)
 	if len(candidates) == 0 {
-		fmt.Fprintln(stdout, "Looking for an atrium on this network…")
+		stopSpin := spin(stdout, "Looking for an atrium on this network…")
 		found, err := browse(context.Background(), 3*time.Second)
+		stopSpin()
 		switch {
 		case len(found) == 0:
 			fmt.Fprintln(stderr, "join: no atrium was found on this network. Check that it is running (and not started with --no-announce) on the same network, or give its address with --atrium.")
@@ -200,4 +201,36 @@ func join(args []string, in io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
+}
+
+// spin prints msg with a small turning animation in front of it until stop is
+// called, then leaves msg on its own line. Only on a terminal: anywhere else
+// (a pipe, a log, a test) it prints msg once, without the frames.
+func spin(out io.Writer, msg string) (stop func()) {
+	f, ok := out.(*os.File)
+	if !ok {
+		fmt.Fprintln(out, msg)
+		return func() {}
+	}
+	if st, err := f.Stat(); err != nil || st.Mode()&os.ModeCharDevice == 0 {
+		fmt.Fprintln(out, msg)
+		return func() {}
+	}
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+		tick := time.NewTicker(80 * time.Millisecond)
+		defer tick.Stop()
+		for i := 0; ; i++ {
+			fmt.Fprintf(f, "\r%c %s", frames[i%len(frames)], msg)
+			select {
+			case <-done:
+				fmt.Fprintf(f, "\r\033[K%s\n", msg) // \033[K clears the rest of the line
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	return func() { close(done); <-finished }
 }

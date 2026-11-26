@@ -131,9 +131,13 @@ type reply struct {
 }
 
 // answer works out the replies to one packet. A legacy query (one not sent from
-// port 5353, such as dig or a one-shot resolver) gets one unicast reply that
-// repeats its ID and questions. Otherwise answers go to the multicast group,
-// except those to questions with the QU bit, which go back to the asker.
+// port 5353, such as dig or a one-shot resolver) gets a unicast reply that
+// repeats its ID and questions, and the same answers go to the multicast group
+// too: a firewall on the asker drops the unicast one (it comes back to a random
+// port from an address the question was not sent to), while port 5353 is
+// usually open, and our own Browse listens there as well. Otherwise answers go
+// to the group, except those to questions with the QU bit, which go back to
+// the asker.
 func (r *responder) answer(packet []byte, legacy bool) []reply {
 	var q dns.Msg
 	if q.Unpack(packet) != nil || q.Response || q.Opcode != dns.OpcodeQuery || q.Rcode != 0 {
@@ -147,14 +151,16 @@ func (r *responder) answer(packet []byte, legacy bool) []reply {
 			continue
 		}
 		for _, rr := range r.zone.Records(question) {
-			rr = dns.Copy(rr)
-			h := rr.Header()
 			if legacy {
-				h.Ttl = min(h.Ttl, legacyTTL)
-			} else if h.Rrtype != dns.TypePTR { // a PTR is shared: many may answer it
+				u := dns.Copy(rr)
+				u.Header().Ttl = min(u.Header().Ttl, legacyTTL)
+				uni = append(uni, u)
+			}
+			rr = dns.Copy(rr)
+			if h := rr.Header(); h.Rrtype != dns.TypePTR { // a PTR is shared: many may answer it
 				h.Class |= flushBit
 			}
-			if unicast {
+			if unicast && !legacy {
 				uni = append(uni, rr)
 			} else {
 				multi = append(multi, rr)

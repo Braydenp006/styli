@@ -219,6 +219,31 @@ func TestSaveWithKeepOldKeepsTheReplacedVersion(t *testing.T) {
 	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "x", "base": "b", "keep_old": "yes"}, 400)
 }
 
+// Settling a clash keeps the text with the markers as a version, even with
+// history off for the note, and leaves the conflict flag alone.
+func TestSaveWithSettleAlwaysKeepsTheReplacedVersion(t *testing.T) {
+	e := newEnv(t)
+	marked := "<<<<<<< this device\nmine\n=======\ntheirs\n>>>>>>> atrium\n"
+	id := e.create(t, "n.md", "before")
+	e.call(t, "PUT", "/api/notes/"+id+"/history-enabled", map[string]any{"on": false}, 200)
+	get := func() map[string]any { return e.call(t, "GET", "/api/notes/"+id, nil, 200) }
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": marked, "base": get()["version"]}, 200) // history off: not kept
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "mine\n", "base": get()["version"], "settle": true}, 200)
+	kept := false
+	for _, v := range e.call(t, "GET", "/api/notes/"+id+"/history", nil, 200)["versions"].([]any) {
+		if e.call(t, "GET", "/api/notes/"+id+"/history/"+v.(map[string]any)["id"].(string), nil, 200)["text"] == marked {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatal("the marked-up text was not kept")
+	}
+	if get()["text"] != "mine\n" {
+		t.Fatal("not saved")
+	}
+	e.call(t, "PUT", "/api/notes/"+id, map[string]any{"text": "x", "base": "stale", "settle": true}, 409)
+}
+
 func TestCreateErrors(t *testing.T) {
 	e := newEnv(t)
 	e.create(t, "a.md", "x")

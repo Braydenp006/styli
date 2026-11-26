@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,4 +232,25 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// Anywhere but a terminal the search line is printed once, with no frames, so
+// pipes and logs stay clean.
+func TestSpinIsQuietOffATerminal(t *testing.T) {
+	var buf bytes.Buffer
+	spin(&buf, "Looking…")()
+	if buf.String() != "Looking…\n" {
+		t.Fatalf("buffer: %q", buf.String())
+	}
+	f, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := spin(f, "Looking…")
+	time.Sleep(200 * time.Millisecond)
+	stop()
+	f.Close()
+	if b, _ := os.ReadFile(f.Name()); string(b) != "Looking…\n" {
+		t.Fatalf("file: %q", b)
+	}
 }

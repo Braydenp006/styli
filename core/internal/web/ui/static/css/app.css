@@ -313,6 +313,11 @@ mark.hit { background: var(--honey-tint); color: inherit; border-radius: var(--r
 .clash-side { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
 .clash-side pre { margin: var(--space-1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 13px/20px var(--font-mono); }
 .conflict-item a.sty-btn { text-decoration: none; }
+.clash-box { margin: var(--space-4) 0; padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--danger); border-radius: var(--radius-md); }
+.clash-box .clash { margin-top: 0; }
+.clash-body > :first-child { margin-top: var(--space-1); }
+.clash-body > :last-child { margin-bottom: 0; }
+.clash-actions { margin-top: var(--space-3); }
 
 /* ---- delete: this device only or everywhere ---- */
 .choices { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; border: 0; }

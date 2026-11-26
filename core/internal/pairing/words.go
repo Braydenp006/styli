@@ -3,7 +3,7 @@ package pairing
 import "strings"
 
 // The magic words and the emoji row lean on ancient Rome, like the rest of
-// Styli. Themed lists the user can choose are planned; this is the default.
+// Styli. They are the app's theme, so there is one list and no other to choose.
 //
 // Security does not depend on the words being Roman, only on how many there
 // are and that each is picked at random: with one guess allowed and 4 words

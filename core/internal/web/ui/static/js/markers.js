@@ -14,7 +14,7 @@ export function parseMarkers(text) {
     if (!clash) { same.push(lines[i]); continue; }
     if (same.length) parts.push({ type: "same", lines: same });
     same = [];
-    parts.push({ type: "clash", mine: clash.mine, theirs: clash.theirs });
+    parts.push({ type: "clash", mine: clash.mine, theirs: clash.theirs, raw: lines.slice(i, clash.end + 1) });
     i = clash.end;
   }
   if (same.length) parts.push({ type: "same", lines: same });
@@ -30,3 +30,24 @@ function readClash(lines, start) {
 }
 
 export const clashCount = (parts) => parts.filter((p) => p.type === "clash").length;
+
+// resolveClash settles the clash at index (0 for the first) by keeping
+// "device" (the side between <<<<<<< and =======), "atrium", or "both"
+// (device's lines, then the atrium's). Everything else, other clashes
+// included, stays exactly as it was. Returns null if there is no such clash.
+export function resolveClash(text, index, choice) {
+  const parts = parseMarkers(text);
+  const clashes = parts.filter((p) => p.type === "clash");
+  const target = clashes[index];
+  if (!target || !["device", "atrium", "both"].includes(choice)) return null;
+  const out = [];
+  for (const p of parts) {
+    if (p.type === "same") out.push(...p.lines);
+    else if (p !== target) out.push(...p.raw);
+    else if (choice === "device") out.push(...p.mine);
+    else if (choice === "atrium") out.push(...p.theirs);
+    else out.push(...p.mine, ...p.theirs);
+  }
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return out.join(eol) + (out.length && /\n$/.test(text) ? eol : "");
+}

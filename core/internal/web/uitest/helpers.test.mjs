@@ -437,13 +437,13 @@ test("recoveryWhy says what happened, by device", () => {
   assert.equal(recoveryWhy({ why: "deleted_while_changed", from: "Laptop" }), "Deleted everywhere from Laptop, which hadn't seen this newer version.");
 });
 
-import { parseMarkers, clashCount } from "../ui/static/js/markers.js";
+import { parseMarkers, clashCount, resolveClash } from "../ui/static/js/markers.js";
 
 test("parseMarkers splits shared text from clashes", () => {
   const parts = parseMarkers("top\n<<<<<<< this device\nmine\n=======\ntheirs\n>>>>>>> atrium\nbottom\n");
   assert.deepEqual(parts, [
     { type: "same", lines: ["top"] },
-    { type: "clash", mine: ["mine"], theirs: ["theirs"] },
+    { type: "clash", mine: ["mine"], theirs: ["theirs"], raw: ["<<<<<<< this device", "mine", "=======", "theirs", ">>>>>>> atrium"] },
     { type: "same", lines: ["bottom"] },
   ]);
   assert.equal(clashCount(parts), 1);
@@ -458,7 +458,24 @@ test("parseMarkers leaves incomplete markers as plain text", () => {
 test("parseMarkers handles two clashes and an empty side", () => {
   const parts = parseMarkers("<<<<<<< a\n=======\nonly theirs\n>>>>>>> b\n<<<<<<< a\nx\n=======\n>>>>>>> b");
   assert.deepEqual(parts.map((p) => p.type), ["clash", "clash"]);
-  assert.deepEqual(parts[1], { type: "clash", mine: ["x"], theirs: [] });
+  assert.deepEqual(parts[1], { type: "clash", mine: ["x"], theirs: [], raw: ["<<<<<<< a", "x", "=======", ">>>>>>> b"] });
+});
+
+test("resolveClash keeps the chosen side and nothing else changes", () => {
+  const text = "top\n<<<<<<< this device\nmine\n=======\ntheirs\n>>>>>>> atrium\nmiddle\n<<<<<<< this device\nm2\n=======\nt2\n>>>>>>> atrium\nbottom\n";
+  assert.equal(resolveClash(text, 0, "device"), "top\nmine\nmiddle\n<<<<<<< this device\nm2\n=======\nt2\n>>>>>>> atrium\nbottom\n");
+  assert.equal(resolveClash(text, 0, "atrium"), "top\ntheirs\nmiddle\n<<<<<<< this device\nm2\n=======\nt2\n>>>>>>> atrium\nbottom\n");
+  assert.equal(resolveClash(text, 1, "both"), "top\n<<<<<<< this device\nmine\n=======\ntheirs\n>>>>>>> atrium\nmiddle\nm2\nt2\nbottom\n");
+  const once = resolveClash(text, 0, "device");
+  assert.equal(clashCount(parseMarkers(resolveClash(once, 0, "atrium"))), 0);
+});
+
+test("resolveClash keeps line endings, and refuses what isn't there", () => {
+  assert.equal(resolveClash("<<<<<<< a\r\nx\r\n=======\r\ny\r\n>>>>>>> b\r\nend", 0, "atrium"), "y\r\nend");
+  assert.equal(resolveClash("<<<<<<< a\n=======\ny\n>>>>>>> b\n", 0, "device"), "");
+  assert.equal(resolveClash("no clash\n", 0, "device"), null);
+  assert.equal(resolveClash("<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n", 1, "device"), null);
+  assert.equal(resolveClash("<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n", 0, "mine"), null);
 });
 
 test("conflicts route", () => {

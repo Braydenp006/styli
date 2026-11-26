@@ -11,6 +11,7 @@ import { renderMarkdown } from "../render.js";
 import { relativeTime, fullDate } from "../time.js";
 import { openDialog, textField, UserError } from "../dialogs.js";
 import { folderPath, titleOf } from "../names.js";
+import { parseMarkers, clashCount, resolveClash } from "../markers.js";
 
 const AUTOSAVE_MS = 1500;
 
@@ -62,7 +63,7 @@ export function createNotePane(host) {
   function start(note, edit) {
     const c = {
       id: note.id, note, text: note.text, draft: note.text, base: note.version,
-      mode: "preview", timer: null, inflight: null, conflict: false, keepOld: false, previewSeq: 0, els: {},
+      mode: "preview", timer: null, inflight: null, conflict: false, keepOld: false, settle: false, previewSeq: 0, els: {},
     };
     cur = c;
     const name = note.has_note ? note.path : note.files[0]?.path ?? "";
@@ -127,13 +128,70 @@ export function createNotePane(host) {
 
   async function drawPreview(c) {
     const seq = ++c.previewSeq;
+    const parts = parseMarkers(c.draft);
     try {
-      await renderMarkdown(c.els.prose, c.draft);
+      if (!clashCount(parts)) {
+        await renderMarkdown(c.els.prose, c.draft);
+      } else {
+        // A sync merge left clashes: show each as its two copies with buttons,
+        // not as raw markers (which Markdown would turn into headings).
+        const out = [];
+        let n = 0;
+        for (const p of parts) {
+          if (p.type === "same") {
+            const el = h("div");
+            await renderMarkdown(el, p.lines.join("\n"));
+            out.push(el);
+          } else {
+            out.push(await clashBox(c, p, n++));
+          }
+        }
+        if (seq !== c.previewSeq || cur !== c) return;
+        setChildren(c.els.prose, ...out);
+      }
     } catch (err) {
       if (seq === c.previewSeq && cur === c) setChildren(c.els.prose, errorBanner(err, () => drawPreview(c)));
       return;
     }
     if (seq === c.previewSeq && !c.els.prose.querySelector("h1")) c.els.prose.prepend(h("h1", {}, c.title));
+  }
+
+  async function clashBox(c, p, i) {
+    const side = async (label, lines) => {
+      const body = h("div", { class: "clash-body" });
+      if (lines.length) await renderMarkdown(body, lines.join("\n"));
+      else setChildren(body, h("p", { class: "hint" }, "(nothing)"));
+      return h("div", { class: "clash-side" }, h("strong", {}, label), body);
+    };
+    const buttons = [["Keep device copy", "device"], ["Keep atrium copy", "atrium"], ["Keep both", "both"]].map(([label, choice]) =>
+      h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: () => {
+        buttons.forEach((b) => { b.disabled = true; });
+        settleClash(c, i, choice).finally(() => buttons.forEach((b) => { b.disabled = false; }));
+      } }, label));
+    return h("section", { class: "clash-box", "aria-label": `Clash ${i + 1}: two devices changed these lines` },
+      h("div", { class: "clash" }, await side("Device copy", p.mine), await side("Atrium copy", p.theirs)),
+      h("div", { class: "banner-actions clash-actions" }, buttons));
+  }
+
+  // settleClash keeps one copy (or both) of clash i and saves at once. The
+  // text with the markers is kept as a version (settle), so the copy not
+  // chosen is never lost. When no clash is left, the note is marked settled.
+  async function settleClash(c, i, choice) {
+    if (!(await save(c))) return; // anything typed is saved first
+    const next = resolveClash(c.text, i, choice);
+    if (next === null) return drawPreview(c);
+    c.draft = next;
+    c.els.text.value = next;
+    c.settle = true;
+    if (!(await save(c))) return; // a clash with another save shows its own banner
+    if (c.note.conflict && !clashCount(parseMarkers(next))) {
+      try {
+        await markSettled(c);
+      } catch (err) {
+        setStatus(c, err instanceof ApiError ? err.message : "Couldn't mark it as settled.", "error");
+      }
+    }
+    if (cur === c && c.mode === "preview") drawPreview(c);
   }
 
   // ---- saving ----
@@ -166,10 +224,10 @@ export function createNotePane(host) {
       setStatus(c, "Saving…");
       try {
         // After a conflict, "save mine anyway" asks the server to keep the text it replaces as its own version.
-        const res = await api.put(`/api/notes/${encodeURIComponent(c.id)}`, { text: sent, base: c.base, keep_old: c.keepOld || undefined });
+        const res = await api.put(`/api/notes/${encodeURIComponent(c.id)}`, { text: sent, base: c.base, keep_old: c.keepOld || undefined, settle: c.settle || undefined });
         c.base = res.version;
         c.text = sent;
-        c.keepOld = false;
+        c.keepOld = c.settle = false;
       } catch (err) {
         if (err instanceof ApiError && err.code === "conflict") {
           c.conflict = true;
@@ -202,11 +260,7 @@ export function createNotePane(host) {
     const btn = h("button", { class: "sty-btn sty-btn--secondary", type: "button", onclick: async () => {
       btn.disabled = true;
       try {
-        await api.delete(`/api/notes/${encodeURIComponent(c.id)}/conflict`);
-        c.note.conflict = false;
-        if (cur === c) { drawDisputed(c); setChildren(details, ...detailsFor(c)); }
-        host.noteMoved(c.id); // the list shows the same flag
-        document.dispatchEvent(new CustomEvent("conflicts-refresh")); // so does the sidebar count
+        await markSettled(c);
       } catch (err) {
         btn.disabled = false;
         msg.textContent = err instanceof ApiError ? err.message : "Couldn't mark it as settled.";
@@ -215,9 +269,16 @@ export function createNotePane(host) {
     setChildren(c.els.disputed, h("div", { class: "banner", role: "note" },
       h("div", { class: "grow" },
         h("strong", {}, "This note is disputed: two devices changed it at once."),
-        h("p", { class: "banner-text" }, "Where they changed the same lines, both versions sit between ", h("code", {}, "<<<<<<<"), " and ", h("code", {}, ">>>>>>>"),
-          ". If an attached file changed on both, both copies are kept. Use Edit to see the markers, keep what you want, then mark it as settled."),
+        h("p", { class: "banner-text" }, "Where they changed the same lines, both copies are shown below: keep one or both, and the text you replace stays in this note's version history. If an attached file changed on both, both copies are kept; mark the note as settled when you're done."),
         h("div", { class: "banner-actions" }, btn), msg)));
+  }
+
+  async function markSettled(c) {
+    await api.delete(`/api/notes/${encodeURIComponent(c.id)}/conflict`);
+    c.note.conflict = false;
+    if (cur === c) { drawDisputed(c); setChildren(details, ...detailsFor(c)); }
+    host.noteMoved(c.id); // the list shows the same flag
+    document.dispatchEvent(new CustomEvent("conflicts-refresh")); // so does the sidebar count
   }
 
   // ---- a conflict: the note changed somewhere else while this one was open ----

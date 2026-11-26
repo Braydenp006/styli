@@ -79,13 +79,18 @@ func TestAnswerRules(t *testing.T) {
 		}
 	}
 
-	// A legacy query: unicast, its ID and question repeated, short TTLs, no flush bit.
+	// A legacy query: unicast, its ID and question repeated, short TTLs, no
+	// flush bit; and the normal answer to the group too, for an asker whose
+	// firewall drops the unicast one.
 	out = r.answer(question(t, 42, testHost, dns.TypeA, false), true)
-	if len(out) != 1 || !out[0].unicast || out[0].msg.Id != 42 || len(out[0].msg.Question) != 1 {
+	if len(out) != 2 || out[0].unicast || out[0].msg.Id != 0 || !out[1].unicast || out[1].msg.Id != 42 || len(out[1].msg.Question) != 1 {
 		t.Fatalf("legacy query: %+v", out)
 	}
-	if h := out[0].msg.Answer[0].Header(); h.Ttl > legacyTTL || h.Class != dns.ClassINET {
-		t.Fatalf("legacy answer header %+v", h)
+	if h := out[1].msg.Answer[0].Header(); h.Ttl > legacyTTL || h.Class != dns.ClassINET {
+		t.Fatalf("legacy unicast answer header %+v", h)
+	}
+	if h := out[0].msg.Answer[0].Header(); h.Class != dns.ClassINET|flushBit {
+		t.Fatalf("legacy group answer header %+v", h)
 	}
 
 	// Nothing for other names, for answers, or for junk.
@@ -151,6 +156,12 @@ func (a *asker) ask(t *testing.T, qu bool) (ttl int, toGroup bool) {
 	if _, err := a.p.WriteTo(question(t, 0, testHost, dns.TypeA, qu), nil, groupV4); err != nil {
 		t.Fatal(err)
 	}
+	return a.wait(t)
+}
+
+// wait reads until an answer about testHost arrives on port 5353.
+func (a *asker) wait(t *testing.T) (ttl int, toGroup bool) {
+	t.Helper()
 	a.p.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 9000)
 	for {
@@ -187,5 +198,22 @@ func TestResponderOnTheNetwork(t *testing.T) {
 	}
 	if ttl, toGroup := a.ask(t, true); ttl != 255 || toGroup {
 		t.Fatalf("QU question: TTL %d, to the group %v", ttl, toGroup)
+	}
+
+	// A question from a random port (as Browse asks) is also answered at the
+	// group, where an asker behind a firewall still hears it on port 5353.
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	oneShot := ipv4.NewPacketConn(c)
+	oneShot.SetMulticastInterface(&f.Interface)
+	oneShot.SetMulticastLoopback(true)
+	if _, err := oneShot.WriteTo(question(t, 9, testHost, dns.TypeA, false), nil, groupV4); err != nil {
+		t.Fatal(err)
+	}
+	if ttl, toGroup := a.wait(t); ttl != 255 || !toGroup {
+		t.Fatalf("question from a random port: TTL %d, to the group %v", ttl, toGroup)
 	}
 }

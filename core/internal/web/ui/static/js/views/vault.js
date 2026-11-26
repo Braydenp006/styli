@@ -99,6 +99,9 @@ export function init(callbacks) {
   app = callbacks;
 }
 
+// Settling a note on the Conflicts screen changes its "Disputed" chip here.
+document.addEventListener("conflicts-changed", () => loadList(false));
+
 // The folder the list is showing, for the sidebar's highlight.
 export const currentFolder = () => state.folder;
 

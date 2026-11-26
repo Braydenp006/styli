@@ -158,6 +158,10 @@ func (s *server) saveNote(w http.ResponseWriter, r *http.Request) {
 		// KeepOld keeps the text being replaced as its own history version,
 		// for the moment someone overwrites a version saved elsewhere.
 		KeepOld bool `json:"keep_old"`
+		// Settle is settling a clash a sync merge left: the text with the
+		// markers is kept as a version even when history is off for the note,
+		// so the side not chosen is never lost (as the merge itself does).
+		Settle bool `json:"settle"`
 	}
 	if err := readJSON(w, r, &req); err != nil {
 		s.failErr(w, err)
@@ -165,7 +169,12 @@ func (s *server) saveNote(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	write := s.Vault.WriteNote
-	if req.KeepOld {
+	switch {
+	case req.Settle:
+		write = func(id string, b []byte, base string) (string, error) {
+			return s.Vault.WriteNoteMerged(id, b, base, false)
+		}
+	case req.KeepOld:
 		write = s.Vault.WriteNoteKeepingOld
 	}
 	ver, err := write(id, []byte(req.Text), req.Base)
