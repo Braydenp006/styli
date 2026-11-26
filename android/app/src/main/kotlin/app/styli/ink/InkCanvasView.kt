@@ -21,8 +21,13 @@ import androidx.ink.brush.StockBrushes
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
+import androidx.ink.brush.BrushFamily
+import androidx.ink.brush.InputToolType
+import androidx.ink.strokes.MutableStrokeInputBatch
+import androidx.ink.strokes.StrokeInput
 import app.styli.ink.proto.PageSet
 import app.styli.ink.proto.Template
+import app.styli.ink.proto.Tool as StrokeTool
 
 /**
  * A page you can draw on with a stylus and move around with your fingers (drag to pan, pinch to zoom).
@@ -42,11 +47,33 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** A finished stroke and its box in page units, so a redraw can skip the ones off screen. */
     private class Placed(val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
-    private val finishedStrokes = mutableListOf<Placed>()
+    /** What the pen in your hand does. */
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART }
+
+    private val model = PageModel()
+    private val placed = HashMap<String, Placed>() // drawn strokes by ID, built once (pruned after every change)
     private val renderer = CanvasStrokeRenderer.create()
 
-    // Sizes are in page units: a 0.4 mm pen, and strokes simplified to within 0.02 mm.
-    private val brush = Brush.createWithColorIntArgb(StockBrushes.pressurePen(), Color.BLACK, 40f, 2f)
+    var tool = Tool.PEN
+    var penColor = Color.BLACK
+    var penWidth = 40 // 0.4 mm, in page units
+    var highlighterColor = 0x99FFEB3B.toInt() // a see-through yellow, so the writing shows through
+    var highlighterWidth = 400 // 4 mm
+
+    val canUndo get() = model.canUndo
+    val canRedo get() = model.canRedo
+
+    // Sizes are in page units; strokes are simplified to within 0.02 mm.
+    private val penFamily = StockBrushes.pressurePen()
+    private val highlighterFamily = StockBrushes.highlighter()
+    private fun brushFor(family: BrushFamily, color: Int, width: Int) =
+        Brush.createWithColorIntArgb(family, color, width.toFloat(), 2f)
+    private val brush get() =
+        if (tool == Tool.HIGHLIGHTER) brushFor(highlighterFamily, highlighterColor, highlighterWidth)
+        else brushFor(penFamily, penColor, penWidth)
+
+    /** The eraser's reach on screen, so it feels the same at any zoom. */
+    private val eraserPx = 10f
 
     private val pxPerUnit = resources.displayMetrics.xdpi / 2540.0
     private var geometry = PageGeometry(21000, 29700, false, pxPerUnit)
@@ -77,7 +104,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
                 canvas.save()
                 canvas.concat(toScreen)
-                for (p in finishedStrokes) {
+                for (item in model.items) {
+                    val p = placed.getOrPut(item.id) { place(buildStroke(item)) }
                     if (p.r < vl || p.l > vr || p.b < vt || p.t > vb) continue
                     renderer.draw(canvas, p.stroke, toScreen)
                 }
@@ -146,7 +174,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         liveLayer.addFinishedStrokesListener(
             object : InProgressStrokesFinishedListener {
                 override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                    strokes.values.forEach { finishedStrokes.add(place(it)) }
+                    strokes.values.forEach {
+                        val item = model.add(liveTool, liveColor, liveWidth, pointsOf(it))
+                        placed[item.id] = place(it)
+                    }
                     pageLayer.invalidate()
                     // Only stop drawing the live copy after the page layer has the stroke, to avoid a flicker.
                     liveLayer.removeFinishedStrokes(strokes.keys)
@@ -183,8 +214,32 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
     }
 
-    fun undo() {
-        if (finishedStrokes.removeLastOrNull() != null) pageLayer.invalidate()
+    fun undo() = changed(model.undo())
+    fun redo() = changed(model.redo())
+
+    private fun changed(did: Boolean) {
+        if (!did) return
+        placed.keys.retainAll(model.items.mapTo(HashSet()) { it.id })
+        pageLayer.invalidate()
+    }
+
+    // What the stroke being drawn was made with, in case the tool is changed before the pen lifts.
+    private var liveTool = StrokeTool.TOOL_PEN
+    private var liveColor = Color.BLACK
+    private var liveWidth = 40
+
+    private fun pointsOf(stroke: Stroke): List<Pt> =
+        (0 until stroke.inputs.size).map {
+            val i = stroke.inputs[it]
+            Pt(i.x, i.y, i.elapsedTimeMillis, if (i.hasPressure) i.pressure else 1f)
+        }
+
+    /** A stroke the library can draw, rebuilt from recorded points (after an undo or a partial erase). */
+    private fun buildStroke(item: Item): Stroke {
+        val batch = MutableStrokeInputBatch()
+        for (p in item.pts) batch.add(InputToolType.STYLUS, p.x, p.y, p.t, StrokeInput.NO_STROKE_UNIT_LENGTH, p.p)
+        val hl = item.tool == StrokeTool.TOOL_HIGHLIGHTER
+        return Stroke(brushFor(if (hl) highlighterFamily else penFamily, item.color, item.width), batch)
     }
 
     private fun place(stroke: Stroke): Placed {
@@ -221,10 +276,21 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null) {
+            if (isPen(event.getToolType(i)) && strokeId == null && !erasing) {
                 gestureActive = false // a pen landing after a palm takes over
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
+                // The back end of the S Pen always erases whole strokes.
+                eraserEnd = event.getToolType(i) == MotionEvent.TOOL_TYPE_ERASER
+                if (tool == Tool.ERASER_STROKE || tool == Tool.ERASER_PART || eraserEnd) {
+                    erasing = true
+                    eraseTo(event, i)
+                    return true
+                }
+                val hl = tool == Tool.HIGHLIGHTER
+                liveTool = if (hl) StrokeTool.TOOL_HIGHLIGHTER else StrokeTool.TOOL_PEN
+                liveColor = if (hl) highlighterColor else penColor
+                liveWidth = if (hl) highlighterWidth else penWidth
                 strokeId = liveLayer.startStroke(event, pointerId, brush, screenToPage())
                 return true
             }
@@ -232,7 +298,38 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 gestureActive = true
             }
         }
-        return if (strokeId != null) drawing(event) else moving(event)
+        return if (erasing) erase(event) else if (strokeId != null) drawing(event) else moving(event)
+    }
+
+    private var erasing = false
+    private var eraserEnd = false
+
+    /** Follows the pen across the page; every point it passed since the last event counts, so a fast drag leaves no gaps. */
+    private fun erase(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) {
+                for (h in 0 until event.historySize) eraseAt(event.getHistoricalX(i, h), event.getHistoricalY(i, h))
+                eraseTo(event, i)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                model.endErase()
+                erasing = false
+                changed(true)
+            }
+        }
+        return true
+    }
+
+    private fun eraseTo(event: MotionEvent, i: Int) = eraseAt(event.getX(i), event.getY(i))
+
+    private fun eraseAt(sx: Float, sy: Float) {
+        val g = geometry
+        val partial = tool == Tool.ERASER_PART && !eraserEnd
+        if (model.erase(g.toPageX(sx.toDouble()).toFloat(), g.toPageY(sy.toDouble()).toFloat(), (eraserPx / g.scale).toFloat(), partial)) {
+            pageLayer.invalidate()
+        }
     }
 
     // The finished stroke is handed to pageLayer a moment after the pen lifts, but on the SM-P620 nothing redrew the

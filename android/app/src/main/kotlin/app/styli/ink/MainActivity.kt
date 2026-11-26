@@ -3,7 +3,10 @@ package app.styli.ink
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -38,6 +41,9 @@ private fun InkScreen() {
     var template by remember { mutableStateOf(Template.TEMPLATE_LINED) }
     var letter by remember { mutableStateOf(false) }
     var landscape by remember { mutableStateOf(false) }
+    var tool by remember { mutableStateOf(InkCanvasView.Tool.PEN) }
+    var shade by remember { mutableStateOf(0) }
+    var thick by remember { mutableStateOf(0) }
 
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
@@ -56,10 +62,38 @@ private fun InkScreen() {
             },
         )
         Row(
-            Modifier.align(Alignment.TopStart).padding(16.dp),
+            Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp).horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(onClick = { canvas?.undo() }) { Text("Undo") }
+            Button(onClick = { canvas?.redo() }, Modifier.padding(start = 8.dp)) { Text("Redo") }
+            Button(
+                onClick = {
+                    tool = InkCanvasView.Tool.entries[(tool.ordinal + 1) % InkCanvasView.Tool.entries.size]
+                    canvas?.tool = tool
+                },
+                Modifier.padding(start = 8.dp),
+            ) { Text(tool.name.lowercase().replace('_', ' ')) }
+            Button(
+                onClick = {
+                    shade = (shade + 1) % 3
+                    canvas?.apply {
+                        penColor = listOf(0xFF000000.toInt(), 0xFF1565C0.toInt(), 0xFFC62828.toInt())[shade]
+                        highlighterColor = listOf(0x99FFEB3B.toInt(), 0x9966BB6A.toInt(), 0x99F06292.toInt())[shade]
+                    }
+                },
+                Modifier.padding(start = 8.dp),
+            ) { Text("Colour ${shade + 1}") }
+            Button(
+                onClick = {
+                    thick = (thick + 1) % 3
+                    canvas?.apply {
+                        penWidth = listOf(40, 80, 160)[thick]
+                        highlighterWidth = listOf(400, 700, 1000)[thick]
+                    }
+                },
+                Modifier.padding(start = 8.dp),
+            ) { Text("Width ${thick + 1}") }
             Button(onClick = { infinite = !infinite; apply() }, Modifier.padding(start = 8.dp)) {
                 Text(if (infinite) "Canvas" else "Page")
             }
@@ -76,7 +110,7 @@ private fun InkScreen() {
             ) { Text(template.name.removePrefix("TEMPLATE_").lowercase()) }
             Button(onClick = { letter = !letter; apply() }, Modifier.padding(start = 8.dp)) { Text(if (letter) "Letter" else "A4") }
             Button(onClick = { landscape = !landscape; apply() }, Modifier.padding(start = 8.dp)) {
-                Text(if (landscape) "Landscape" else "Portrait")
+                Text(if (landscape) "Landscape" else "Portrait", softWrap = false)
             }
             Text(latency, Modifier.padding(start = 16.dp))
         }
