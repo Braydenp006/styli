@@ -161,6 +161,7 @@ private fun InkScreen() {
             Button(onClick = { canvas?.redoPage() }, gap) { Text("Redo page change") }
             Button(onClick = { canvas?.deleteSelection() }, gap) { Text("Delete") }
             Button(onClick = { canvas?.editChart() }, gap) { Text("Edit chart") }
+            Button(onClick = { canvas?.addChartSamples() }, gap) { Text("Chart samples") }
             Button(onClick = { canvas?.toggleCrop() }, gap) { Text("Crop") }
             Button(onClick = { canvas?.resetCrop() }, gap) { Text("Reset crop") }
             Button(onClick = { pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, gap) { Text("Image") }

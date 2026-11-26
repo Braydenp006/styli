@@ -54,6 +54,12 @@ private class ChartDraft(c: Chart) {
     var filled by mutableStateOf(c.filled)
     var threeD by mutableStateOf(c.threeD)
     var showValues by mutableStateOf(c.showValues)
+    var dateAxis by mutableStateOf(c.dateAxis)
+    var bins by mutableStateOf(if (c.bins > 0) c.bins.toString() else "")
+    var binWidth by mutableStateOf(if (c.binWidth > 0) ChartMaths.format(c.binWidth / 1000.0) else "")
+    var hideOutliers by mutableStateOf(c.hideOutliers)
+    var showMean by mutableStateOf(c.showMean)
+    var marker by mutableStateOf(if (c.marker != 0L) (if (c.dateAxis) ChartMaths.dateText(c.marker / 1000.0) else ChartMaths.format(c.marker / 1000.0)) else "")
     var gaugeMin by mutableStateOf(ChartMaths.format(c.gaugeRange.first))
     var gaugeMax by mutableStateOf(ChartMaths.format(c.gaugeRange.second))
     val cats = mutableStateListOf<String>()
@@ -63,8 +69,11 @@ private class ChartDraft(c: Chart) {
     val kinds = mutableStateListOf<ChartKind>()
     val second = mutableStateListOf<Boolean>()
     val trend = mutableStateListOf<Boolean>()
-    // cells[series][category]
+    // cells[series][category]: the numbers (y), and for scatter and bubble the x and the size of each point; groups[category] for a treemap
     val cells = mutableStateListOf<androidx.compose.runtime.snapshots.SnapshotStateList<String>>()
+    val xcells = mutableStateListOf<androidx.compose.runtime.snapshots.SnapshotStateList<String>>()
+    val scells = mutableStateListOf<androidx.compose.runtime.snapshots.SnapshotStateList<String>>()
+    val groups = mutableStateListOf<String>()
 
     init { load(c) }
 
@@ -77,7 +86,14 @@ private class ChartDraft(c: Chart) {
         kinds.clear(); kinds.addAll(c.series.map { if (it.kind == ChartKind.AREA || it.kind == ChartKind.LINE) it.kind else ChartKind.BAR })
         second.clear(); second.addAll(c.series.map { it.secondary })
         trend.clear(); trend.addAll(c.series.map { it.trendline })
-        cells.clear(); cells.addAll(c.series.map { s -> mutableStateListOf(*c.categories.indices.map { i -> s.at(i)?.let(ChartMaths::format) ?: "" }.toTypedArray()) })
+        val rows = maxOf(c.categories.size, c.series.maxOfOrNull { it.values.size } ?: 0)
+        fun date(si: Int) = c.kind == ChartKind.GANTT && c.dateAxis && si < 2
+        fun shown(v: Double?, si: Int) = v?.let { if (date(si)) ChartMaths.dateText(it) else ChartMaths.format(it) } ?: ""
+        cells.clear(); cells.addAll(c.series.mapIndexed { si, s -> mutableStateListOf(*(0 until rows).map { i -> shown(s.at(i), si) }.toTypedArray()) })
+        xcells.clear(); xcells.addAll(c.series.map { s -> mutableStateListOf(*(0 until rows).map { i -> s.xAt(i)?.let(ChartMaths::format) ?: "" }.toTypedArray()) })
+        scells.clear(); scells.addAll(c.series.map { s -> mutableStateListOf(*(0 until rows).map { i -> s.sizeAt(i)?.let(ChartMaths::format) ?: "" }.toTypedArray()) })
+        groups.clear(); groups.addAll((0 until rows).map { c.groups.getOrNull(it) ?: "" })
+        while (cats.size < rows) { cats.add(""); totals.add(false) }
     }
 
     /** A typed number, or null if blank or not a number. */
@@ -88,13 +104,20 @@ private class ChartDraft(c: Chart) {
     /** Chooses the kind. Becoming a combo from a plain chart makes the other series lines on a second axis, so there is something to see. */
     fun pickKind(k: ChartKind) {
         if (k == ChartKind.COMBO && kind != ChartKind.COMBO && kinds.all { it == ChartKind.BAR }) for (i in 1 until kinds.size) { kinds[i] = ChartKind.LINE; second[i] = true }
+        val need = when (k) { ChartKind.HEATMAP, ChartKind.GANTT -> 2; else -> 1 }
+        while (names.size < need) addSeries()
+        if (k == ChartKind.GANTT) { listOf("Start", "End", "Done %").forEachIndexed { i, n -> if (i < names.size) names[i] = n } }
+        if (k == ChartKind.CANDLESTICK) { while (names.size < 4) addSeries(); listOf("Open", "High", "Low", "Close").forEachIndexed { i, n -> names[i] = n } }
         kind = k
     }
 
-    fun addCategory() { cats.add("Category ${cats.size + 1}"); totals.add(false); cells.forEach { it.add("") } }
-    fun removeCategory() { if (cats.size > 1) { cats.removeLast(); totals.removeLast(); cells.forEach { it.removeLast() } } }
-    fun addSeries() { names.add("Series ${names.size + 1}"); colours.add(Chart.colourFor(names.size - 1)); kinds.add(ChartKind.LINE); second.add(false); trend.add(false); cells.add(mutableStateListOf(*cats.map { "" }.toTypedArray())) }
-    fun removeSeries() { if (names.size > 1) { names.removeLast(); colours.removeLast(); kinds.removeLast(); second.removeLast(); trend.removeLast(); cells.removeLast() } }
+    fun addCategory() { cats.add(if (kind == ChartKind.HISTOGRAM || kind == ChartKind.BOXPLOT) "" else "Row ${cats.size + 1}"); totals.add(false); groups.add(""); cells.forEach { it.add("") }; xcells.forEach { it.add("") }; scells.forEach { it.add("") } }
+    fun removeCategory() { if (cats.size > 1) { cats.removeLast(); totals.removeLast(); groups.removeLast(); cells.forEach { it.removeLast() }; xcells.forEach { it.removeLast() }; scells.forEach { it.removeLast() } } }
+    fun addSeries() { names.add("Series ${names.size + 1}"); colours.add(Chart.colourFor(names.size - 1)); kinds.add(ChartKind.LINE); second.add(false); trend.add(false); cells.add(mutableStateListOf(*cats.map { "" }.toTypedArray())); xcells.add(mutableStateListOf(*cats.map { "" }.toTypedArray())); scells.add(mutableStateListOf(*cats.map { "" }.toTypedArray())) }
+    fun removeSeries() { if (names.size > 1) { names.removeLast(); colours.removeLast(); kinds.removeLast(); second.removeLast(); trend.removeLast(); cells.removeLast(); xcells.removeLast(); scells.removeLast() } }
+
+    /** A typed cell as a number: a date (for a Gantt chart's dates) or an ordinary number. */
+    fun value(s: String, si: Int): Double? = if (kind == ChartKind.GANTT && dateAxis && si < 2) ChartMaths.parseDate(s) ?: parse(s) else parse(s)
 
     fun toChart(base: Chart): Chart = base.copy(
         kind = kind, title = title.trim(), xLabel = xLabel.trim(), yLabel = yLabel.trim(),
@@ -103,16 +126,28 @@ private class ChartDraft(c: Chart) {
         hole = hole.trim().toIntOrNull()?.coerceIn(10, 90) ?: 0, filled = filled, threeD = threeD, showValues = showValues,
         gaugeMin = Math.round((parse(gaugeMin) ?: 0.0) * 1000), gaugeMax = Math.round((parse(gaugeMax) ?: 100.0) * 1000),
         totals = totals.indices.filter { totals[it] }.toSet(),
+        dateAxis = dateAxis && kind == ChartKind.GANTT, bins = bins.trim().toIntOrNull()?.coerceIn(1, 200) ?: 0,
+        binWidth = parse(binWidth)?.takeIf { it > 0 }?.let { Math.round(it * 1000) } ?: 0, hideOutliers = hideOutliers, showMean = showMean,
+        marker = (if (kind == ChartKind.GANTT && dateAxis) ChartMaths.parseDate(marker) else null).let { it ?: parse(marker) }?.let { Math.round(it * 1000) } ?: 0,
+        groups = if (kind == ChartKind.TREEMAP && groups.any { it.isNotBlank() }) groups.toList() else emptyList(),
         categories = cats.toList(),
         series = names.indices.map { s ->
-            val vals = cells[s].map { parse(it) }
-            ChartSeries(names[s], colours[s], vals.map { v -> if (v == null) 0L else Math.round(v * 1000) }, vals.indices.filter { vals[it] == null }.toSet(),
-                kind = if (kind == ChartKind.COMBO) kinds[s] else ChartKind.BAR, secondary = kind == ChartKind.COMBO && second[s], trendline = trend[s])
+            val xy = kind == ChartKind.SCATTER || kind == ChartKind.BUBBLE
+            val vals = cells[s].mapIndexed { i, t -> value(t, s) }
+            val xv = xcells[s].map { parse(it) }
+            val sv = scells[s].map { parse(it) }
+            val gone = vals.indices.filter { vals[it] == null || (xy && xv[it] == null) || (kind == ChartKind.BUBBLE && sv[it] == null) }.toSet()
+            ChartSeries(names[s], colours[s], vals.map { v -> if (v == null) 0L else Math.round(v * 1000) }, gone,
+                kind = if (kind == ChartKind.COMBO) kinds[s] else ChartKind.BAR, secondary = kind == ChartKind.COMBO && second[s], trendline = trend[s],
+                xs = if (xy) xv.map { x -> if (x == null) 0L else Math.round(x * 1000) } else emptyList(),
+                sizes = if (kind == ChartKind.BUBBLE) sv.map { x -> if (x == null) 0L else Math.round(x * 1000) } else emptyList())
         },
     )
 }
 
 private val KIND_NAMES = mapOf(
+    ChartKind.SCATTER to "scatter", ChartKind.BUBBLE to "bubble", ChartKind.HISTOGRAM to "histogram", ChartKind.BOXPLOT to "box plot",
+    ChartKind.HEATMAP to "heatmap", ChartKind.TREEMAP to "treemap", ChartKind.GANTT to "gantt",
     ChartKind.BAR to "bar", ChartKind.LINE to "line", ChartKind.AREA to "area", ChartKind.PIE to "pie", ChartKind.DONUT to "donut", ChartKind.RADAR to "radar",
     ChartKind.POLAR to "polar area", ChartKind.FUNNEL to "funnel", ChartKind.WATERFALL to "waterfall", ChartKind.COMBO to "combo", ChartKind.GAUGE to "gauge",
     ChartKind.SPARKLINE to "sparkline", ChartKind.CANDLESTICK to "candlestick",
@@ -126,6 +161,13 @@ private fun hint(k: ChartKind) = when (k) {
     ChartKind.SPARKLINE -> "Draws the first column as a small line, with no axes."
     ChartKind.CANDLESTICK -> "Four columns, in this order: open, high, low, close. One row per day."
     ChartKind.RADAR -> "One row per spoke, one column per shape."
+    ChartKind.SCATTER -> "Each column group is one set of points: type each point's X and Y on a row (the row name is an optional label)."
+    ChartKind.BUBBLE -> "Each column group is one set of points: X, Y and Size on a row (the row name is an optional label)."
+    ChartKind.HISTOGRAM -> "Type the samples down the first column, one per row; they are counted into bins."
+    ChartKind.BOXPLOT -> "One column per box, the samples down it, one per row (blanks are skipped)."
+    ChartKind.HEATMAP -> "A row for each row of the map, a column for each column; the biggest number is the darkest."
+    ChartKind.TREEMAP -> "The first column holds the sizes. Give rows the same Group to nest them."
+    ChartKind.GANTT -> "One row per task: Start, End and (optional) Done %. Tick Dates to type them as 2026-12-01."
     else -> ""
 }
 
@@ -163,12 +205,19 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                         if (ChartMaths.legendNames(chart.copy(kind = k, series = listOf(ChartSeries("a", 0, emptyList())), categories = listOf("a"))).isNotEmpty()) Tick("Legend", d.legend) { d.legend = it }
                         if (axes) Tick("Gridlines", d.grid) { d.grid = it }
-                        if (k != ChartKind.GAUGE && k != ChartKind.SPARKLINE) Tick("Values", d.showValues) { d.showValues = it }
+                        if (k != ChartKind.GAUGE && k != ChartKind.SPARKLINE && k != ChartKind.GANTT) Tick("Values", d.showValues) { d.showValues = it }
                         Tick("3D", d.threeD) { d.threeD = it }
                         if (k == ChartKind.BAR) { Tick("Sideways", d.horizontal) { d.horizontal = it }; Tick("Pyramid", d.pyramid) { d.pyramid = it } }
                         if (k == ChartKind.LINE || k == ChartKind.RADAR || k == ChartKind.COMBO || k == ChartKind.SPARKLINE || k == ChartKind.AREA) Tick("Dots", d.markers) { d.markers = it }
                         if (k == ChartKind.RADAR) Tick("Filled", d.filled) { d.filled = it }
+                        if (k == ChartKind.BOXPLOT) { Tick("Outliers", !d.hideOutliers) { d.hideOutliers = !it }; Tick("Mean", d.showMean) { d.showMean = it } }
+                        if (k == ChartKind.GANTT) Tick("Dates", d.dateAxis) { d.dateAxis = it }
                     }
+                    if (k == ChartKind.HISTOGRAM) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(d.bins, { d.bins = it }, Modifier.width(150.dp), label = { Text("Number of bins") }, singleLine = true)
+                        OutlinedTextField(d.binWidth, { d.binWidth = it }, Modifier.width(150.dp), label = { Text("or bin width") }, singleLine = true)
+                    }
+                    if (k == ChartKind.GANTT) OutlinedTextField(d.marker, { d.marker = it }, Modifier.width(220.dp), label = { Text(if (d.dateAxis) "Mark a date (2026-12-01)" else "Mark a value (e.g. today)") }, singleLine = true)
                     if (k == ChartKind.BAR || k == ChartKind.AREA) Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Bars:".takeIf { k == ChartKind.BAR } ?: "Areas:")
                         Pick(if (k == ChartKind.BAR) "side by side" else "overlapping", d.stack == Stack.GROUPED) { d.stack = Stack.GROUPED }
@@ -188,42 +237,61 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                     }
                     if (k == ChartKind.BAR || k == ChartKind.COMBO) TextButton(onClick = { d.load(ChartMaths.pareto(d.toChart(chart))); d.kind = ChartKind.COMBO }) { Text("Make a Pareto chart (sort, add running share)") }
                     // The grid: a header row (colour, kind, name of each series), then one row per category, so rows always line up.
+                    // Scatter and bubble charts give each series an X, a Y (and a Size) column; histograms and box plots have no row names.
+                    val xy = k == ChartKind.SCATTER || k == ChartKind.BUBBLE
+                    val per = if (k == ChartKind.BUBBLE) 3 else if (xy) 2 else 1
+                    val rowNames = k != ChartKind.HISTOGRAM && k != ChartKind.BOXPLOT
+                    val shown = if (k == ChartKind.HISTOGRAM) 1 else if (k == ChartKind.GANTT) minOf(3, d.names.size) else d.names.size
+                    val noTrend = setOf(ChartKind.PIE, ChartKind.DONUT, ChartKind.GAUGE, ChartKind.CANDLESTICK, ChartKind.FUNNEL, ChartKind.POLAR, ChartKind.WATERFALL, ChartKind.SPARKLINE, ChartKind.RADAR,
+                        ChartKind.HISTOGRAM, ChartKind.BOXPLOT, ChartKind.HEATMAP, ChartKind.TREEMAP, ChartKind.GANTT)
                     Column(Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp)) {
                         Row(verticalAlignment = Alignment.Top) {
-                            Box(Modifier.width(150.dp))
-                            for (s in d.names.indices) Column(Modifier.width(150.dp)) {
+                            if (rowNames) Box(Modifier.width(150.dp))
+                            for (s in 0 until shown) Column(Modifier.width((150 * per).dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         Modifier.padding(end = 6.dp).size(22.dp).clip(CircleShape).background(Color(d.colours[s]))
                                             .clickable { d.colours[s] = Chart.PALETTE[(Chart.PALETTE.indexOf(d.colours[s]) + 1) % Chart.PALETTE.size] },
                                     )
-                                    if (k != ChartKind.PIE && k != ChartKind.DONUT && k != ChartKind.GAUGE && k != ChartKind.CANDLESTICK && k != ChartKind.FUNNEL && k != ChartKind.POLAR && k != ChartKind.WATERFALL && k != ChartKind.SPARKLINE && k != ChartKind.RADAR)
-                                        Tick("Trend", d.trend[s]) { d.trend[s] = it }
+                                    if (k !in noTrend) Tick("Trend", d.trend[s]) { d.trend[s] = it }
                                 }
                                 if (k == ChartKind.COMBO) {
                                     TextButton(onClick = { d.kinds[s] = when (d.kinds[s]) { ChartKind.BAR -> ChartKind.LINE; ChartKind.LINE -> ChartKind.AREA; else -> ChartKind.BAR } }) { Text("drawn as: " + KIND_NAMES.getValue(d.kinds[s])) }
                                     Tick("2nd axis", d.second[s]) { d.second[s] = it }
                                 }
-                                OutlinedTextField(d.names[s], { d.names[s] = it }, Modifier.padding(end = 6.dp, bottom = 4.dp), singleLine = true)
+                                OutlinedTextField(d.names[s], { d.names[s] = it }, Modifier.width(144.dp).padding(bottom = 4.dp), singleLine = true)
+                                if (xy) Row { for (t in listOf("X", "Y", "Size").take(per)) Text(t, Modifier.width(150.dp).padding(start = 16.dp)) }
                             }
+                            if (k == ChartKind.TREEMAP) Text("Group", Modifier.width(150.dp).padding(top = 40.dp, start = 16.dp))
                         }
                         for (i in d.cats.indices) Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(d.cats[i], { d.cats[i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true)
-                            for (s in d.names.indices) {
+                            if (rowNames) OutlinedTextField(d.cats[i], { d.cats[i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true)
+                            for (s in 0 until shown) {
+                                if (xy) OutlinedTextField(
+                                    d.xcells[s][i], { d.xcells[s][i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true,
+                                    isError = d.xcells[s][i].isNotBlank() && d.parse(d.xcells[s][i]) == null,
+                                )
                                 val text = d.cells[s][i]
                                 OutlinedTextField(
                                     text, { d.cells[s][i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true,
-                                    isError = text.isNotBlank() && d.parse(text) == null,
+                                    isError = text.isNotBlank() && d.value(text, s) == null,
+                                )
+                                if (k == ChartKind.BUBBLE) OutlinedTextField(
+                                    d.scells[s][i], { d.scells[s][i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true,
+                                    isError = d.scells[s][i].isNotBlank() && d.parse(d.scells[s][i]) == null,
                                 )
                             }
+                            if (k == ChartKind.TREEMAP) OutlinedTextField(d.groups[i], { d.groups[i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true)
                             if (k == ChartKind.WATERFALL) Tick("Total", d.totals[i]) { d.totals[i] = it }
                         }
                     }
                     Row {
                         TextButton(onClick = { d.addCategory() }) { Text("Add row") }
                         TextButton(onClick = { d.removeCategory() }, enabled = d.cats.size > 1) { Text("Remove last row") }
-                        TextButton(onClick = { d.addSeries() }) { Text("Add column") }
-                        TextButton(onClick = { d.removeSeries() }, enabled = d.names.size > 1) { Text("Remove last column") }
+                        if (k != ChartKind.HISTOGRAM && k != ChartKind.GANTT) {
+                            TextButton(onClick = { d.addSeries() }) { Text(if (xy) "Add a set of points" else "Add column") }
+                            TextButton(onClick = { d.removeSeries() }, enabled = d.names.size > 1) { Text(if (xy) "Remove last set" else "Remove last column") }
+                        }
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

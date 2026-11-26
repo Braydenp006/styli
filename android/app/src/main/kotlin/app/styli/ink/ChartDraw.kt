@@ -46,6 +46,12 @@ object ChartDraw {
             ChartKind.FUNNEL -> funnel(canvas, c, p)
             ChartKind.GAUGE -> gauge(canvas, c, p, ink)
             ChartKind.SPARKLINE -> sparkline(canvas, c, p, px)
+            ChartKind.SCATTER, ChartKind.BUBBLE -> scatter(canvas, c, p, ink, px)
+            ChartKind.HISTOGRAM -> histogram(canvas, c, p, ink, px)
+            ChartKind.BOXPLOT -> boxplot(canvas, c, p, ink, px)
+            ChartKind.HEATMAP -> heatmap(canvas, c, p, ink)
+            ChartKind.TREEMAP -> treemap(canvas, c, p)
+            ChartKind.GANTT -> gantt(canvas, c, p, ink, px)
             else -> axesChart(canvas, c, lay, ink, px)
         }
         lay.legend?.let { legend(canvas, c, it, ink) }
@@ -275,6 +281,174 @@ object ChartDraw {
         }
     }
 
+    // ---- the value axes the second batch share: numbers up the side (and, where there are two, along the bottom) ----
+
+    private fun yAxis(canvas: Canvas, c: Chart, p: Box, scale: ChartMaths.Scale, ink: Int, px: Float) {
+        val f = c.textSize
+        for (t in scale.ticks) {
+            val y = ChartMaths.yOf(p, scale, t)
+            if (!c.hideGrid) { line.strokeWidth = px; line.color = 0xFFE0E0E0.toInt(); canvas.drawLine(p.l.toFloat(), y.toFloat(), p.r.toFloat(), y.toFloat(), line) }
+            label(canvas, ChartMaths.format(t), p.l - f * 0.4, y + f * 0.3, f * 0.8f, Paint.Align.RIGHT, ink)
+        }
+    }
+
+    private fun xAxis(canvas: Canvas, c: Chart, p: Box, scale: ChartMaths.Scale, ink: Int, px: Float, date: Boolean = false) {
+        val f = c.textSize
+        for (t in scale.ticks) {
+            val x = ChartMaths.xOf(p, scale, t)
+            if (!c.hideGrid) { line.strokeWidth = px; line.color = 0xFFE0E0E0.toInt(); canvas.drawLine(x.toFloat(), p.t.toFloat(), x.toFloat(), p.b.toFloat(), line) }
+            label(canvas, if (date) ChartMaths.dateLabel(t) else ChartMaths.format(t), x, p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
+        }
+    }
+
+    private fun frame(canvas: Canvas, p: Box, ink: Int, px: Float) {
+        line.strokeWidth = px * 1.5f; line.color = ink
+        canvas.drawLine(p.l.toFloat(), p.b.toFloat(), p.r.toFloat(), p.b.toFloat(), line)
+        canvas.drawLine(p.l.toFloat(), p.t.toFloat(), p.l.toFloat(), p.b.toFloat(), line)
+    }
+
+    // ---- scatter and bubble ----
+
+    private fun lighter(color: Int) = shade(color, 1.35f)
+
+    private fun scatter(canvas: Canvas, c: Chart, p: Box, ink: Int, px: Float) {
+        val f = c.textSize
+        val (sx, sy) = ChartMaths.scatterScales(c)
+        yAxis(canvas, c, p, sy, ink, px); xAxis(canvas, c, p, sx, ink, px); frame(canvas, p, ink, px)
+        val bubble = c.kind == ChartKind.BUBBLE
+        val all = ChartMaths.dots(c, p, sx, sy)
+        for ((j, s) in c.series.withIndex()) {
+            if (s.trendline) ChartMaths.trendXYEnds(s, p, sx, sy)?.let { e ->
+                line.strokeWidth = px * 2f; line.color = s.color
+                line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(f * 0.6f, f * 0.4f), 0f)
+                canvas.drawLine(e.first.first.toFloat(), e.first.second.toFloat(), e.second.first.toFloat(), e.second.second.toFloat(), line)
+                line.pathEffect = null
+                if (c.showValues) ChartMaths.trendXY(s)?.let { (_, _, r2) -> label(canvas, "R\u00B2 " + ChartMaths.format(Math.round(r2 * 100) / 100.0), e.second.first, e.second.second - f * 0.5, f * 0.8f, Paint.Align.RIGHT, s.color) }
+            }
+            for (d in all[j]) {
+                d ?: continue
+                val r = (if (bubble) d.r.coerceAtLeast(f * 0.2) else f * 0.35).toFloat()
+                val x = d.x.toFloat(); val y = d.y.toFloat()
+                if (c.threeD) { // a ball: a soft shadow, then a lit sphere
+                    solid.shader = null; solid.color = 0x33000000; canvas.drawCircle(x + r * 0.35f, y + r * 0.45f, r, solid)
+                    solid.shader = android.graphics.RadialGradient(x - r * 0.35f, y - r * 0.35f, r * 1.5f, intArrayOf(shade(s.color, 1.7f), s.color, shade(s.color, 0.5f)), floatArrayOf(0f, 0.4f, 1f), android.graphics.Shader.TileMode.CLAMP)
+                    canvas.drawCircle(x, y, r, solid); solid.shader = null
+                } else {
+                    solid.color = if (bubble) (s.color and 0x00FFFFFF) or 0xA6000000.toInt() else s.color
+                    canvas.drawCircle(x, y, r, solid)
+                    if (bubble) { line.strokeWidth = px; line.color = s.color; canvas.drawCircle(x, y, r, line) }
+                }
+                if (c.showValues) c.categories.getOrNull(d.index)?.takeIf { it.isNotBlank() }?.let { label(canvas, it, d.x + r + f * 0.2, d.y + f * 0.3, f * 0.7f, Paint.Align.LEFT, ink) }
+            }
+        }
+    }
+
+    // ---- histogram ----
+
+    private fun histogram(canvas: Canvas, c: Chart, p: Box, ink: Int, px: Float) {
+        val f = c.textSize
+        val h = ChartMaths.histogram(c) ?: return
+        val sy = ChartMaths.niceScale(0.0, (h.counts.maxOrNull() ?: 1).toDouble())
+        yAxis(canvas, c, p, sy, ink, px)
+        val e0 = h.edges.first(); val e1 = h.edges.last()
+        fun x(e: Double) = p.l + (e - e0) / (e1 - e0) * (p.r - p.l)
+        val d = if (c.threeD) f * 0.9 else 0.0
+        val colour = c.series.firstOrNull()?.color ?: Chart.colourFor(0)
+        for ((k, n) in h.counts.withIndex()) {
+            box3d(canvas, Box(x(h.edges[k]) + px, ChartMaths.yOf(p, sy, n.toDouble()), x(h.edges[k + 1]) - px, ChartMaths.yOf(p, sy, 0.0)), colour, d)
+            if (c.showValues && n > 0) label(canvas, n.toString(), (x(h.edges[k]) + x(h.edges[k + 1])) / 2, ChartMaths.yOf(p, sy, n.toDouble()) - f * 0.2 - d * 0.6, f * 0.7f, Paint.Align.CENTER, ink)
+        }
+        val every = maxOf(1, Math.ceil(h.edges.size / 8.0).toInt())
+        for ((k, e) in h.edges.withIndex()) if (k % every == 0) label(canvas, ChartMaths.formatShort(e), x(e), p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
+        frame(canvas, p, ink, px)
+    }
+
+    // ---- box plot ----
+
+    private fun boxplot(canvas: Canvas, c: Chart, p: Box, ink: Int, px: Float) {
+        val f = c.textSize
+        val sy = ChartMaths.boxScale(c)
+        yAxis(canvas, c, p, sy, ink, px)
+        val d = if (c.threeD) f * 0.9 else 0.0
+        for ((j, b) in ChartMaths.boxes(c, p, sy).withIndex()) {
+            val colour = c.series[j].color
+            label(canvas, c.series[j].name, if (b != null) b.x else p.l + (p.r - p.l) / (2 * c.series.size) * (2 * j + 1), p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
+            b ?: continue
+            line.strokeWidth = f * 0.12f; line.color = ink
+            canvas.drawLine(b.x.toFloat(), b.low.toFloat(), b.x.toFloat(), b.q1.toFloat(), line); canvas.drawLine(b.x.toFloat(), b.q3.toFloat(), b.x.toFloat(), b.high.toFloat(), line)
+            canvas.drawLine((b.x - b.w / 4).toFloat(), b.low.toFloat(), (b.x + b.w / 4).toFloat(), b.low.toFloat(), line); canvas.drawLine((b.x - b.w / 4).toFloat(), b.high.toFloat(), (b.x + b.w / 4).toFloat(), b.high.toFloat(), line)
+            box3d(canvas, Box(b.x - b.w / 2, b.q3, b.x + b.w / 2, b.q1), colour, d)
+            line.strokeWidth = f * 0.22f; line.color = Color.WHITE
+            canvas.drawLine((b.x - b.w / 2).toFloat(), b.median.toFloat(), (b.x + b.w / 2).toFloat(), b.median.toFloat(), line)
+            if (c.showMean) { solid.color = ink; canvas.drawCircle(b.x.toFloat(), b.mean.toFloat(), f * 0.28f, solid); solid.color = Color.WHITE; canvas.drawCircle(b.x.toFloat(), b.mean.toFloat(), f * 0.14f, solid) }
+            if (!c.hideOutliers) { line.strokeWidth = f * 0.1f; line.color = colour; for (o in b.outliers) canvas.drawCircle(b.x.toFloat(), o.toFloat(), f * 0.3f, line) }
+        }
+        frame(canvas, p, ink, px)
+    }
+
+    // ---- heatmap ----
+
+    private fun heatmap(canvas: Canvas, c: Chart, p: Box, ink: Int) {
+        val f = c.textSize
+        val cells = ChartMaths.heatCells(c, p)
+        val d = if (c.threeD) f * 0.9 else 0.0
+        for (cell in cells) {
+            val b = cell.box
+            if (cell.value == null) { solid.color = 0xFFF0F0F0.toInt(); canvas.drawRect(b.l.toFloat(), b.t.toFloat(), b.r.toFloat(), b.b.toFloat(), solid); continue }
+            box3d(canvas, b, ChartMaths.heatColour(c, cell.t), d * (0.25 + 0.75 * cell.t)) // a hotter cell stands higher
+            if (c.showValues) label(canvas, ChartMaths.format(cell.value), (b.l + b.r) / 2, (b.t + b.b) / 2 + f * 0.3, f * 0.8f, Paint.Align.CENTER, if (cell.t > 0.55) Color.WHITE else Color.BLACK)
+        }
+        val rows = c.categories.size; val cols = c.series.size
+        for (r in 0 until rows) label(canvas, c.categories[r], p.l - f * 0.4, p.t + (p.b - p.t) / rows * (r + 0.5) + f * 0.3, f * 0.8f, Paint.Align.RIGHT, ink)
+        for (k in 0 until cols) label(canvas, c.series[k].name, p.l + (p.r - p.l) / cols * (k + 0.5), p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
+    }
+
+    // ---- treemap ----
+
+    private fun treemap(canvas: Canvas, c: Chart, p: Box) {
+        val f = c.textSize
+        val d = if (c.threeD) f * 0.5 else 0.0
+        val s0 = c.series.firstOrNull()
+        for (t in ChartMaths.treemap(c, p)) {
+            val colour = Chart.colourFor(if (t.group >= 0) t.group else t.index)
+            val b = Box(t.box.l + f * 0.1, t.box.t + f * 0.1, t.box.r - f * 0.1 - d * 0.6, t.box.b - f * 0.1)
+            if (b.r <= b.l || b.b <= b.t) continue
+            box3d(canvas, b, if (t.group >= 0) shade(colour, 0.85f + 0.3f * (t.index % 4) / 4f) else colour, d)
+            val name = c.categories[t.index] + "  " + ChartMaths.format(s0?.at(t.index) ?: 0.0)
+            text.textSize = f * 0.85f; text.isFakeBoldText = true
+            if (text.measureText(name) <= (b.r - b.l) - f * 0.4 && b.b - b.t > f * 1.4) label(canvas, name, b.l + f * 0.3, b.t + f * 1.1, f * 0.85f, Paint.Align.LEFT, Color.WHITE, true)
+        }
+    }
+
+    // ---- Gantt ----
+
+    private fun gantt(canvas: Canvas, c: Chart, p: Box, ink: Int, px: Float) {
+        val f = c.textSize
+        val scale = ChartMaths.ganttScale(c)
+        xAxis(canvas, c, p, scale, ink, px, c.dateAxis)
+        val n = c.categories.size
+        val slot = (p.b - p.t) / maxOf(1, n)
+        for (i in 0 until n) label(canvas, c.categories[i], p.l - f * 0.4, p.t + slot * (i + 0.5) + f * 0.3, f * 0.8f, Paint.Align.RIGHT, ink)
+        val colour = c.series.firstOrNull()?.color ?: Chart.colourFor(0)
+        val d = if (c.threeD) f * 0.9 else 0.0
+        for (b in ChartMaths.gantt(c, p, scale)) {
+            b ?: continue
+            solid.color = (colour and 0x00FFFFFF) or 0x55000000; canvas.drawRect(b.box.l.toFloat(), b.box.t.toFloat(), b.box.r.toFloat(), b.box.b.toFloat(), solid) // the whole span, faint
+            val done = Box(b.box.l, b.box.t, b.box.l + (b.box.r - b.box.l) * b.done, b.box.b)
+            if (b.done > 0.0) box3d(canvas, done, colour, d) else if (d > 0) box3d(canvas, Box(b.box.l, b.box.t, b.box.l, b.box.b), colour, 0.0)
+            line.strokeWidth = px; line.color = colour; canvas.drawRect(b.box.l.toFloat(), b.box.t.toFloat(), b.box.r.toFloat(), b.box.b.toFloat(), line)
+        }
+        if (c.marker != 0L) {
+            val v = c.marker / 1000.0
+            val x = ChartMaths.xOf(p, scale, v).toFloat()
+            line.strokeWidth = f * 0.12f; line.color = Chart.DOWN
+            line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(f * 0.5f, f * 0.3f), 0f)
+            canvas.drawLine(x, p.t.toFloat(), x, p.b.toFloat(), line); line.pathEffect = null
+            label(canvas, if (c.dateAxis) ChartMaths.dateLabel(v) else ChartMaths.format(v), x + f * 0.25, p.t + f * 0.9, f * 0.75f, Paint.Align.LEFT, Chart.DOWN)
+        }
+        frame(canvas, p, ink, px)
+    }
+
     // ---- pie and donut ----
 
     private fun annulus(path: Path, cx: Float, cy: Float, r: Float, hole: Float, startDeg: Float, sweepDeg: Float) {
@@ -476,6 +650,7 @@ object ChartDraw {
         val names = ChartMaths.legendNames(c)
         val colours = when (c.kind) {
             ChartKind.PIE, ChartKind.DONUT, ChartKind.POLAR, ChartKind.FUNNEL -> c.categories.indices.map { Chart.colourFor(it) }
+            ChartKind.TREEMAP -> names.indices.map { Chart.colourFor(it) } // one colour for each group, in the order the groups first appear
             else -> c.series.map { it.color }
         }
         text.textSize = f * 0.9f; text.textAlign = Paint.Align.LEFT; text.isFakeBoldText = false

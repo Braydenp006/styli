@@ -1519,6 +1519,22 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (made != null && chartPage === work) selectOnly(made.id) // so it can be moved at once
     }
 
+    /** Throwaway: adds pages with a sample of every chart kind and subtype (six to a page, new pages to the right), to look through. */
+    fun addChartSamples() {
+        finishText()
+        var page = work
+        var col = (notebook.pages.maxOf { it.page.col }) + 1
+        val row = work.page.row
+        for (group in ChartDemo.all().chunked(6)) {
+            val p = notebook.addAt(page, col++, row) ?: continue
+            for ((k, c) in group.withIndex()) p.addChart { id -> c.copy(id = id, x = 600f + (k % 2) * 10000f, y = 600f + (k / 2) * 9600f, width = 9800f, height = 9000f) }
+            page = p
+        }
+        notebook.go(work)
+        rebuildLayout(false)
+        changed(true)
+    }
+
     /** Opens the data window for the one selected chart. False if no chart alone is selected. */
     fun editChart(): Boolean {
         val chart = selection.singleOrNull()?.let { model.chartOf(it) } ?: return false

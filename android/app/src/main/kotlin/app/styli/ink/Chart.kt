@@ -514,7 +514,9 @@ object ChartMaths {
         val xs = ArrayList<Double>(); val ys = ArrayList<Double>()
         for (s in c.series) for (i in s.values.indices) { val x = s.xAt(i); val y = s.at(i); if (x != null && y != null) { xs.add(x); ys.add(y) } }
         if (xs.isEmpty()) return niceScale(0.0, 1.0, zero = false) to niceScale(0.0, 1.0, zero = false)
-        return niceScale(xs.min(), xs.max(), zero = false) to niceScale(ys.min(), ys.max(), zero = false)
+        // a little room round the points, so none sits on an axis
+        fun padded(v: List<Double>): Scale { val pad = (v.max() - v.min()).takeIf { it > 0 }?.times(0.08) ?: 1.0; return niceScale(v.min() - pad, v.max() + pad, zero = false) }
+        return padded(xs) to padded(ys)
     }
 
     /** For each series, its points (null where one is incomplete). A bubble's radius follows the square root of its size, so the area follows the size. */
@@ -570,11 +572,15 @@ object ChartMaths {
         if (c.binWidth > 0) {
             w = c.binWidth / 1000.0
             start = floor(lo / w) * w
-            n = min(200, floor((hi - start) / w).toInt() + 1)
-        } else {
-            n = (if (c.bins > 0) c.bins else ceil(log2(v.size.toDouble()) + 1).toInt()).coerceIn(1, 200)
+            n = min(200, max(1, ceil((hi - start) / w - 1e-9).toInt()))
+        } else if (c.bins > 0) { // the number asked for: equal bins from the smallest sample to the largest
+            n = c.bins.coerceIn(1, 200)
             start = lo
             w = (hi - lo) / n
+        } else { // about log2(n)+1 bins, on round edges so the axis reads easily
+            w = nice((hi - lo) / ceil(log2(v.size.toDouble()) + 1))
+            start = floor(lo / w + 1e-9) * w
+            n = min(200, max(1, ceil((hi - start) / w - 1e-9).toInt()))
         }
         val counts = IntArray(n)
         for (x in v) counts[min(n - 1, floor((x - start) / w).toInt().coerceAtLeast(0))]++
@@ -745,6 +751,9 @@ object ChartMaths {
     fun dateText(days: Double): String = java.time.LocalDate.ofEpochDay(floor(days).toLong()).toString()
 
     private fun log2(x: Double) = ln(x) / ln(2.0)
+
+    /** A number with at most two decimals, for crowded axes. */
+    fun formatShort(v: Double): String = format(Math.round(v * 100) / 100.0)
 
     /** A number as the axis shows it: no trailing zeros ("12", "12.5"), at most 3 decimals. */
     fun format(v: Double): String {
