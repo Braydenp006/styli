@@ -37,4 +37,16 @@ class LineTest {
         assertEquals(120L, p[1].t)
         assertNotNull(p)
     }
+
+    @Test
+    fun angleIsCounterclockwiseFromRight() {
+        assertEquals(0.0, LineGeometry.angleDeg(0f, 0f, 100f, 0f), 0.001) // right
+        assertEquals(90.0, LineGeometry.angleDeg(0f, 0f, 0f, -100f), 0.001) // up (the page's y grows downward)
+        assertEquals(180.0, LineGeometry.angleDeg(0f, 0f, -100f, 0f), 0.001)
+        assertEquals(270.0, LineGeometry.angleDeg(0f, 0f, 0f, 100f), 0.001) // down
+        assertEquals(45.0, LineGeometry.angleDeg(10f, 10f, 110f, -90f), 0.001)
+        assertEquals(315.0, LineGeometry.angleDeg(0f, 0f, 100f, 100f), 0.001)
+        assertEquals(0.0, LineGeometry.angleDeg(5f, 5f, 5f, 5f), 0.0) // a point
+        assertEquals("37.5\u00B0", LineGeometry.angleLabel(37.54))
+    }
 }

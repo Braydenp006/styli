@@ -166,8 +166,7 @@ class PageModel(page: PageSet = A4_LINED) {
 
     private val undoStack = ArrayDeque<Step>()
     private val redoStack = ArrayDeque<Step>()
-    private var openBefore: List<Item>? = null // set while an eraser drag is going on
-    private var openOrder: List<String> = emptyList() // the layers when it began
+    private var openSnap: Snap? = null // everything as it was when the eraser drag began; set while one is going on
 
     val canUndo get() = undoStack.isNotEmpty()
     val canRedo get() = redoStack.isNotEmpty()
@@ -300,15 +299,21 @@ class PageModel(page: PageSet = A4_LINED) {
     }
 
     /**
-     * Moves the eraser to (x, y): with [partial] the touched part of every stroke is cut away, otherwise
-     * every touched stroke goes whole. Call it for each point of a drag, then [endErase]. The pen's own
-     * width counts: the disc is [r] plus half the stroke's width. Returns true if anything changed.
+     * Moves the eraser to (x, y). Strokes: with [partial] the touched part of each is cut away, otherwise every touched
+     * stroke goes whole (the pen's own width counts: the disc is [r] plus half the stroke's width). Everything else
+     * goes whole in either case, when the disc touches it: a text box (its box; [textHeight] says how tall), a shape
+     * (its outline, or inside it if it is filled), a connector (its line), a table (its lines, or a coloured cell) and
+     * a fill (anywhere in the paint). [only] limits which kinds count. A connector left on a shape that went is kept,
+     * its end free where it was. Call it for each point of a drag, then [endErase]. Returns true if anything changed.
      */
-    fun erase(x: Float, y: Float, r: Float, partial: Boolean, only: EraseOnly = EraseOnly.ALL): Boolean {
-        val before = items
-        val out = ArrayList<Item>(before.size)
+    fun erase(
+        x: Float, y: Float, r: Float, partial: Boolean, only: EraseOnly = EraseOnly.ALL,
+        textHeight: (TextBox) -> Float = { it.fontSize * 1.3f },
+    ): Boolean {
+        val before = now()
+        val out = ArrayList<Item>(items.size)
         val replaced = HashMap<String, List<String>>() // a stroke's ID to the IDs that take its layer (none if it went)
-        for (it in before) {
+        for (it in items) {
             if (!only.matches(it)) { out.add(it); continue }
             val reach = r + it.width / 2f
             if (!partial) {
@@ -322,12 +327,64 @@ class PageModel(page: PageSet = A4_LINED) {
                 replaced[it.id] = made.map { m -> m.id }
             }
         }
-        if (out.size == before.size && out.indices.all { out[it] === before[it] }) return false
-        if (openBefore == null) { openBefore = before; openOrder = order }
-        items = out
-        order = order.flatMap { replaced[it] ?: listOf(it) } // a piece keeps the layer of the stroke it came from
+        val strokesChanged = !(out.size == items.size && out.indices.all { out[it] === items[it] })
+
+        val goneTexts = if (only.texts) texts.filter { t -> t.distTo(x, y, textHeight(t)) <= r }.mapTo(HashSet()) { it.id } else emptySet()
+        val goneShapes = if (only.shapes) shapes.filter { s -> touchesShape(s, x, y, r) }.mapTo(HashSet()) { it.id } else emptySet()
+        val goneConnectors = if (only.connectors) connectors.filter { c ->
+            LassoGeometry.distToPath(x, y, c.path(::shapeOf)) <= r + c.lineWidth / 2
+        }.mapTo(HashSet()) { it.id } else emptySet()
+        val goneTables = if (only.tables) tables.filter { t -> touchesTable(t, x, y, r) }.mapTo(HashSet()) { it.id } else emptySet()
+        val goneFills = if (only.fills) fills.filter { f ->
+            listOf(0f to 0f, r to 0f, -r to 0f, 0f to r, 0f to -r).any { (dx, dy) -> f.contains(x + dx, y + dy) }
+        }.mapTo(HashSet()) { it.id } else emptySet()
+        val gone = goneTexts + goneShapes + goneConnectors + goneTables + goneFills
+        if (!strokesChanged && gone.isEmpty()) return false
+
+        if (openSnap == null) openSnap = before
+        if (strokesChanged) items = out
+        if (goneTexts.isNotEmpty()) texts = texts.filter { it.id !in goneTexts }
+        if (goneTables.isNotEmpty()) tables = tables.filter { it.id !in goneTables }
+        if (goneFills.isNotEmpty()) fills = fills.filter { it.id !in goneFills }
+        if (goneShapes.isNotEmpty() || goneConnectors.isNotEmpty()) {
+            val kept = withEndsFreed(connectors.filter { it.id !in goneConnectors }, goneShapes) // while the shapes can still be found
+            connectors = kept
+            shapes = shapes.filter { it.id !in goneShapes }
+        }
+        order = order.filter { it !in gone }.flatMap { replaced[it] ?: listOf(it) } // a piece keeps the layer of the stroke it came from
         return true
     }
+
+    /** Distance from the page point to the box of a text box [height] tall (0 inside it). */
+    private fun TextBox.distTo(px: Float, py: Float, height: Float): Float {
+        val (lx, ly) = toLocal(px, py)
+        return kotlin.math.hypot(maxOf(0f, -lx, lx - width), maxOf(0f, -ly, ly - height))
+    }
+
+    /** Does the eraser disc touch the shape's outline, or (if it has a fill) the inside? */
+    private fun touchesShape(s: Shape, x: Float, y: Float, r: Float): Boolean {
+        if (s.fill ushr 24 != 0 && s.contains(x, y)) return true
+        val (fx, fy) = s.nearestOutline(x, y)
+        val (ox, oy) = s.spot(fx, fy)
+        return kotlin.math.hypot(ox - x, oy - y) <= r + s.lineWidth / 2
+    }
+
+    /** Does the disc touch a line of the table, or a part of it that has colour? */
+    private fun touchesTable(t: Table, x: Float, y: Float, r: Float): Boolean {
+        if (t.nearLine(x, y, r + t.lineWidth / 2)) return true
+        if (!t.contains(x, y)) return false
+        if (t.fill ushr 24 != 0) return true
+        return t.cellAt(x, y)?.let { (row, col) -> t.cellFill(row, col) ushr 24 != 0 } == true
+    }
+
+    /** [list] with the ends that are on a shape in [goneShapes] made free, where they were. */
+    private fun withEndsFreed(list: List<Connector>, goneShapes: Set<String>): List<Connector> =
+        if (goneShapes.isEmpty()) list else list.map { c ->
+            if (c.from.shape !in goneShapes && c.to.shape !in goneShapes) c else {
+                val (a, b) = c.resolve(::shapeOf)
+                c.copy(from = if (c.from.shape in goneShapes) End(null, 0, a.first, a.second) else c.from, to = if (c.to.shape in goneShapes) End(null, 0, b.first, b.second) else c.to)
+            }
+        }
 
     /**
      * Moves, resizes or turns the strokes, text boxes and tables [ids] by [map]. They keep their IDs. One undo
@@ -369,13 +426,7 @@ class PageModel(page: PageSet = A4_LINED) {
         endErase()
         if (items.none { it.id in ids } && texts.none { it.id in ids } && tables.none { it.id in ids } &&
             shapes.none { it.id in ids } && connectors.none { it.id in ids } && fills.none { it.id in ids }) return false
-        val goneShapes = shapes.filter { it.id in ids }.mapTo(HashSet()) { it.id }
-        val kept = connectors.filter { it.id !in ids }.map { c ->
-            if (c.from.shape !in goneShapes && c.to.shape !in goneShapes) c else {
-                val (a, b) = c.resolve(::shapeOf)
-                c.copy(from = if (c.from.shape in goneShapes) End(null, 0, a.first, a.second) else c.from, to = if (c.to.shape in goneShapes) End(null, 0, b.first, b.second) else c.to)
-            }
-        }
+        val kept = withEndsFreed(connectors.filter { it.id !in ids }, shapes.filter { it.id in ids }.mapTo(HashSet()) { it.id })
         commit(now().copy(
             items = items.filter { it.id !in ids }, texts = texts.filter { it.id !in ids }, tables = tables.filter { it.id !in ids },
             shapes = shapes.filter { it.id !in ids }, connectors = kept, fills = fills.filter { it.id !in ids },
@@ -441,11 +492,12 @@ class PageModel(page: PageSet = A4_LINED) {
 
     /** Closes the eraser drag: it becomes one undo step. */
     fun endErase() {
-        val before = openBefore ?: return
-        openBefore = null
+        val before = openSnap ?: return
+        openSnap = null
         val after = now()
-        items = before // commit() sets it and writes the log from the difference
-        order = openOrder
+        // commit() sets the new state and writes the log from the difference, so put the old one back first.
+        items = before.items; texts = before.texts; tables = before.tables
+        shapes = before.shapes; connectors = before.connectors; fills = before.fills; order = before.order
         commit(after)
     }
 

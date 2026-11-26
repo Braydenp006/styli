@@ -7,16 +7,27 @@ import kotlin.math.sqrt
 /** One recorded pen point, in page units. [t] is milliseconds since the stroke's first point, [p] is 0 to 1. */
 data class Pt(val x: Float, val y: Float, val t: Long, val p: Float)
 
-/** What an eraser may touch. A straight line is a stroke of exactly two points (the line tool, the ruler and auto-straightening make those). */
+/**
+ * What an eraser may touch. ALL is everything on the page; the others pick one kind. A straight line is a stroke of
+ * exactly two points (the line tool, the ruler and auto-straightening make those).
+ */
 enum class EraseOnly {
-    ALL, INK, HIGHLIGHTS, LINES;
+    ALL, INK, HIGHLIGHTS, LINES, TEXT_BOXES, SHAPES, CONNECTORS, TABLES, FILLS;
 
+    /** May this stroke be erased? */
     fun matches(item: Item) = when (this) {
         ALL -> true
         INK -> item.tool == Tool.TOOL_PEN
         HIGHLIGHTS -> item.tool == Tool.TOOL_HIGHLIGHTER
         LINES -> item.pts.size == 2
+        else -> false
     }
+
+    val texts get() = this == ALL || this == TEXT_BOXES
+    val shapes get() = this == ALL || this == SHAPES
+    val connectors get() = this == ALL || this == CONNECTORS
+    val tables get() = this == ALL || this == TABLES
+    val fills get() = this == ALL || this == FILLS
 }
 
 /** Pure maths for the eraser. A "disc" is the eraser: centre (cx, cy), radius r, in page units. */

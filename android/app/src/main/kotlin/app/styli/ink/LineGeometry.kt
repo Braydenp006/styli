@@ -28,4 +28,13 @@ object LineGeometry {
     /** The two points of the stroke, or null if it is only a tap. */
     fun points(sx: Float, sy: Float, ex: Float, ey: Float, ms: Long): List<Pt>? =
         if (hypot(ex - sx, ey - sy) < MIN_LENGTH) null else listOf(Pt(sx, sy, 0, 1f), Pt(ex, ey, ms, 1f))
+
+    /** The line's angle in degrees, from 0 up to (not including) 360, counterclockwise from pointing right: straight up is 90. A point is 0. */
+    fun angleDeg(sx: Float, sy: Float, ex: Float, ey: Float): Double {
+        if (ex == sx && ey == sy) return 0.0
+        return (Math.toDegrees(atan2(-(ey - sy).toDouble(), (ex - sx).toDouble())) + 360.0) % 360.0
+    }
+
+    /** The angle as shown, one decimal: "37.5°". */
+    fun angleLabel(deg: Double) = String.format(java.util.Locale.US, "%.1f\u00B0", deg)
 }

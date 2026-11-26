@@ -1795,6 +1795,30 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private var lineEnd = 0f to 0f // page units, after snapping
     private val linePaint = Paint().apply { strokeCap = Paint.Cap.ROUND; isAntiAlias = true }
 
+    /**
+     * Show the line's angle live while it is drawn (with the line tools and along the ruler). While it is on the line is
+     * free: it is not pulled onto level or upright, so the angle can be set exactly.
+     */
+    var lineAngle = false
+    private val angleArc = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = 0xFF6750A4.toInt(); isAntiAlias = true }
+    private val angleText = Paint().apply { color = Color.WHITE; textSize = 34f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+
+    /** A level reference line, the arc up to the line, and the angle in a pill by the pen. */
+    private fun drawAngle(canvas: Canvas, sx: Float, sy: Float, ex: Float, ey: Float) {
+        val len = Math.hypot((ex - sx).toDouble(), (ey - sy).toDouble()).toFloat()
+        if (len < 16f) return
+        val deg = LineGeometry.angleDeg(sx, sy, ex, ey)
+        val r = minOf(70f, len * 0.6f)
+        canvas.drawLine(sx, sy, sx + maxOf(r * 1.5f, 60f), sy, dragPaint) // the level line the angle is measured from
+        canvas.drawArc(android.graphics.RectF(sx - r, sy - r, sx + r, sy + r), 0f, -deg.toFloat(), false, angleArc) // counterclockwise
+        val label = LineGeometry.angleLabel(deg)
+        val w = angleText.measureText(label) + 28f
+        val cx = (ex + 24f + w / 2).coerceIn(w / 2 + 8f, width - w / 2 - 8f)
+        val cy = (ey - 36f).coerceAtLeast(40f)
+        canvas.drawRoundRect(cx - w / 2, cy - 28f, cx + w / 2, cy + 22f, 25f, 25f, hintBg)
+        canvas.drawText(label, cx, cy + 12f, angleText)
+    }
+
     private fun drawLinePreview(canvas: Canvas) {
         if (!lining) return
         val g = geometry
@@ -1803,6 +1827,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         canvas.drawLine(
             g.toScreenX(lineStartX.toDouble()).toFloat(), g.toScreenY(lineStartY.toDouble()).toFloat(),
             g.toScreenX(lineEnd.first.toDouble()).toFloat(), g.toScreenY(lineEnd.second.toDouble()).toFloat(), linePaint,
+        )
+        if (lineAngle) drawAngle(
+            canvas, g.toScreenX(lineStartX.toDouble()).toFloat(), g.toScreenY(lineStartY.toDouble()).toFloat(),
+            g.toScreenX(lineEnd.first.toDouble()).toFloat(), g.toScreenY(lineEnd.second.toDouble()).toFloat(),
         )
     }
 
@@ -1815,6 +1843,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 lineEnd = if (ruling && rl != null) {
                     val (ex, ey) = rl.onEdge(event.getX(i), event.getY(i), rulerSide) // along the edge, never snapped to level
                     g.toPageX(ex.toDouble()).toFloat() to g.toPageY(ey.toDouble()).toFloat()
+                } else if (lineAngle) { // the angle is on show, so the line goes exactly where the pen is
+                    g.toPageX(event.getX(i).toDouble()).toFloat() to g.toPageY(event.getY(i).toDouble()).toFloat()
                 } else LineGeometry.end(lineStartX, lineStartY, g.toPageX(event.getX(i).toDouble()).toFloat(), g.toPageY(event.getY(i).toDouble()).toFloat())
                 pageLayer.invalidate()
             }
@@ -1998,7 +2028,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private fun eraseAt(sx: Float, sy: Float) {
         val g = geometry
         val partial = tool == Tool.ERASER_PART && !eraserEnd
-        if (model.erase(g.toPageX(sx.toDouble()).toFloat(), g.toPageY(sy.toDouble()).toFloat(), (eraserPx / g.scale).toFloat(), partial, eraseOnly)) {
+        if (model.erase(g.toPageX(sx.toDouble()).toFloat(), g.toPageY(sy.toDouble()).toFloat(), (eraserPx / g.scale).toFloat(), partial, eraseOnly) { layoutOf(it).height.toFloat() }) {
             pageLayer.invalidate()
         }
     }

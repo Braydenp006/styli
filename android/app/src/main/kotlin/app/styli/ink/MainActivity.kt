@@ -77,6 +77,7 @@ private fun InkScreen() {
     var sLine by remember { mutableStateOf(1) }
     var sDashed by remember { mutableStateOf(false) }
     var bColor by remember { mutableStateOf(0x99FFEB3B.toInt()) }
+    var angleOn by remember { mutableStateOf(false) }
     var route by remember { mutableStateOf(Route.STRAIGHT) }
     var auto by remember { mutableStateOf(false) }
     var startHead by remember { mutableStateOf(Arrowhead.NONE) }
@@ -129,8 +130,8 @@ private fun InkScreen() {
                 }
             }
             if (tool == InkCanvasView.Tool.ERASER_STROKE || tool == InkCanvasView.Tool.ERASER_PART) {
-                Menu("Erases: " + erasing.name.lowercase()) { close ->
-                    for (e in EraseOnly.entries) Choice(e.name.lowercase(), e == erasing) { erasing = e; canvas?.eraseOnly = e; close() }
+                Menu("Erases: " + eraseLabel(erasing)) { close ->
+                    for (e in EraseOnly.entries) Choice(eraseLabel(e), e == erasing) { erasing = e; canvas?.eraseOnly = e; close() }
                 }
             }
             if (tool == InkCanvasView.Tool.SHAPE) {
@@ -140,6 +141,9 @@ private fun InkScreen() {
             }
             if (tool == InkCanvasView.Tool.TABLE) {
                 Button(onClick = { tableDialog = true }, gap) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
+            }
+            if (tool == InkCanvasView.Tool.LINE || tool == InkCanvasView.Tool.LINE_HIGHLIGHTER) {
+                Button(onClick = { angleOn = !angleOn; canvas?.lineAngle = angleOn }, gap) { Text("Angle: " + if (angleOn) "shown, no snap" else "off", softWrap = false) }
             }
             if (tool == InkCanvasView.Tool.CONNECTOR) {
                 Menu("Route: " + routeLabel(route)) { close ->
@@ -231,6 +235,7 @@ private fun InkScreen() {
 
             Menu("Ruler") { close ->
                 Choice(if (canvas?.ruler != null) "Hide ruler" else "Show ruler", false) { canvas?.toggleRuler(); close() }
+                Choice("Angle shown on lines", angleOn) { angleOn = !angleOn; canvas?.lineAngle = angleOn; close() }
                 Heading("Units")
                 for (u in RulerUnits.entries) Choice(u.name.lowercase(), u == units) { units = u; canvas?.rulerUnits = u; close() }
             }
@@ -388,3 +393,15 @@ private fun Choice(text: String, chosen: Boolean, onClick: () -> Unit) =
 private fun Heading(text: String) = Text(text, Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp), style = MaterialTheme.typography.labelMedium)
 
 private fun routeLabel(r: Route) = when (r) { Route.STRAIGHT -> "straight"; Route.ELBOW -> "right angles"; Route.CURVE -> "rounded" }
+
+private fun eraseLabel(e: EraseOnly) = when (e) {
+    EraseOnly.ALL -> "everything"
+    EraseOnly.INK -> "ink only"
+    EraseOnly.HIGHLIGHTS -> "highlights only"
+    EraseOnly.LINES -> "straight lines only"
+    EraseOnly.TEXT_BOXES -> "text boxes only"
+    EraseOnly.SHAPES -> "shapes only"
+    EraseOnly.CONNECTORS -> "connectors only"
+    EraseOnly.TABLES -> "tables only"
+    EraseOnly.FILLS -> "fills only"
+}
