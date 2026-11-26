@@ -46,6 +46,8 @@ message Event {
     TextBoxSet text_box_set = 13;
     TextBoxRemoved text_box_removed = 14;
     PageSet page_set = 15;
+    TableSet table_set = 16;
+    TableRemoved table_removed = 17;
   }
 }
 
@@ -104,6 +106,28 @@ message TextBoxSet {
 }
 
 message TextBoxRemoved {}
+
+// The whole state of a table, a ruled grid on the page: adding, moving, resizing
+// the table or one of its lines is this event; the last one wins. The columns
+// run left to right from the top-left corner (x, y) and the rows top to bottom,
+// so the table is as wide as its column widths add up and as tall as its row
+// heights. Ink is drawn over it; it has no angle.
+message TableSet {
+  sint32 x = 1;
+  sint32 y = 2;
+  repeated uint32 col_widths = 3 [packed = true];
+  repeated uint32 row_heights = 4 [packed = true];
+  uint32 line_width = 5;
+  // 0xAARRGGBB as on a light page, like a stroke's colour; a zero alpha (so
+  // zero) means the page's ordinary ink colour.
+  uint32 color = 6;
+  // The colour behind the whole table, drawn under its lines: 0xAARRGGBB, and a
+  // zero alpha (so zero, and so absent in a log written before this was added)
+  // means no fill.
+  uint32 fill = 7;
+}
+
+message TableRemoved {}
 
 enum Template {
   TEMPLATE_BLANK = 0;

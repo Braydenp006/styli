@@ -273,6 +273,8 @@ type Event struct {
 	//	*Event_TextBoxSet
 	//	*Event_TextBoxRemoved
 	//	*Event_PageSet
+	//	*Event_TableSet
+	//	*Event_TableRemoved
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -397,6 +399,24 @@ func (x *Event) GetPageSet() *PageSet {
 	return nil
 }
 
+func (x *Event) GetTableSet() *TableSet {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_TableSet); ok {
+			return x.TableSet
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetTableRemoved() *TableRemoved {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_TableRemoved); ok {
+			return x.TableRemoved
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -425,6 +445,14 @@ type Event_PageSet struct {
 	PageSet *PageSet `protobuf:"bytes,15,opt,name=page_set,json=pageSet,proto3,oneof"`
 }
 
+type Event_TableSet struct {
+	TableSet *TableSet `protobuf:"bytes,16,opt,name=table_set,json=tableSet,proto3,oneof"`
+}
+
+type Event_TableRemoved struct {
+	TableRemoved *TableRemoved `protobuf:"bytes,17,opt,name=table_removed,json=tableRemoved,proto3,oneof"`
+}
+
 func (*Event_StrokeAdded) isEvent_Kind() {}
 
 func (*Event_StrokeErased) isEvent_Kind() {}
@@ -436,6 +464,10 @@ func (*Event_TextBoxSet) isEvent_Kind() {}
 func (*Event_TextBoxRemoved) isEvent_Kind() {}
 
 func (*Event_PageSet) isEvent_Kind() {}
+
+func (*Event_TableSet) isEvent_Kind() {}
+
+func (*Event_TableRemoved) isEvent_Kind() {}
 
 type StrokeAdded struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -823,6 +855,144 @@ func (*TextBoxRemoved) Descriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{7}
 }
 
+// The whole state of a table, a ruled grid on the page: adding, moving, resizing
+// the table or one of its lines is this event; the last one wins. The columns
+// run left to right from the top-left corner (x, y) and the rows top to bottom,
+// so the table is as wide as its column widths add up and as tall as its row
+// heights. Ink is drawn over it; it has no angle.
+type TableSet struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	X          int32                  `protobuf:"zigzag32,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y          int32                  `protobuf:"zigzag32,2,opt,name=y,proto3" json:"y,omitempty"`
+	ColWidths  []uint32               `protobuf:"varint,3,rep,packed,name=col_widths,json=colWidths,proto3" json:"col_widths,omitempty"`
+	RowHeights []uint32               `protobuf:"varint,4,rep,packed,name=row_heights,json=rowHeights,proto3" json:"row_heights,omitempty"`
+	LineWidth  uint32                 `protobuf:"varint,5,opt,name=line_width,json=lineWidth,proto3" json:"line_width,omitempty"`
+	// 0xAARRGGBB as on a light page, like a stroke's colour; a zero alpha (so
+	// zero) means the page's ordinary ink colour.
+	Color uint32 `protobuf:"varint,6,opt,name=color,proto3" json:"color,omitempty"`
+	// The colour behind the whole table, drawn under its lines: 0xAARRGGBB, and a
+	// zero alpha (so zero, and so absent in a log written before this was added)
+	// means no fill.
+	Fill          uint32 `protobuf:"varint,7,opt,name=fill,proto3" json:"fill,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TableSet) Reset() {
+	*x = TableSet{}
+	mi := &file_ink_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TableSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TableSet) ProtoMessage() {}
+
+func (x *TableSet) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TableSet.ProtoReflect.Descriptor instead.
+func (*TableSet) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *TableSet) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *TableSet) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *TableSet) GetColWidths() []uint32 {
+	if x != nil {
+		return x.ColWidths
+	}
+	return nil
+}
+
+func (x *TableSet) GetRowHeights() []uint32 {
+	if x != nil {
+		return x.RowHeights
+	}
+	return nil
+}
+
+func (x *TableSet) GetLineWidth() uint32 {
+	if x != nil {
+		return x.LineWidth
+	}
+	return 0
+}
+
+func (x *TableSet) GetColor() uint32 {
+	if x != nil {
+		return x.Color
+	}
+	return 0
+}
+
+func (x *TableSet) GetFill() uint32 {
+	if x != nil {
+		return x.Fill
+	}
+	return 0
+}
+
+type TableRemoved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TableRemoved) Reset() {
+	*x = TableRemoved{}
+	mi := &file_ink_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TableRemoved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TableRemoved) ProtoMessage() {}
+
+func (x *TableRemoved) ProtoReflect() protoreflect.Message {
+	mi := &file_ink_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TableRemoved.ProtoReflect.Descriptor instead.
+func (*TableRemoved) Descriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{9}
+}
+
 // The page's size and look. A page's orientation is whether width is larger
 // than height. With infinite set the size is only the starting view.
 type PageSet struct {
@@ -842,7 +1012,7 @@ type PageSet struct {
 
 func (x *PageSet) Reset() {
 	*x = PageSet{}
-	mi := &file_ink_proto_msgTypes[8]
+	mi := &file_ink_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -854,7 +1024,7 @@ func (x *PageSet) String() string {
 func (*PageSet) ProtoMessage() {}
 
 func (x *PageSet) ProtoReflect() protoreflect.Message {
-	mi := &file_ink_proto_msgTypes[8]
+	mi := &file_ink_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -867,7 +1037,7 @@ func (x *PageSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageSet.ProtoReflect.Descriptor instead.
 func (*PageSet) Descriptor() ([]byte, []int) {
-	return file_ink_proto_rawDescGZIP(), []int{8}
+	return file_ink_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PageSet) GetWidth() uint32 {
@@ -922,7 +1092,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x05event\x18\x02 \x01(\v2\x13.styli.ink.v1.EventH\x00R\x05eventB\x06\n" +
 	"\x04body\"\"\n" +
 	"\x06Header\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\"\xdc\x03\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\"\xd6\x04\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\tR\x06device\x12\x10\n" +
@@ -935,7 +1105,9 @@ const file_ink_proto_rawDesc = "" +
 	"\ftext_box_set\x18\r \x01(\v2\x18.styli.ink.v1.TextBoxSetH\x00R\n" +
 	"textBoxSet\x12H\n" +
 	"\x10text_box_removed\x18\x0e \x01(\v2\x1c.styli.ink.v1.TextBoxRemovedH\x00R\x0etextBoxRemoved\x122\n" +
-	"\bpage_set\x18\x0f \x01(\v2\x15.styli.ink.v1.PageSetH\x00R\apageSetB\x06\n" +
+	"\bpage_set\x18\x0f \x01(\v2\x15.styli.ink.v1.PageSetH\x00R\apageSet\x125\n" +
+	"\ttable_set\x18\x10 \x01(\v2\x16.styli.ink.v1.TableSetH\x00R\btableSet\x12A\n" +
+	"\rtable_removed\x18\x11 \x01(\v2\x1a.styli.ink.v1.TableRemovedH\x00R\ftableRemovedB\x06\n" +
 	"\x04kind\"\xd9\x01\n" +
 	"\vStrokeAdded\x12&\n" +
 	"\x04tool\x18\x01 \x01(\x0e2\x12.styli.ink.v1.ToolR\x04tool\x12\x14\n" +
@@ -966,7 +1138,19 @@ const file_ink_proto_rawDesc = "" +
 	"\x05color\x18\x06 \x01(\rR\x05color\x12\x1c\n" +
 	"\thighlight\x18\a \x01(\rR\thighlight\x12\x14\n" +
 	"\x05angle\x18\b \x01(\x11R\x05angle\"\x10\n" +
-	"\x0eTextBoxRemoved\"\xab\x01\n" +
+	"\x0eTextBoxRemoved\"\xb7\x01\n" +
+	"\bTableSet\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x11R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x11R\x01y\x12!\n" +
+	"\n" +
+	"col_widths\x18\x03 \x03(\rB\x02\x10\x01R\tcolWidths\x12#\n" +
+	"\vrow_heights\x18\x04 \x03(\rB\x02\x10\x01R\n" +
+	"rowHeights\x12\x1d\n" +
+	"\n" +
+	"line_width\x18\x05 \x01(\rR\tlineWidth\x12\x14\n" +
+	"\x05color\x18\x06 \x01(\rR\x05color\x12\x12\n" +
+	"\x04fill\x18\a \x01(\rR\x04fill\"\x0e\n" +
+	"\fTableRemoved\"\xab\x01\n" +
 	"\aPageSet\x12\x14\n" +
 	"\x05width\x18\x01 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x122\n" +
@@ -996,7 +1180,7 @@ func file_ink_proto_rawDescGZIP() []byte {
 }
 
 var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_ink_proto_goTypes = []any{
 	(Tool)(0),              // 0: styli.ink.v1.Tool
 	(Template)(0),          // 1: styli.ink.v1.Template
@@ -1008,7 +1192,9 @@ var file_ink_proto_goTypes = []any{
 	(*Transformed)(nil),    // 7: styli.ink.v1.Transformed
 	(*TextBoxSet)(nil),     // 8: styli.ink.v1.TextBoxSet
 	(*TextBoxRemoved)(nil), // 9: styli.ink.v1.TextBoxRemoved
-	(*PageSet)(nil),        // 10: styli.ink.v1.PageSet
+	(*TableSet)(nil),       // 10: styli.ink.v1.TableSet
+	(*TableRemoved)(nil),   // 11: styli.ink.v1.TableRemoved
+	(*PageSet)(nil),        // 12: styli.ink.v1.PageSet
 }
 var file_ink_proto_depIdxs = []int32{
 	3,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
@@ -1018,14 +1204,16 @@ var file_ink_proto_depIdxs = []int32{
 	7,  // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
 	8,  // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
 	9,  // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
-	10, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
-	0,  // 8: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
-	1,  // 9: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	12, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
+	10, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
+	11, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
+	0,  // 10: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
+	1,  // 11: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_ink_proto_init() }
@@ -1044,6 +1232,8 @@ func file_ink_proto_init() {
 		(*Event_TextBoxSet)(nil),
 		(*Event_TextBoxRemoved)(nil),
 		(*Event_PageSet)(nil),
+		(*Event_TableSet)(nil),
+		(*Event_TableRemoved)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1051,7 +1241,7 @@ func file_ink_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ink_proto_rawDesc), len(file_ink_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -148,6 +148,10 @@ func kind(e *inkpb.Event) string {
 		return "text-box-set"
 	case *inkpb.Event_TextBoxRemoved:
 		return "text-box-removed"
+	case *inkpb.Event_TableSet:
+		return "table-set"
+	case *inkpb.Event_TableRemoved:
+		return "table-removed"
 	case *inkpb.Event_PageSet:
 		return "page-set"
 	}
@@ -165,6 +169,9 @@ func detail(e *inkpb.Event) string {
 	case *inkpb.Event_TextBoxSet:
 		t := k.TextBoxSet
 		return fmt.Sprintf("at=(%d,%d) width=%d size=%d color=%08x highlight=%08x angle=%d %q", t.X, t.Y, t.Width, t.FontSize, t.Color, t.Highlight, t.Angle, t.Text)
+	case *inkpb.Event_TableSet:
+		t := k.TableSet
+		return fmt.Sprintf("at=(%d,%d) cols=%v rows=%v line=%d color=%08x fill=%08x", t.X, t.Y, t.ColWidths, t.RowHeights, t.LineWidth, t.Color, t.Fill)
 	case *inkpb.Event_PageSet:
 		p := k.PageSet
 		out := fmt.Sprintf("%dx%d %s infinite=%v", p.Width, p.Height, strings.ToLower(strings.TrimPrefix(p.Template.String(), "TEMPLATE_")), p.Infinite)

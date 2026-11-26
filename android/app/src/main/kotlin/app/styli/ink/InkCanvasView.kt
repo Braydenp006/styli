@@ -56,7 +56,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private class Placed(val item: Item, val stroke: Stroke, val l: Float, val t: Float, val r: Float, val b: Float)
 
     /** What the pen in your hand does. */
-    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, TEXT }
+    enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, TEXT, TABLE }
 
     /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
     val notebook = Notebook()
@@ -85,6 +85,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     var tool = Tool.PEN
         set(v) {
             if (v != Tool.TEXT) finishText()
+            tabling = false
             field = v
             selection.clear() // a selection only lives while the lasso is the tool
             pageLayer.invalidate()
@@ -145,6 +146,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawLinePreview(canvas)
                 drawSnapPreview(canvas)
                 drawTextDragPreview(canvas)
+                drawTableDragPreview(canvas)
                 canvas.restore() // the pull's shift
                 drawPullHint(canvas)
             }
@@ -170,6 +172,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         // The renderer does not apply the matrix, it only uses it to judge quality: apply it here too.
         canvas.save()
         canvas.concat(toScreen)
+        for (table in model.tables) drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb) // under the ink
         for (item in model.items) {
             // A transform makes a new Item under the same ID, so an old picture is not reused.
             val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
@@ -274,6 +277,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** The pen went down on [p]: it is the working page now, and what belonged to the last one is let go. */
     private fun becomeWork(p: PageModel) {
         selection.clear()
+        cellSel = null
         loop.clear()
         dragMap = null
         work = p
@@ -360,7 +364,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val all = notebook.pages
         placed.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.items.map { it.id } })
         layouts.keys.retainAll(all.flatMapTo(HashSet()) { p -> p.texts.map { it.id } })
-        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id })
+        selection.retainAll(model.items.mapTo(HashSet<String>()) { it.id } + model.texts.map { it.id } + model.tables.map { it.id })
+        cellSel = cellSel?.takeIf { (r, c) -> lineTable()?.let { r < it.rows && c < it.cols } == true }
         if (layoutKey() != shownKey) rebuildLayout(false) // an undo or redo of a size change
         pageLayer.invalidate()
     }
@@ -488,7 +493,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (action == MotionEvent.ACTION_DOWN) stopGlide() // a touch catches the page
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !textTapping) {
+            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining && !textTapping && !tabling) {
                 gestureActive = false // a pen landing after a palm takes over
                 pullX = 0.0; pullY = 0.0
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
@@ -504,6 +509,12 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 if (tool == Tool.TEXT) {
                     textTapping = true
                     textDown(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                    return true
+                }
+                if (tool == Tool.TABLE) {
+                    tabling = true
+                    val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                    tableFromX = x; tableFromY = y; tableToX = x; tableToY = y
                     return true
                 }
                 if (tool == Tool.LINE) {
@@ -539,7 +550,88 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             }
         }
         if (textTapping) return textGesture(event)
+        if (tabling) return tableGesture(event)
         return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (snapped != null) snapping(event) else if (strokeId != null) drawing(event) else moving(event)
+    }
+
+    // ---- Tables: choose rows and columns, then drag out the grid like a text box. ----
+
+    /** How many rows and columns the next table has (the dialog sets them; 1 to [Table.MAX_LINES]). */
+    var tableRows = 3
+        set(v) { field = v.coerceIn(1, Table.MAX_LINES) }
+    var tableCols = 3
+        set(v) { field = v.coerceIn(1, Table.MAX_LINES) }
+
+    private var tabling = false
+    private var tableFromX = 0f
+    private var tableFromY = 0f
+    private var tableToX = 0f
+    private var tableToY = 0f
+    private val tablePaint = Paint().apply { style = Paint.Style.STROKE; strokeJoin = Paint.Join.MITER; isAntiAlias = true }
+    private val tableFill = Paint().apply { style = Paint.Style.FILL }
+    private val cellPaint = Paint().apply { style = Paint.Style.FILL; color = 0x331565C0 }
+
+    /** A point kept on a fixed page (on an infinite canvas it is left alone). */
+    private fun onPage(x: Float, y: Float): Pair<Float, Float> =
+        if (geometry.infinite) x to y else x.coerceIn(0f, geometry.pageW.toFloat()) to y.coerceIn(0f, geometry.pageH.toFloat())
+
+    private fun tableGesture(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0) {
+                val (x, y) = onPage(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                tableToX = x; tableToY = y
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                tabling = false
+                if (event.actionMasked != MotionEvent.ACTION_CANCEL) {
+                    // Too small a drag for that many cells makes nothing; the preview was red.
+                    model.addTable(
+                        minOf(tableFromX, tableToX), minOf(tableFromY, tableToY),
+                        Math.abs(tableToX - tableFromX), Math.abs(tableToY - tableFromY), tableRows, tableCols, penWidth.toFloat(), penColor,
+                    )
+                    changed(true)
+                }
+                pageLayer.invalidate()
+            }
+        }
+        return true
+    }
+
+    /** The grid being dragged out: dashed, with its cell lines, red if the cells would be too small. */
+    private fun drawTableDragPreview(canvas: Canvas) {
+        if (!tabling) return
+        val g = geometry
+        val l = minOf(tableFromX, tableToX); val r = maxOf(tableFromX, tableToX)
+        val t = minOf(tableFromY, tableToY); val b = maxOf(tableFromY, tableToY)
+        val ok = Table.fits(r - l, b - t, tableRows, tableCols)
+        dragPaint.color = if (ok) 0xFF6750A4.toInt() else 0xFFC62828.toInt()
+        val sl = g.toScreenX(l.toDouble()).toFloat(); val sr = g.toScreenX(r.toDouble()).toFloat()
+        val st = g.toScreenY(t.toDouble()).toFloat(); val sb = g.toScreenY(b.toDouble()).toFloat()
+        canvas.drawRect(sl, st, sr, sb, dragPaint)
+        for (c in 1 until tableCols) { val x = sl + (sr - sl) * c / tableCols; canvas.drawLine(x, st, x, sb, dragPaint) }
+        for (rw in 1 until tableRows) { val y = st + (sb - st) * rw / tableRows; canvas.drawLine(sl, y, sr, y, dragPaint) }
+        dragPaint.color = 0xFF6750A4.toInt()
+    }
+
+    /** Draws a table's grid in page units (the canvas already has the page matrix), a line never thinner than a pixel. */
+    private fun drawTable(canvas: Canvas, table: Table, vl: Float, vt: Float, vr: Float, vb: Float) {
+        val moved = dragMap?.takeIf { table.id in selection }
+        if (moved == null && (table.x > vr || table.x + table.width < vl || table.y > vb || table.y + table.height < vt)) return
+        canvas.save()
+        if (moved != null) canvas.concat(Matrix().apply { setValues(floatArrayOf(moved.a.toFloat(), moved.c.toFloat(), moved.e.toFloat(), moved.b.toFloat(), moved.d.toFloat(), moved.f.toFloat(), 0f, 0f, 1f)) })
+        if (table.fill ushr 24 != 0) {
+            tableFill.color = table.fill
+            canvas.drawRect(table.x, table.y, table.x + table.width, table.y + table.height, tableFill)
+        }
+        tablePaint.color = TextRender.ink(table.color)
+        tablePaint.strokeWidth = maxOf(table.lineWidth, (1 / geometry.scale).toFloat())
+        canvas.drawRect(table.x, table.y, table.x + table.width, table.y + table.height, tablePaint)
+        for (c in 1 until table.cols) canvas.drawLine(table.lineX(c), table.y, table.lineX(c), table.y + table.height, tablePaint)
+        for (r in 1 until table.rows) canvas.drawLine(table.x, table.lineY(r), table.x + table.width, table.lineY(r), tablePaint)
+        canvas.restore()
     }
 
     // ---- Text boxes: tap the page with the text tool to make a box or edit one. An EditText sits over the box
@@ -716,7 +808,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private val selection = HashSet<String>()
     private var lassoing = false
-    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE }
+    private enum class Drag { LOOP, MOVE, RESIZE, ROTATE, LINE }
     private var drag = Drag.LOOP
     private val loop = ArrayList<Float>() // page units: x0, y0, x1, y1, ...
     private var dragStartX = 0.0
@@ -724,6 +816,10 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private var dragCorner = 0
     private var dragBox: Quad? = null // the selection's frame when the drag began
     private var dragMap: Affine? = null // the move or resize so far; the strokes are only changed when the pen lifts
+    private var lineBase: Table? = null // the table whose line is being dragged, as it was when the drag began
+    private var linePreview: Table? = null // and as it would be now (it is only saved when the pen lifts)
+    private var lineVertical = false
+    private var lineIndex = 0
     private val dashEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
     private val dashed = Paint().apply {
         style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xFF1565C0.toInt()
@@ -760,10 +856,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private fun selectionQuad(): Quad? {
         val strokes = model.items.filter { it.id in selection }
         val boxes = model.texts.filter { it.id in selection }
-        val base = if (strokes.isEmpty() && boxes.isNotEmpty() && boxes.all { LassoGeometry.sameTurn(it.angle, boxes[0].angle) }) {
+        val tables = model.tables.filter { it.id in selection }.map { linePreview?.takeIf { p -> p.id == it.id } ?: it }
+        val base = if (strokes.isEmpty() && tables.isEmpty() && boxes.isNotEmpty() && boxes.all { LassoGeometry.sameTurn(it.angle, boxes[0].angle) }) {
             LassoGeometry.orientedQuad(boxes.flatMap { it.corners(layoutOf(it).height.toFloat()) }, boxes[0].angle)
         } else {
-            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect)) ?: return null)
+            Quad.of(LassoGeometry.bounds(strokes, boxes.map(::textRect) + tables.map { Box(it.x.toDouble(), it.y.toDouble(), (it.x + it.width).toDouble(), (it.y + it.height).toDouble()) }) ?: return null)
         }
         return dragMap?.let { base.map(it) } ?: base
     }
@@ -790,14 +887,91 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         outline.close()
         canvas.drawPath(outline, dashed)
         if (drag == Drag.ROTATE && dragMap != null) return // only the turned outline while turning
-        val (rx, ry) = q.handle(ROTATE_STEM_PX / g.scale)
-        val (tx, ty) = q.topMiddle
-        canvas.drawLine(g.toScreenX(tx).toFloat(), g.toScreenY(ty).toFloat(), g.toScreenX(rx).toFloat(), g.toScreenY(ry).toFloat(), dashed)
-        canvas.drawCircle(g.toScreenX(rx).toFloat(), g.toScreenY(ry).toFloat(), 12f, handle)
+        if (canRotate()) { // a table has no angle, so no turning while one is selected
+            val (rx, ry) = q.handle(ROTATE_STEM_PX / g.scale)
+            val (tx, ty) = q.topMiddle
+            canvas.drawLine(g.toScreenX(tx).toFloat(), g.toScreenY(ty).toFloat(), g.toScreenX(rx).toFloat(), g.toScreenY(ry).toFloat(), dashed)
+            canvas.drawCircle(g.toScreenX(rx).toFloat(), g.toScreenY(ry).toFloat(), 12f, handle)
+        }
         for (c in 0..3) {
             val (hx, hy) = q.corner(c)
             canvas.drawCircle(g.toScreenX(hx).toFloat(), g.toScreenY(hy).toFloat(), 9f, handle)
         }
+        // The cell that was tapped (for the row and column buttons).
+        val tbl = lineTable()
+        val cell = cellSel
+        // While the whole table is being moved or resized, what is drawn for it follows the drag, like the frame does.
+        fun sx(x: Float, y: Float) = g.toScreenX((dragMap?.x(x, y) ?: x).toDouble()).toFloat()
+        fun sy(x: Float, y: Float) = g.toScreenY((dragMap?.y(x, y) ?: y).toDouble()).toFloat()
+        if (tbl != null && cell != null && cell.first < tbl.rows && cell.second < tbl.cols) {
+            val l = tbl.lineX(cell.second); val t = tbl.lineY(cell.first)
+            val r = tbl.lineX(cell.second + 1); val b = tbl.lineY(cell.first + 1)
+            canvas.drawRect(sx(l, t), sy(l, t), sx(r, b), sy(r, b), cellPaint)
+        }
+        // A table on its own also has a square handle on each of its lines.
+        lineTable()?.let { t -> t.lineHandles(anchor = lineBase ?: t) }?.forEach {
+            val x = sx(it.x, it.y)
+            val y = sy(it.x, it.y)
+            canvas.drawRect(x - 9f, y - 9f, x + 9f, y + 9f, handle)
+        }
+    }
+
+    /** Did the loop that was just drawn stay within a few pixels (a tap)? */
+    private fun loopIsTap(): Boolean {
+        if (loop.size < 2) return false
+        var l = Float.MAX_VALUE; var t = Float.MAX_VALUE; var r = -Float.MAX_VALUE; var b = -Float.MAX_VALUE
+        for (k in 0 until loop.size / 2) { l = minOf(l, loop[2 * k]); r = maxOf(r, loop[2 * k]); t = minOf(t, loop[2 * k + 1]); b = maxOf(b, loop[2 * k + 1]) }
+        return maxOf(r - l, b - t) * geometry.scale < TAP_PX
+    }
+
+    /** The cell last tapped on a table that is selected on its own: (row, column). */
+    private var cellSel: Pair<Int, Int>? = null
+
+    /** Adds a row above or below the tapped cell (the top or the bottom of the table if none is tapped). */
+    fun insertRow(below: Boolean) {
+        val t = lineTable() ?: return
+        val r = cellSel?.first
+        val at = if (r == null) (if (below) t.rows else 0) else if (below) r + 1 else r
+        if (model.insertLine(t.id, false, at)) { cellSel = at to (cellSel?.second ?: 0); changed(true) }
+    }
+
+    /** Adds a column left or right of the tapped cell (the left or right of the table if none is tapped). */
+    fun insertColumn(right: Boolean) {
+        val t = lineTable() ?: return
+        val c = cellSel?.second
+        val at = if (c == null) (if (right) t.cols else 0) else if (right) c + 1 else c
+        if (model.insertLine(t.id, true, at)) { cellSel = (cellSel?.first ?: 0) to at; changed(true) }
+    }
+
+    /** Deletes the tapped cell's row, with what is written in it. */
+    fun deleteRow() {
+        val t = lineTable() ?: return
+        val (r, c) = cellSel ?: return
+        if (model.deleteLine(t.id, false, r)) { cellSel = minOf(r, t.rows - 2) to c; changed(true) }
+    }
+
+    /** Deletes the tapped cell's column, with what is written in it. */
+    fun deleteColumn() {
+        val t = lineTable() ?: return
+        val (r, c) = cellSel ?: return
+        if (model.deleteLine(t.id, true, c)) { cellSel = r to minOf(c, t.cols - 2); changed(true) }
+    }
+
+    /** Colours or thickness for the selected tables (null leaves one as it is): one undo step. */
+    fun setTableStyle(color: Int?, fill: Int?, lineWidth: Float?) {
+        val picked = model.tables.filter { it.id in selection }
+        if (picked.isEmpty()) return
+        if (model.setTables(picked.map { it.copy(color = color ?: it.color, fill = fill ?: it.fill, lineWidth = lineWidth ?: it.lineWidth) })) changed(true)
+    }
+
+    /** A turn needs strokes and text boxes only. */
+    private fun canRotate() = model.tables.none { it.id in selection }
+
+    /** The table that is selected on its own (as it would be now), whose lines can be dragged; null otherwise. */
+    private fun lineTable(): Table? {
+        if (model.items.any { it.id in selection } || model.texts.any { it.id in selection }) return null
+        val t = model.tables.filter { it.id in selection }.singleOrNull() ?: return null
+        return linePreview?.takeIf { it.id == t.id } ?: t
     }
 
     private fun startLasso(event: MotionEvent, i: Int) {
@@ -808,9 +982,21 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val py = g.toPageY(sy.toDouble())
         val box = selectionQuad()
         dragMap = null
+        linePreview = null
         if (box != null) {
+            // A line's handle wins over a corner's only if it is nearer, so neither can hide the other.
+            val table = lineTable()
+            val lineHit = table?.lineHandles()
+                ?.map { it to kotlin.math.hypot(g.toScreenX(it.x.toDouble()) - sx, g.toScreenY(it.y.toDouble()) - sy) }
+                ?.filter { it.second < HANDLE_PX }?.minByOrNull { it.second }
+            val cornerDist = (0..3).minOf { c -> box.corner(c).let { kotlin.math.hypot(g.toScreenX(it.first) - sx, g.toScreenY(it.second) - sy) } }
+            if (table != null && lineHit != null && lineHit.second < cornerDist) {
+                drag = Drag.LINE; lineBase = table; lineVertical = lineHit.first.vertical; lineIndex = lineHit.first.index
+                dragStartX = px; dragStartY = py
+                return
+            }
             val (rx, ry) = box.handle(ROTATE_STEM_PX / g.scale)
-            if (kotlin.math.hypot(g.toScreenX(rx) - sx, g.toScreenY(ry) - sy) < HANDLE_PX) {
+            if (canRotate() && kotlin.math.hypot(g.toScreenX(rx) - sx, g.toScreenY(ry) - sy) < HANDLE_PX) {
                 drag = Drag.ROTATE; dragBox = box; dragStartX = px; dragStartY = py
                 return
             }
@@ -828,6 +1014,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             }
         }
         selection.clear() // touching outside lets go of the selection and starts a new loop
+        cellSel = null
         drag = Drag.LOOP
         loop.clear()
         loop.add(px.toFloat()); loop.add(py.toFloat())
@@ -846,6 +1033,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                         Drag.LOOP -> { loop.add(px.toFloat()); loop.add(py.toFloat()) }
                         Drag.MOVE -> dragMap = Affine.translate(px - dragStartX, py - dragStartY)
                         Drag.RESIZE -> dragMap = LassoGeometry.scaleFromCorner(dragBox!!, dragCorner, px, py)
+                        Drag.LINE -> linePreview = lineBase!!.moveLine(lineVertical, lineIndex, (if (lineVertical) px - dragStartX else py - dragStartY).toFloat())
                         Drag.ROTATE -> {
                             val (cx, cy) = dragBox!!.centre
                             val turn = LassoGeometry.snap(LassoGeometry.turn(cx, cy, dragStartX, dragStartY, px, py))
@@ -861,14 +1049,29 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
                 val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                 when (drag) {
-                    Drag.LOOP -> if (!cancelled) {
+                    Drag.LOOP -> if (!cancelled && loopIsTap()) {
+                        // A tap on a table's line picks the table alone (a loop round it takes the ink in it too).
+                        val tol = (TAP_PX * 2 / geometry.scale).toFloat()
+                        model.tables.lastOrNull { it.nearLine(loop[0], loop[1], tol) }?.let { selection.add(it.id) }
+                    } else if (!cancelled) {
                         selection.addAll(LassoGeometry.selected(model.items, loop.toFloatArray()))
                         selection.addAll(LassoGeometry.selectedBoxes(model.texts.map { it to layoutOf(it).height.toFloat() }, loop.toFloatArray()))
+                        selection.addAll(LassoGeometry.selectedTables(model.tables, loop.toFloatArray()))
                     }
-                    else -> dragMap?.takeIf { !cancelled }?.let { model.transform(selection, it) }
+                    Drag.LINE -> if (!cancelled) linePreview?.takeIf { it !== lineBase }?.let { model.setTable(it) }
+                    else -> {
+                        val moved = dragMap?.takeIf { !cancelled }
+                        // A touch that hardly moved is a tap: on a lone table it picks the cell; it never nudges anything.
+                        val tap = drag == Drag.MOVE && (moved == null || Math.hypot(moved.e, moved.f) * geometry.scale < TAP_PX)
+                        if (tap) {
+                            if (!cancelled) lineTable()?.cellAt(dragStartX.toFloat(), dragStartY.toFloat())?.let { cellSel = it }
+                        } else moved?.let { model.transform(selection, it) }
+                    }
                 }
                 loop.clear()
                 dragMap = null
+                linePreview = null
+                lineBase = null
                 lassoing = false
                 changed(true)
             }
@@ -1163,6 +1366,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val HANDLE_PX = 36f
         const val ROTATE_STEM_PX = 56f
         const val PULL_SHIFT = 0.4f // how much of a pull the surface follows
+        const val TAP_PX = 10.0 // a touch that moved less than this on screen is a tap
         const val SLIDE_MIN_PX = 8.0 // a finger gesture that moved sideways less than this does not settle onto a page
         const val TEXT_MIN_WIDTH = 1000f // a dragged box narrower than 10 mm is not a box
         const val TEXT_SIZE = 400f // text 4 mm high

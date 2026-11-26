@@ -61,6 +61,12 @@ private fun InkScreen() {
     var pHold by remember { mutableStateOf(1) }
     var solid by remember { mutableStateOf(false) }
     var flow by remember { mutableStateOf(0) } // which pulls add pages: down, right, both
+    var tableDialog by remember { mutableStateOf(false) }
+    var tRows by remember { mutableStateOf(3) }
+    var tCols by remember { mutableStateOf(3) }
+    var tColor by remember { mutableStateOf(0) }
+    var tFill by remember { mutableStateOf(0) }
+    var tLine by remember { mutableStateOf(1) }
     var scroll by remember { mutableStateOf(2) } // how far a scroll carries on: off, low, medium, high
     var cell by remember { mutableStateOf(0 to 0) } // the page's (column, row)
     var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
@@ -100,6 +106,7 @@ private fun InkScreen() {
                 onClick = {
                     tool = InkCanvasView.Tool.entries[(tool.ordinal + 1) % InkCanvasView.Tool.entries.size]
                     canvas?.tool = tool
+                    if (tool == InkCanvasView.Tool.TABLE) tableDialog = true // ask for the rows and columns first
                 },
                 Modifier.padding(start = 8.dp),
             ) { Text(tool.name.lowercase().replace('_', ' ')) }
@@ -135,6 +142,24 @@ private fun InkScreen() {
             Button(onClick = { pLevel = (pLevel + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) { Text("Level: ${names[pLevel]}", softWrap = false) }
             Button(onClick = { pHold = (pHold + 1) % 4; penmanship() }, Modifier.padding(start = 8.dp)) {
                 Text("Hold: ${listOf("0.3", "0.5", "0.8", "1.2")[pHold]} s", softWrap = false)
+            }
+            if (tool == InkCanvasView.Tool.TABLE) {
+                Button(onClick = { tableDialog = true }, Modifier.padding(start = 8.dp)) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
+            }
+            if (tool == InkCanvasView.Tool.LASSO) {
+                // For a table selected with the lasso: tap a cell first for the row and column buttons.
+                Button(onClick = { canvas?.insertRow(false) }, Modifier.padding(start = 8.dp)) { Text("Row above", softWrap = false) }
+                Button(onClick = { canvas?.insertRow(true) }, Modifier.padding(start = 8.dp)) { Text("Row below", softWrap = false) }
+                Button(onClick = { canvas?.insertColumn(false) }, Modifier.padding(start = 8.dp)) { Text("Col left", softWrap = false) }
+                Button(onClick = { canvas?.insertColumn(true) }, Modifier.padding(start = 8.dp)) { Text("Col right", softWrap = false) }
+                Button(onClick = { canvas?.deleteRow() }, Modifier.padding(start = 8.dp)) { Text("Delete row", softWrap = false) }
+                Button(onClick = { canvas?.deleteColumn() }, Modifier.padding(start = 8.dp)) { Text("Delete col", softWrap = false) }
+                Button(onClick = { picking = 3 }, Modifier.padding(start = 8.dp)) { Text("Table lines colour", softWrap = false) }
+                Button(onClick = { picking = 4 }, Modifier.padding(start = 8.dp)) { Text("Table fill", softWrap = false) }
+                Button(
+                    onClick = { tLine = (tLine + 1) % 4; canvas?.setTableStyle(null, null, listOf(20f, 40f, 80f, 160f)[tLine]) },
+                    Modifier.padding(start = 8.dp),
+                ) { Text("Lines: " + listOf("thin", "normal", "thick", "bold")[tLine], softWrap = false) }
             }
             if (tool == InkCanvasView.Tool.TEXT || tool == InkCanvasView.Tool.LASSO) {
                 Button(onClick = { picking = 1 }, Modifier.padding(start = 8.dp)) { Text("Text colour") }
@@ -172,25 +197,52 @@ private fun InkScreen() {
             Text("Page row ${cell.second + 1}, column ${cell.first + 1} of ${canvas?.notebook?.pages?.size ?: 1}", Modifier.padding(start = 16.dp))
             Text(latency, Modifier.padding(start = 16.dp))
         }
+        if (tableDialog) {
+            AlertDialog(
+                onDismissRequest = { tableDialog = false },
+                confirmButton = { TextButton(onClick = { tableDialog = false }) { Text("Done") } },
+                title = { Text("Table") },
+                text = {
+                    Column {
+                        Text("Then drag on the page to draw it.")
+                        for ((label, value, set) in listOf(
+                            Triple("Rows", tRows) { v: Int -> tRows = v; canvas?.tableRows = v },
+                            Triple("Columns", tCols) { v: Int -> tCols = v; canvas?.tableCols = v },
+                        )) {
+                            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, Modifier.padding(end = 16.dp))
+                                Button(onClick = { set((value - 1).coerceAtLeast(1)) }) { Text("-") }
+                                Text("$value", Modifier.padding(horizontal = 16.dp))
+                                Button(onClick = { set((value + 1).coerceAtMost(Table.MAX_LINES)) }) { Text("+") }
+                            }
+                        }
+                    }
+                },
+            )
+        }
         if (picking != 0) {
-            val text = picking == 1
+            val text = picking == 1 || picking == 3 // the palette that starts with the default ink colour, not "none"
             AlertDialog(
                 onDismissRequest = { picking = 0 },
                 confirmButton = { TextButton(onClick = { picking = 0 }) { Text("Close") } },
-                title = { Text(if (text) "Text colour" else "Highlight") },
+                title = { Text(when (picking) { 1 -> "Text colour"; 2 -> "Highlight"; 3 -> "Table lines colour"; else -> "Table fill" }) },
                 text = {
                     Column {
                         (if (text) TEXT_COLOURS else HIGHLIGHTS).chunked(5).forEach { row ->
                             Row(Modifier.padding(bottom = 8.dp)) {
                                 row.forEach { argb ->
-                                    val chosen = argb == (if (text) textColor else textHighlight)
+                                    val chosen = argb == when (picking) { 1 -> textColor; 2 -> textHighlight; 3 -> tColor; else -> tFill }
                                     Box(
                                         Modifier.padding(end = 8.dp).size(44.dp).clip(CircleShape)
                                             .background(if (argb ushr 24 == 0) Color.White else Color(argb))
                                             .border(if (chosen) 3.dp else 1.dp, if (chosen) Color.Black else Color.Gray, CircleShape)
                                             .clickable {
-                                                if (text) textColor = argb else textHighlight = argb
-                                                canvas?.setTextStyle(textColor, textHighlight)
+                                                when (picking) {
+                                                    1 -> { textColor = argb; canvas?.setTextStyle(textColor, textHighlight) }
+                                                    2 -> { textHighlight = argb; canvas?.setTextStyle(textColor, textHighlight) }
+                                                    3 -> { tColor = argb; canvas?.setTableStyle(argb, null, null) }
+                                                    else -> { tFill = argb; canvas?.setTableStyle(null, argb, null) }
+                                                }
                                                 picking = 0
                                             },
                                         contentAlignment = Alignment.Center,

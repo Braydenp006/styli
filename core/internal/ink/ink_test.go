@@ -218,3 +218,40 @@ func TestPageCell(t *testing.T) {
 		t.Errorf("dump:\n%s", out.String())
 	}
 }
+
+// A table is one whole-state event like a text box; it reads back and dumps with its sizes.
+func TestTable(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	set := func(seq uint64, k any) *inkpb.Event {
+		e := &inkpb.Event{Id: []byte("0123456789abcdef"), Device: "tab", Seq: seq}
+		switch k := k.(type) {
+		case *inkpb.TableSet:
+			e.Kind = &inkpb.Event_TableSet{TableSet: k}
+		case *inkpb.TableRemoved:
+			e.Kind = &inkpb.Event_TableRemoved{TableRemoved: k}
+		}
+		return e
+	}
+	in := &inkpb.TableSet{X: -100, Y: 250, ColWidths: []uint32{3000, 4500, 1000}, RowHeights: []uint32{800, 800}, LineWidth: 40, Color: 0xff1565c0, Fill: 0x99ffeb3b}
+	if err := Append(p, set(1, in), set(2, &inkpb.TableRemoved{})); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 2 {
+		t.Fatal(l, err)
+	}
+	got := l.Events[0].GetTableSet()
+	if !proto.Equal(got, in) {
+		t.Errorf("table changed: %v", got)
+	}
+	if l.Events[1].GetTableRemoved() == nil {
+		t.Error("removed event lost")
+	}
+	var out bytes.Buffer
+	Dump(&out, l)
+	for _, want := range []string{"table-set ", "at=(-100,250) cols=[3000 4500 1000] rows=[800 800] line=40 color=ff1565c0 fill=99ffeb3b", "table-removed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dump lacks %q:\n%s", want, out.String())
+		}
+	}
+}

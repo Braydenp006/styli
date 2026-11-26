@@ -150,6 +150,18 @@ object LassoGeometry {
 
     private const val GRID = 10
 
+    /** The tables more than half inside the loop by area, judged like text boxes. */
+    fun selectedTables(tables: List<Table>, poly: FloatArray): Set<String> {
+        if (poly.size < 6) return emptySet()
+        return tables.filter { t ->
+            var inside = 0
+            for (i in 0 until GRID) for (j in 0 until GRID) {
+                if (contains(poly, t.x + t.width * (i + 0.5f) / GRID, t.y + t.height * (j + 0.5f) / GRID)) inside++
+            }
+            inside * 2 > GRID * GRID
+        }.mapTo(HashSet()) { it.id }
+    }
+
     /** Do two angles (radians) point the same way? */
     fun sameTurn(a: Float, b: Float) = kotlin.math.abs(sin((a - b).toDouble())) < 1e-3 && cos((a - b).toDouble()) > 0
 
