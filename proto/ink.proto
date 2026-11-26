@@ -1,0 +1,112 @@
+// The ink format: one page is an append-only log of Records, each written as
+// a varint length followed by that many bytes of a Record message (the
+// "delimited" framing of protodelim / parseDelimitedFrom). The first record is
+// the Header. A log only ever grows; a cut-off last record is ignored.
+//
+// Never change a field number or its meaning. Add new fields and new event
+// kinds with new numbers: readers skip what they do not know.
+syntax = "proto3";
+
+package styli.ink.v1;
+
+option go_package = "styli/core/internal/ink/inkpb";
+option java_package = "app.styli.ink.proto";
+option java_multiple_files = true;
+
+message Record {
+  oneof body {
+    Header header = 1;
+    Event event = 2;
+  }
+}
+
+message Header {
+  // The format version, 1 for now. A reader refuses a larger one.
+  uint32 version = 1;
+}
+
+// Page lengths and point positions are whole units of 0.01 mm, so a log never
+// holds a float that could round differently on two devices.
+message Event {
+  // 16 random bytes naming the stroke or text box this event is about: the new
+  // one for StrokeAdded and TextBoxSet, the target for StrokeErased and
+  // TextBoxRemoved. Empty for Transformed and PageSet.
+  bytes id = 1;
+  // Who wrote it, and that device's own counter. (device, seq) is unique, so
+  // the merge can tell a copy of an event from a different one.
+  string device = 2;
+  uint64 seq = 3;
+  // Wall clock, milliseconds since 1970. For display and tie-breaks only.
+  int64 at_ms = 4;
+
+  oneof kind {
+    StrokeAdded stroke_added = 10;
+    StrokeErased stroke_erased = 11;
+    Transformed transformed = 12;
+    TextBoxSet text_box_set = 13;
+    TextBoxRemoved text_box_removed = 14;
+    PageSet page_set = 15;
+  }
+}
+
+enum Tool {
+  TOOL_PEN = 0;
+  TOOL_HIGHLIGHTER = 1;
+}
+
+message StrokeAdded {
+  Tool tool = 1;
+  uint32 color = 2;  // 0xAARRGGBB, as drawn on a light page (dark mode maps it when showing)
+  uint32 width = 3;  // pen width
+  // Points, delta-coded: the first is (x0, y0), each next one adds dx[i], dy[i].
+  sint32 x0 = 4;
+  sint32 y0 = 5;
+  repeated sint32 dx = 6 [packed = true];
+  repeated sint32 dy = 7 [packed = true];
+  // One per point, 0 to 255; empty for a mouse or finger (full pressure).
+  bytes pressure = 8;
+  // Milliseconds since the first point, delta-coded like dx; one per point
+  // after the first. Empty when unknown.
+  repeated uint32 dt = 9 [packed = true];
+}
+
+message StrokeErased {}
+
+// Moves or resizes strokes and text boxes: the affine map
+// x' = a*x + c*y + e, y' = b*x + d*y + f applied to every id listed.
+message Transformed {
+  repeated bytes ids = 1;
+  double a = 2;
+  double b = 3;
+  double c = 4;
+  double d = 5;
+  double e = 6;
+  double f = 7;
+}
+
+// The whole state of a text box. Adding, editing and moving are all this; the
+// last one wins.
+message TextBoxSet {
+  sint32 x = 1;
+  sint32 y = 2;
+  uint32 width = 3;
+  uint32 font_size = 4;
+  string text = 5;
+}
+
+message TextBoxRemoved {}
+
+enum Template {
+  TEMPLATE_BLANK = 0;
+  TEMPLATE_LINED = 1;
+  TEMPLATE_GRID = 2;
+}
+
+// The page's size and look. A page's orientation is whether width is larger
+// than height. With infinite set the size is only the starting view.
+message PageSet {
+  uint32 width = 1;
+  uint32 height = 2;
+  Template template = 3;
+  bool infinite = 4;
+}

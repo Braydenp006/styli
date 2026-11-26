@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"styli/core/internal/ink"
+	"styli/core/internal/ink/inkpb"
 )
 
 func TestVersionSet(t *testing.T) {
@@ -32,5 +36,19 @@ func TestRunCommands(t *testing.T) {
 			!strings.Contains(out.String(), c.stdout) || !strings.Contains(errb.String(), c.stderr) {
 			t.Errorf("%s: code %d, stdout %q, stderr %q", name, code, out.String(), errb.String())
 		}
+	}
+}
+
+func TestInkDump(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.stylog")
+	if err := ink.Append(p, &inkpb.Event{Device: "d", Seq: 1, Kind: &inkpb.Event_PageSet{PageSet: &inkpb.PageSet{Width: 1, Height: 2}}}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"ink", "dump", p}, &out, &errb); code != 0 || !strings.Contains(out.String(), "page-set") {
+		t.Fatalf("%d %q %q", code, out.String(), errb.String())
+	}
+	if code := run([]string{"ink", "dump"}, &out, &errb); code != 2 {
+		t.Fatal(code)
 	}
 }

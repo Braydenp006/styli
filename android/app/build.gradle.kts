@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.protobuf")
 }
 
 android {
@@ -13,6 +14,19 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
+    }
+    sourceSets {
+        // The ink format's schema and sample file are shared with the Go core.
+        (getByName("main") as ExtensionAware).extensions.getByName<SourceDirectorySet>("proto").srcDir("../../proto")
+        getByName("test").resources.srcDir("../../proto/testdata")
+    }
+}
+
+val protobufVersion = "4.31.1"
+protobuf {
+    protoc { artifact = "com.google.protobuf:protoc:$protobufVersion" }
+    generateProtoTasks {
+        all().forEach { it.builtins { create("java") { option("lite") } } }
     }
 }
 
@@ -30,4 +44,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("com.google.protobuf:protobuf-javalite:$protobufVersion")
+    testImplementation("junit:junit:4.13.2")
 }

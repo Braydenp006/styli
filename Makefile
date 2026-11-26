@@ -1,7 +1,7 @@
 # Build and test the Go core. Run from the repo root.
 OUT := $(CURDIR)/out
 
-.PHONY: build test cross ui-assets
+.PHONY: build test cross ui-assets proto
 build:
 	cd core && go build -ldflags "-X main.Version=$$(git describe --always --dirty 2>/dev/null || echo dev)" -o $(OUT)/styli ./cmd/styli
 
@@ -21,3 +21,8 @@ cross:
 		GOOS=$${t%/*} GOARCH=$${t#*/} CGO_ENABLED=0 go build -o $(OUT)/cross-$${t%/*} ./cmd/styli || exit 1; \
 		echo "ok $$t"; \
 	done
+
+# Regenerate the Go code for proto/ink.proto (the Android build generates its own).
+# Needs protoc and protoc-gen-go v1.36.10: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+proto:
+	cd core && protoc -I ../proto --go_out=. --go_opt=module=styli/core ../proto/ink.proto

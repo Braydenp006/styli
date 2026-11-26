@@ -2,6 +2,7 @@
 //
 //	styli serve --vault DIR [--addr 127.0.0.1:7878] [--sync-addr :7879] [--no-announce] [--new-browser-link] [--clear-password] [--tls-cert F --tls-key F] [--web-name N] [--new-ca] [--data DIR] [--config DIR]
 //	styli join --vault DIR --atrium HOST[:PORT] [--name NAME] [--config DIR]
+//	styli ink dump FILE
 //	styli version
 package main
 
@@ -16,6 +17,7 @@ import (
 	"syscall"
 
 	"styli/core/internal/app"
+	"styli/core/internal/ink"
 )
 
 // Version is the build version; the Makefile can override it with -ldflags.
@@ -36,6 +38,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return serve(args[1:], stdout, stderr)
 	case "join":
 		return join(args[1:], stdin, stdout, stderr)
+	case "ink":
+		return inkCmd(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "unknown command %q\nusage: styli serve --vault DIR | styli join --vault DIR --atrium HOST | styli version\n", args[0])
 	return 2
@@ -78,5 +82,20 @@ func serve(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
+	return 0
+}
+
+// inkCmd is the debug tool: `styli ink dump FILE` prints a page's stroke log as text.
+func inkCmd(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 || args[0] != "dump" {
+		fmt.Fprintln(stderr, "usage: styli ink dump FILE")
+		return 2
+	}
+	l, err := ink.Read(args[1])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	ink.Dump(stdout, l)
 	return 0
 }
