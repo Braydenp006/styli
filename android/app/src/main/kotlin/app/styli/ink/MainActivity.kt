@@ -136,6 +136,8 @@ private fun InkScreen() {
             val gap = Modifier.padding(start = 8.dp)
             Button(onClick = { canvas?.undo() }) { Text("Undo") }
             Button(onClick = { canvas?.redo() }, gap) { Text("Redo") }
+            Button(onClick = { canvas?.undoPage() }, gap) { Text("Undo page change") }
+            Button(onClick = { canvas?.redoPage() }, gap) { Text("Redo page change") }
             Button(onClick = { canvas?.deleteSelection() }, gap) { Text("Delete") }
 
             // The tool, then whatever that tool needs.
@@ -332,6 +334,7 @@ private fun InkScreen() {
                 Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("$zoom%")
                     TextButton(onClick = { canvas?.fitToScreen() }, Modifier.padding(start = 8.dp)) { Text("Fit to screen") }
+                    TextButton(onClick = { canvas?.overview() }) { Text("Overview") }
                 }
             }
         }

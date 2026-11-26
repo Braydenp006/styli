@@ -137,8 +137,8 @@ class PageGeometryTest {
         assertEquals(200, g.percent())
         g.zoomBy(0.5, 500.0, 800.0)
         assertEquals(100, g.percent())
-        g.zoomBy(0.1, 500.0, 800.0) // the zoom-out limit: a bit under the whole page in view
-        assertEquals(80, g.percent())
+        g.zoomBy(0.1, 500.0, 800.0) // the zoom-out limit: well past the whole page in view
+        assertEquals(35, g.percent())
     }
 
     @Test

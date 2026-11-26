@@ -72,9 +72,12 @@ class PageGeometry(
     private var fitWidth = pageW // the width of the page [fit] fitted, which says what "zoomed out" means
 
     private val minScale: Double
-        get() = if (infinite) oneToOne * 0.1 else min(wholePageScale(), widthScale()) * 0.8
+        get() = if (infinite) oneToOne * 0.1 else min(wholePageScale(), widthScale()) * 0.35
     private val maxScale: Double
         get() = max(oneToOne * 8, minScale)
+
+    /** The zoom at which the whole surface is in view with its margin (the overview). */
+    fun overviewScale(): Double = wholePageScale()
 
     private fun widthScale() = (viewW - 2 * MARGIN) / pageW
     private fun wholePageScale() = min(widthScale(), (viewH - 2 * MARGIN) / pageH)

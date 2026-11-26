@@ -5,18 +5,28 @@ import kotlin.math.max
 /**
  * Where each page of a notebook sits on one scrolling surface ("the world", in page units). Pages are in their
  * grid cells with a small [gap] between: a column is as wide as its widest page and a row as tall as its tallest,
- * and a page sits at the top left of its cell. Columns and rows that hold no page take no room. Pure Kotlin.
+ * and a page sits at the top left of its cell. Columns and rows that hold no page still take room, as wide or
+ * tall as the biggest page, so a page put far from the others stays far. Pure Kotlin.
  */
-class NotebookLayout(private val pages: List<PageModel>, private val gap: Int = GAP) {
-    private val cols = pages.map { it.page.col }.distinct().sorted()
+class NotebookLayout(private val pages: List<PageModel>, private val gap: Int = GAP, refW: Int = 0, refH: Int = 0) {
+    private val cols = pages.map { it.page.col }.distinct().sorted() // columns and rows that hold a page
     private val rows = pages.map { it.page.row }.distinct().sorted()
-    private val colW = cols.associateWith { c -> pages.filter { it.page.col == c }.maxOf { it.page.width } }
-    private val rowH = rows.associateWith { r -> pages.filter { it.page.row == r }.maxOf { it.page.height } }
-    private val colX = HashMap<Int, Int>().also { var x = 0; for (c in cols) { it[c] = x; x += colW.getValue(c) + gap } }
-    private val rowY = HashMap<Int, Int>().also { var y = 0; for (r in rows) { it[r] = y; y += rowH.getValue(r) + gap } }
 
-    val worldW: Int = max(1, cols.sumOf { colW.getValue(it) } + gap * (cols.size - 1))
-    val worldH: Int = max(1, rows.sumOf { rowH.getValue(it) } + gap * (rows.size - 1))
+    // Every column and row from the first to the last takes room, empty ones too (as wide or tall as the biggest
+    // page), so a page put far away stays far away.
+    // With a reference size ([refW] by [refH], what an empty cell shows) they are that size, and no column or row is
+    // smaller, so an empty cell never overhangs its neighbours; without one, the biggest page's size.
+    private val emptyW = if (refW > 0) refW else pages.maxOf { it.page.width }
+    private val emptyH = if (refH > 0) refH else pages.maxOf { it.page.height }
+    private val allCols = (cols.first()..cols.last()).toList()
+    private val allRows = (rows.first()..rows.last()).toList()
+    private val colW = allCols.associateWith { c -> max(pages.filter { it.page.col == c }.maxOfOrNull { it.page.width } ?: 0, if (refW > 0) refW else 0).takeIf { it > 0 } ?: emptyW }
+    private val rowH = allRows.associateWith { r -> max(pages.filter { it.page.row == r }.maxOfOrNull { it.page.height } ?: 0, if (refH > 0) refH else 0).takeIf { it > 0 } ?: emptyH }
+    private val colX = HashMap<Int, Int>().also { var x = 0; for (c in allCols) { it[c] = x; x += colW.getValue(c) + gap } }
+    private val rowY = HashMap<Int, Int>().also { var y = 0; for (r in allRows) { it[r] = y; y += rowH.getValue(r) + gap } }
+
+    val worldW: Int = max(1, allCols.sumOf { colW.getValue(it) } + gap * (allCols.size - 1))
+    val worldH: Int = max(1, allRows.sumOf { rowH.getValue(it) } + gap * (allRows.size - 1))
 
     /** The width of the first and last column and the height of the first and last row: how far the ends of the surface can scroll. */
     val firstColW: Int = colW.getValue(cols.first())
@@ -24,7 +34,7 @@ class NotebookLayout(private val pages: List<PageModel>, private val gap: Int = 
     val firstRowH: Int = rowH.getValue(rows.first())
     val lastRowH: Int = rowH.getValue(rows.last())
 
-    /** Each column's left edge and width, for settling a horizontal scroll onto one. */
+    /** Each column's left edge and width, for settling a horizontal scroll onto one (only columns that hold a page). */
     val columns: List<Pair<Double, Double>> = cols.map { colX.getValue(it).toDouble() to colW.getValue(it).toDouble() }
 
     /** The top left corner of [p]'s sheet on the surface. */
@@ -41,6 +51,9 @@ class NotebookLayout(private val pages: List<PageModel>, private val gap: Int = 
     fun pageAt(x: Double, y: Double): PageModel? = pages.firstOrNull { distance(it, x, y) == 0.0 }
 
     /** The page whose sheet is closest to the point (the one holding it, if any). */
+    /** The one of [candidates] nearest the surface point ([x], [y]); null if there are none. */
+    fun nearestOf(candidates: Collection<PageModel>, x: Double, y: Double): PageModel? = candidates.minByOrNull { distance(it, x, y) }
+
     fun nearest(x: Double, y: Double): PageModel = pages.minBy { distance(it, x, y) }
 
     /** The pages whose sheets touch the box (left, top, right, bottom), for drawing only what is on screen. */
@@ -65,9 +78,63 @@ class NotebookLayout(private val pages: List<PageModel>, private val gap: Int = 
     /** The right-most page in the row at (or nearest) [y]: the one a page can be added to the right of. */
     fun rightOfRowAt(y: Double): PageModel = rowNear(y).let { r -> pages.filter { it.page.row == r }.maxBy { it.page.col } }
 
+    /**
+     * Where a page can be dropped or added when rearranging: every cell from the first column and row to the last,
+     * and the cells outside them, as many rings as the view [view] (left, top, right, bottom on the surface) shows,
+     * and at least one ring. Each is (col, row).
+     */
+    fun slots(view: DoubleArray? = null): List<Pair<Int, Int>> {
+        fun reach(first: Int, last: Int, start: Double, end: Double, step: Double, lo: Double, hi: Double): Pair<Int, Int> {
+            var a = first - 1; var b = last + 1
+            if (view != null) {
+                while (first - a < MAX_RINGS && start - (first - a) * step > lo) a--
+                while (b - last < MAX_RINGS && end + (b - last) * step < hi) b++
+            }
+            return a to b
+        }
+        val (c0, c1) = reach(allCols.first(), allCols.last(), 0.0, worldW.toDouble(), emptyW + gap.toDouble(), view?.get(0) ?: 0.0, view?.get(2) ?: 0.0)
+        val (r0, r1) = reach(allRows.first(), allRows.last(), 0.0, worldH.toDouble(), emptyH + gap.toDouble(), view?.get(1) ?: 0.0, view?.get(3) ?: 0.0)
+        return (c0..c1).flatMap { c -> (r0..r1).map { r -> c to r } }
+    }
+
+    /**
+     * The sheet-sized rectangle (x, y, width, height, in surface units) of a cell from [slots]: the size of the page
+     * in it, or [refW] by [refH] if it is empty (so empty cells show the paper and orientation a page there would
+     * get), at the top left of its cell. Outside the grid, cells sit where a page added there would.
+     */
+    fun slotRect(col: Int, row: Int, refW: Int, refH: Int): DoubleArray {
+        val here = pages.firstOrNull { it.page.col == col && it.page.row == row }
+        val w = here?.page?.width ?: refW
+        val h = here?.page?.height ?: refH
+        val x = colX[col]?.toDouble() ?: if (col < allCols.first()) -(allCols.first() - col) * (emptyW + gap).toDouble()
+            else worldW + gap + (col - allCols.last() - 1) * (emptyW + gap).toDouble()
+        val y = rowY[row]?.toDouble() ?: if (row < allRows.first()) -(allRows.first() - row) * (emptyH + gap).toDouble()
+            else worldH + gap + (row - allRows.last() - 1) * (emptyH + gap).toDouble()
+        return doubleArrayOf(x, y, w.toDouble(), h.toDouble())
+    }
+
+    /** The column (or row) at [v] along one axis: one inside the grid by its span (grown by half a gap), or one outside by steps of [step]. */
+    private fun axisCell(v: Double, ids: List<Int>, start: (Int) -> Double, size: (Int) -> Double, step: Double): Int {
+        val m = gap / 2.0
+        ids.firstOrNull { v >= start(it) - m && v <= start(it) + size(it) + m }?.let { return it }
+        val first = ids.first(); val last = ids.last()
+        val lo = start(first) - m
+        if (v < lo) return first - Math.ceil((lo - v) / step).toInt()
+        val hi = start(last) + size(last) + m
+        return last + Math.ceil((v - hi) / step).toInt()
+    }
+
+    /** The cell at the surface point ([x], [y]), anywhere, however far outside the grid. */
+    fun slotAt(x: Double, y: Double): Pair<Int, Int> =
+        axisCell(x, allCols, { colX.getValue(it).toDouble() }, { colW.getValue(it).toDouble() }, emptyW + gap.toDouble()) to
+            axisCell(y, allRows, { rowY.getValue(it).toDouble() }, { rowH.getValue(it).toDouble() }, emptyH + gap.toDouble())
+
     companion object {
         /** The space between pages: 8 mm. */
         const val GAP = 800
+
+        /** The most rings of empty cells shown past an edge. */
+        const val MAX_RINGS = 40
     }
 }
 

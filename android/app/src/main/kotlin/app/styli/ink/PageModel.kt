@@ -190,6 +190,13 @@ class PageModel(page: PageSet = A4_LINED) {
         return true
     }
 
+    /** Puts the page in another grid cell. Not a drawing undo step: [Notebook] keeps the undo for page moves. */
+    fun placeAt(col: Int, row: Int) {
+        if (page.col == col && page.row == row) return
+        page = page.toBuilder().setCol(col).setRow(row).build()
+        log.add(Ev.PageChanged(page))
+    }
+
     /** A new text box. One undo step. */
     fun addText(x: Float, y: Float, width: Float, fontSize: Float, text: String, color: Int = 0, highlight: Int = 0): TextBox {
         endErase()
@@ -621,7 +628,9 @@ class PageModel(page: PageSet = A4_LINED) {
         val fillWas = from.fills.associateBy { it.id }
         from.fills.filter { it.id !in fillNow }.forEach { log.add(Ev.FillRemoved(it.id)) }
         to.fills.filter { fillWas[it.id] !== it }.forEach { log.add(Ev.FillSet(it)) }
-        if (to.page != from.page) log.add(Ev.PageChanged(to.page))
+        // A drawing undo never moves the page: it keeps the cell the page is in now (page moves have their own undo).
+        val toPage = to.page.toBuilder().setCol(from.page.col).setRow(from.page.row).build()
+        if (toPage != from.page) log.add(Ev.PageChanged(toPage))
         logLayers(from, to)
         items = to.items
         texts = to.texts
@@ -629,7 +638,7 @@ class PageModel(page: PageSet = A4_LINED) {
         shapes = to.shapes
         connectors = to.connectors
         fills = to.fills
-        page = to.page
+        page = toPage
         order = to.order
     }
 

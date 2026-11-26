@@ -140,4 +140,122 @@ class NotebookTest {
         assertEquals(listOf(first), nb.pages)
         assertTrue(b !== a)
     }
+
+    private fun three(): Triple<Notebook, PageModel, PageModel> {
+        val nb = Notebook()
+        val a = nb.current
+        val b = nb.add(a, Dir.RIGHT)!!
+        nb.add(b, Dir.RIGHT)
+        return Triple(nb, a, b)
+    }
+
+    @Test
+    fun movingToAnEmptyCellAndSwappingAreOneStepEachAndUndoable() {
+        val (nb, a, b) = three()
+        assertTrue(nb.movePage(a, 0, 3))
+        assertEquals(0 to 3, cell(a))
+        assertTrue(nb.movePage(a, 1, 0)) // b is there: swap
+        assertEquals(1 to 0, cell(a)); assertEquals(0 to 3, cell(b))
+        assertFalse(nb.movePage(a, 1, 0)) // already there
+        assertTrue(nb.undoPage()); assertEquals(0 to 3, cell(a)); assertEquals(1 to 0, cell(b))
+        assertTrue(nb.undoPage()); assertEquals(0 to 0, cell(a))
+        assertFalse(nb.undoPage())
+        assertTrue(nb.redoPage()); assertEquals(0 to 3, cell(a))
+    }
+
+    @Test
+    fun readingOrderFollowsAMove() {
+        val (nb, a, b) = three()
+        val c = nb.pages.last()
+        nb.movePage(a, 5, 0)
+        assertEquals(listOf(b, c, a), nb.readingOrder())
+    }
+
+    @Test
+    fun theMoveIsInThePagesLogAndIsNotADrawingUndoStep() {
+        val (nb, a, _) = three()
+        a.log.clear()
+        nb.movePage(a, 0, 4)
+        assertFalse(a.canUndo)
+        assertEquals(1, a.log.count { it is Ev.PageChanged })
+    }
+
+    @Test
+    fun drawingUndoNeverMovesAPageAndPageUndoNeverUndrawsInk() {
+        val (nb, a, _) = three()
+        a.setPage(a.page.toBuilder().setTemplate(Template.TEMPLATE_GRID).build())
+        a.add(Tool.TOOL_PEN, 0, 100, listOf(Pt(1f, 1f, 0, 1f), Pt(5f, 5f, 0, 1f)))
+        nb.movePage(a, 0, 3)
+        assertTrue(a.undo()); assertTrue(a.undo()) // the stroke, then the template
+        assertEquals(0 to 3, cell(a))
+        assertEquals(Template.TEMPLATE_LINED, a.page.template)
+        assertTrue(a.redo()); assertTrue(a.redo())
+        assertEquals(0 to 3, cell(a))
+        assertEquals(1, a.items.size)
+        assertTrue(nb.undoPage())
+        assertEquals(1, a.items.size) // the ink stays
+        assertEquals(0 to 0, cell(a))
+    }
+
+    @Test
+    fun aDeletedPageComesBackWithItsInkAndItsUndoSteps() {
+        val (nb, a, b) = three()
+        b.add(Tool.TOOL_PEN, 0, 100, listOf(Pt(1f, 1f, 0, 1f), Pt(5f, 5f, 0, 1f)))
+        nb.go(b)
+        assertTrue(nb.deletePage(b))
+        assertFalse(b in nb.pages)
+        assertSame(a, nb.current) // a nearest page takes over (a tie goes to the earlier page)
+        assertEquals(listOf(b), nb.trash)
+        assertTrue(nb.undoPage())
+        assertSame(b, nb.at(1, 0))
+        assertEquals(1, b.items.size)
+        assertTrue(b.canUndo)
+        assertTrue(nb.trash.isEmpty())
+        assertTrue(nb.redoPage())
+        assertFalse(b in nb.pages)
+    }
+
+    @Test
+    fun theLastPageCannotBeDeleted() {
+        val nb = Notebook()
+        assertFalse(nb.deletePage(nb.current))
+        assertEquals(1, nb.pages.size)
+        assertFalse(nb.canUndoPage)
+    }
+
+    @Test
+    fun addingAPageStartsPageHistoryAfresh() {
+        val (nb, a, _) = three()
+        nb.movePage(a, 0, 3)
+        nb.add(a, Dir.RIGHT)
+        assertFalse(nb.canUndoPage)
+    }
+
+    @Test
+    fun aPageCanBeAddedIntoAnyEmptyCellTakingItsLookFromANeighbour() {
+        val nb = Notebook()
+        val a = nb.current
+        a.setPage(PageSizes.withOrientation(a.page, true))
+        val far = nb.addAt(nb.neighbourOfCell(1, 1) ?: a, 1, 1)!!
+        assertEquals(1 to 1, far.page.col to far.page.row)
+        assertEquals(a.page.width, far.page.width)
+        assertNull(nb.addAt(a, 1, 1)) // taken
+        assertNull(nb.neighbourOfCell(5, 5))
+        assertSame(far, nb.neighbourOfCell(1, 0)) // below it; the order tried is up, down, left, right
+    }
+
+    @Test
+    fun aPageMovedIntoAnEmptyCellTakesTheCellsSizeButASwapKeepsBoth() {
+        val (nb, a, b) = three()
+        val landscape = PageSizes.withOrientation(a.page, true)
+        assertTrue(nb.movePage(b, 0, 5, landscape))
+        assertTrue(PageSizes.isLandscape(b.page))
+        assertEquals(0 to 5, cell(b))
+        assertTrue(b.undo()) // turning it was a drawing step of the page
+        assertEquals(0 to 5, cell(b)) // and the drawing undo leaves the cell alone
+        assertFalse(PageSizes.isLandscape(b.page))
+        val c = nb.pages.last()
+        assertTrue(nb.movePage(c, a.page.col, a.page.row, landscape)) // swap: no resize
+        assertFalse(PageSizes.isLandscape(a.page) && PageSizes.isLandscape(c.page))
+    }
 }

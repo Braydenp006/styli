@@ -70,6 +70,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** The page the pen last went down on; every gesture belongs to it until the pen goes down on another. */
     private var work: PageModel = notebook.current
 
+    /** The paper and orientation last chosen: empty cells are shown in it, and a page added or dropped there gets it. */
+    private var emptyLook: PageSet = notebook.current.page
+
     /** The page being worked on. */
     val page get() = work.page
 
@@ -120,6 +123,31 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(a: android.animation.Animator) { vp.viewTo(s1, tx1, ty1); pageLayer.invalidate() }
+            })
+            start()
+        }
+    }
+
+    /** Zooms out, centred, until every page is in view: one smooth move, with no page becoming the working page. */
+    fun overview() {
+        val l = layout ?: return
+        stopGlide()
+        val s1 = vp.overviewScale()
+        val cx = l.worldW / 2.0; val cy = l.worldH / 2.0
+        val s0 = vp.scale
+        val px0 = vp.tx + cx * s0; val py0 = vp.ty + cy * s0
+        val ease = android.view.animation.AccelerateDecelerateInterpolator()
+        snapAnim?.cancel()
+        snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 520
+            addUpdateListener {
+                val e = ease.getInterpolation(it.animatedFraction).toDouble()
+                val s = s0 * Math.pow(s1 / s0, e)
+                vp.viewTo(s, px0 + (width / 2.0 - px0) * e - cx * s, py0 + (height / 2.0 - py0) * e - cy * s)
+                pageLayer.invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { vp.viewTo(s1, (width - l.worldW * s1) / 2, (height - l.worldH * s1) / 2); pageLayer.invalidate() }
             })
             start()
         }
@@ -223,6 +251,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 drawTableDragPreview(canvas)
                 canvas.restore() // the pull's shift
                 drawPullHint(canvas)
+                drawCarry(canvas)
+                drawPlusCells(canvas)
                 drawBendHint(canvas)
                 drawRuler(canvas)
                 drawLaser(canvas)
@@ -337,7 +367,9 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** Changes the working page's size, template or fixed-or-infinite (one undo step). */
     fun setPage(page: PageSet) {
         // A page's place in the grid is not part of its size and look: keep it.
-        if (work.setPage(page.toBuilder().setCol(work.page.col).setRow(work.page.row).build())) rebuildLayout(false)
+        work.setPage(page.toBuilder().setCol(work.page.col).setRow(work.page.row).build())
+        if (!page.infinite) emptyLook = page
+        rebuildLayout(false)
     }
 
     private fun layoutKey() = notebook.pages.map { listOf(it.page.col, it.page.row, it.page.width, it.page.height, if (it.page.infinite) 1 else 0) }
@@ -362,7 +394,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             layout = null
             vp = PageGeometry(work.page.width, work.page.height, work.page.infinite, pxPerUnit)
         } else {
-            val l = NotebookLayout(pages)
+            val l = NotebookLayout(pages, refW = emptyLook.width, refH = emptyLook.height)
             layout = l
             vp = PageGeometry(l.worldW, l.worldH, false, pxPerUnit, l.firstColW, l.lastColW, l.firstRowH, l.lastRowH)
         }
@@ -718,7 +750,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 return true
             }
             if (!isPen(event.getToolType(i)) && strokeId == null && (action == MotionEvent.ACTION_DOWN || gestureActive)) {
-                if (action == MotionEvent.ACTION_DOWN) { slid = 0.0; moveTotal = 0.0; pinched = false; velocity?.recycle(); velocity = VelocityTracker.obtain(); beginGrid() }
+                if (action == MotionEvent.ACTION_DOWN) { slid = 0.0; moveTotal = 0.0; pinched = false; velocity?.recycle(); velocity = VelocityTracker.obtain(); beginGrid(); armCarry(event.getX(i), event.getY(i)) }
                 gestureActive = true
             }
         }
@@ -2336,6 +2368,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** Two fingers pan and zoom; one finger pans. */
     private fun moving(event: MotionEvent): Boolean {
         if (!gestureActive) return true
+        if (carryPage != null) return carry(event)
         scaleDetector.onTouchEvent(event)
         velocity?.addMovement(event)
         val action = event.actionMasked
@@ -2376,6 +2409,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         }
         lastX = cx
         lastY = cy
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) removeCallbacks(carryCheck)
         if (action == MotionEvent.ACTION_UP) {
             val pulled = endPull()
             val tracker = velocity
@@ -2390,12 +2424,183 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             if (!glides && !pulled && !pinched && slid > SLIDE_MIN_PX) settle() // otherwise it settles when the glide ends
             // A tap on a page, seen from afar, zooms into it.
             if (!pinched && moveTotal < TAP_PX * 1.5 && layout != null && !vp.infinite && vp.percent(maxOf(1, work.page.width)) < ZOOMED_OUT_PERCENT) {
-                layout?.pageAt(vp.toPageX(lastX.toDouble()), vp.toPageY(lastY.toDouble()))?.let { zoomIntoPage(it) }
+                val wx = vp.toPageX(lastX.toDouble()); val wy = vp.toPageY(lastY.toDouble())
+                val hit = layout?.pageAt(wx, wy)
+                if (hit != null) zoomIntoPage(hit)
+                else layout?.slotAt(wx, wy)?.takeIf { (c, r) -> notebook.at(c, r) == null }?.let { (c, r) ->
+                    pagesChanged { notebook.addAt(work, c, r, emptyLook) != null } // the cell is shown in the chosen size
+                }
             }
         }
         if (action == MotionEvent.ACTION_CANCEL) { pullX = 0.0; pullY = 0.0; pullDrawX = 0.0; pullDrawY = 0.0; pullReachedAt = 0L; velocity?.recycle(); velocity = null; pageLayer.invalidate() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) gestureActive = false
         return true
+    }
+
+    // ---- Rearranging pages: seen from afar, hold a finger on a page to lift it, drag it to an empty cell (it moves),
+    // another page (the two swap) or the bin (it is deleted), and let go. Page changes have their own undo. ----
+
+    private var carryPage: PageModel? = null // the page lifted, while one is
+    private var carryX = 0f // where the finger is
+    private var carryY = 0f
+    private var carryDownX = 0f
+    private var carryDownY = 0f
+    private val carryCheck = Runnable { startCarry() }
+    private val carryDash = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = 0xFF1A73E8.toInt(); isAntiAlias = true; pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 12f), 0f) }
+    private val carryHot = Paint().apply { style = Paint.Style.FILL; color = 0x331A73E8; isAntiAlias = true }
+    private val carryEdge = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 8f; color = 0xFF1A73E8.toInt(); isAntiAlias = true }
+    private val carryGhost = Paint().apply { style = Paint.Style.FILL; color = 0xCCFFFFFF.toInt() }
+    private val binFill = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val binLine = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 5f; strokeCap = Paint.Cap.ROUND; isAntiAlias = true; color = Color.WHITE }
+
+    private var carryTick = 0L
+
+    /** While a page is carried, a finger near the edge of the screen scrolls the view that way (not near the bin). */
+    private val carryScroll = object : Runnable {
+        override fun run() {
+            if (carryPage == null) return
+            val now = android.os.SystemClock.uptimeMillis()
+            val dt = (now - carryTick).coerceIn(0L, 50L) / 1000.0
+            carryTick = now
+            val d = resources.displayMetrics.density
+            val zone = 96 * d
+            val top = 120 * d // the button row at the top is not a place to push against
+            val bin = carryBin()
+            fun push(pos: Float, size: Float, from: Float): Double =
+                if (pos < from + zone) (1 - (pos - from) / zone).coerceIn(0f, 1f).toDouble() else if (pos > size - zone) -(1 - (size - pos) / zone).coerceIn(0f, 1f).toDouble() else 0.0
+            val dx = push(carryX, width.toFloat(), 0f)
+            val nearBin = carryX > bin.left - bin.width() && carryX < bin.right + bin.width()
+            val dy = if (carryY > height - zone && nearBin) 0.0 else push(carryY, height.toFloat(), top - zone)
+            if (dx != 0.0 || dy != 0.0) { vp.panBy(dx * 900 * d * dt, dy * 900 * d * dt); pageLayer.invalidate() }
+            postOnAnimation(this)
+        }
+    }
+
+    /** A finger went down: if the pages are seen from afar and it stays put for a moment, the page under it is lifted. */
+    private fun armCarry(x: Float, y: Float) {
+        carryDownX = x; carryDownY = y
+        removeCallbacks(carryCheck)
+        postDelayed(carryCheck, CARRY_HOLD_MS)
+    }
+
+    private fun startCarry() {
+        val l = layout ?: return
+        if (!gestureActive || pinched || carryPage != null || moveTotal >= TAP_PX * 1.5) return
+        if (vp.infinite || vp.percent(maxOf(1, work.page.width)) >= ZOOMED_OUT_PERCENT) return
+        val p = l.pageAt(vp.toPageX(carryDownX.toDouble()), vp.toPageY(carryDownY.toDouble())) ?: return
+        finishText()
+        stopGlide()
+        gridCell = null
+        velocity?.recycle(); velocity = null
+        carryPage = p
+        carryX = lastX; carryY = lastY
+        carryTick = android.os.SystemClock.uptimeMillis()
+        postOnAnimation(carryScroll)
+        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        pageLayer.invalidate()
+    }
+
+    private fun carry(event: MotionEvent): Boolean {
+        val p = carryPage ?: return true
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> { carryX = event.getX(0); carryY = event.getY(0); pageLayer.invalidate() }
+            MotionEvent.ACTION_UP -> { carryX = event.getX(0); carryY = event.getY(0); dropCarry(p) }
+        }
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            carryPage = null
+            gestureActive = false
+            pageLayer.invalidate()
+        }
+        return true
+    }
+
+    /** The bin, at the bottom middle of the screen (the same on screen whatever the view). */
+    private fun carryBin(): RectF {
+        @Suppress("DEPRECATION") val bottom = rootWindowInsets?.systemWindowInsetBottom ?: 0
+        val d = resources.displayMetrics.density
+        val size = 88 * d
+        return RectF(width / 2f - size / 2, height - bottom - 24 * d - size, width / 2f + size / 2, height - bottom - 24 * d)
+    }
+
+    private fun dropCarry(p: PageModel) {
+        val l = layout ?: return
+        if (carryBin().contains(carryX, carryY)) { pagesChanged { notebook.deletePage(p) }; return }
+        val (c, r) = l.slotAt(vp.toPageX(carryX.toDouble()), vp.toPageY(carryY.toDouble()))
+        pagesChanged { notebook.movePage(p, c, r, emptyLook) }
+    }
+
+    /**
+     * Runs [change] (it changes the notebook's pages; true if it did) and lays the pages out again. The view stays
+     * where it was, held by the page nearest the middle of the screen that did not change cell, and a working page is kept.
+     */
+    private fun pagesChanged(change: () -> Boolean) {
+        finishText()
+        val old = layout
+        val cells = notebook.pages.associateWith { it.page.col to it.page.row }
+        val (tx, ty) = vp.tx to vp.ty
+        val mx = vp.toPageX(width / 2.0); val my = vp.toPageY(height / 2.0)
+        if (!change()) return
+        // Looked up in the old layout, which is the one that still matches the cells recorded above.
+        val keep = old?.nearestOf(notebook.pages.filter { cells[it] == it.page.col to it.page.row }, mx, my)
+        val before = keep?.let { old.origin(it) }
+        if (work !in notebook.pages) { selection.clear(); cellSel = null; loop.clear(); dragMap = null; work = notebook.current } else notebook.go(work)
+        rebuildLayout(false)
+        keepView(keep, before, tx, ty)
+        onPageChanged?.invoke()
+        pageLayer.invalidate()
+    }
+
+    /** Takes back the last page change (a move, swap or delete); drawing is undone by [undo]. */
+    fun undoPage() = pagesChanged { notebook.undoPage() }
+    fun redoPage() = pagesChanged { notebook.redoPage() }
+
+    private val plusDash = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = 0xFFB0B0B0.toInt(); isAntiAlias = true; pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 12f), 0f) }
+    private val plusPaint = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 6f; strokeCap = Paint.Cap.ROUND; isAntiAlias = true; color = 0xFF8A8A8A.toInt() }
+
+    /** Seen from afar, every empty cell (and the ring round the grid) shows a plus: tap it to add a page there. */
+    private fun drawPlusCells(canvas: Canvas) {
+        val l = layout ?: return
+        if (carryPage != null || vp.infinite || vp.percent(maxOf(1, work.page.width)) >= ZOOMED_OUT_PERCENT) return
+        for ((c, r) in l.slots(vp.visible())) {
+            if (notebook.at(c, r) != null) continue
+            val q = l.slotRect(c, r, emptyLook.width, emptyLook.height)
+            val x0 = vp.toScreenX(q[0]).toFloat(); val y0 = vp.toScreenY(q[1]).toFloat()
+            val x1 = vp.toScreenX(q[0] + q[2]).toFloat(); val y1 = vp.toScreenY(q[1] + q[3]).toFloat()
+            if (x1 < 0 || y1 < 0 || x0 > width || y0 > height) continue
+            canvas.drawRect(x0, y0, x1, y1, plusDash)
+            val cx = (x0 + x1) / 2; val cy = (y0 + y1) / 2
+            val arm = minOf(x1 - x0, y1 - y0) * 0.15f
+            canvas.drawLine(cx - arm, cy, cx + arm, cy, plusPaint)
+            canvas.drawLine(cx, cy - arm, cx, cy + arm, plusPaint)
+        }
+    }
+
+    private fun drawCarry(canvas: Canvas) {
+        val p = carryPage ?: return
+        val l = layout ?: return
+        val w = p.page.width; val h = p.page.height
+        val bin = carryBin()
+        val overBin = bin.contains(carryX, carryY)
+        val target = if (overBin) null else l.slotAt(vp.toPageX(carryX.toDouble()), vp.toPageY(carryY.toDouble()))
+        for ((c, r) in l.slots(vp.visible())) {
+            val q = l.slotRect(c, r, emptyLook.width, emptyLook.height)
+            val rect = RectF(vp.toScreenX(q[0]).toFloat(), vp.toScreenY(q[1]).toFloat(), vp.toScreenX(q[0] + q[2]).toFloat(), vp.toScreenY(q[1] + q[3]).toFloat())
+            val here = notebook.at(c, r)
+            val hot = target == c to r
+            if (here == null || here === p) { if (hot) canvas.drawRect(rect, carryHot); canvas.drawRect(rect, carryDash) }
+            else if (hot) canvas.drawRect(rect, carryEdge) // a page there: the two swap
+            if (here === p) canvas.drawRect(rect, carryGhost) // the lifted page leaves a pale sheet behind
+        }
+        val gw = (w * vp.scale).toFloat(); val gh = (h * vp.scale).toFloat()
+        canvas.drawRect(carryX - gw / 2, carryY - gh / 2, carryX + gw / 2, carryY + gh / 2, carryGhost)
+        canvas.drawRect(carryX - gw / 2, carryY - gh / 2, carryX + gw / 2, carryY + gh / 2, sheetEdge)
+        val last = notebook.pages.size == 1 // the last page cannot be deleted: the bin is pale
+        binFill.color = if (last) 0x66B3261E else if (overBin) 0xFFB3261E.toInt() else 0xCCB3261E.toInt()
+        canvas.drawRoundRect(bin, 24f, 24f, binFill)
+        val cx = bin.centerX(); val cy = bin.centerY()
+        canvas.drawRect(cx - 16f, cy - 8f, cx + 16f, cy + 26f, binLine) // the can
+        canvas.drawLine(cx - 24f, cy - 12f, cx + 24f, cy - 12f, binLine) // the lid
+        canvas.drawLine(cx - 8f, cy - 20f, cx + 8f, cy - 20f, binLine)
     }
 
     // ---- Pages: all on one surface. Scroll across them; pull past the surface's end to add a page there. ----
@@ -2676,6 +2881,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         const val HANDLE_PX = 36f
         const val ROTATE_STEM_PX = 56f
         const val PULL_SHIFT = 0.4f // how much of a pull the surface follows
+        const val CARRY_HOLD_MS = 500L // a finger held this long on a page, seen from afar, lifts it
         const val TAP_PX = 10.0 // a touch that moved less than this on screen is a tap
         const val PULL_HOLD_MS = 400L // a pull must be held this long past its distance before letting go adds a page
         const val PEEK = 0.12 // after a page is added the view slides this share of the screen past the gap towards it
