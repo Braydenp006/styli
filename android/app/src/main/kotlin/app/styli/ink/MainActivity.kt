@@ -44,6 +44,7 @@ private fun InkScreen() {
     var tool by remember { mutableStateOf(InkCanvasView.Tool.PEN) }
     var shade by remember { mutableStateOf(0) }
     var thick by remember { mutableStateOf(0) }
+    var straighten by remember { mutableStateOf(2) } // 0 off, 1 low, 2 medium, 3 high
 
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
@@ -95,6 +96,13 @@ private fun InkScreen() {
                 },
                 Modifier.padding(start = 8.dp),
             ) { Text("Width ${thick + 1}") }
+            Button(
+                onClick = {
+                    straighten = (straighten + 1) % 4
+                    canvas?.straightenStrength = listOf(0f, 0.6f, 1f, 1.6f)[straighten]
+                },
+                Modifier.padding(start = 8.dp),
+            ) { Text("Straighten: " + listOf("off", "low", "medium", "high")[straighten], softWrap = false) }
             Button(onClick = { infinite = !infinite; apply() }, Modifier.padding(start = 8.dp)) {
                 Text(if (infinite) "Canvas" else "Page")
             }

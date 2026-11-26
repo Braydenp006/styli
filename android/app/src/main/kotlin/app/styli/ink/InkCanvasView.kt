@@ -65,6 +65,13 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     var highlighterColor = 0x99FFEB3B.toInt() // a see-through yellow, so the writing shows through
     var highlighterWidth = 400 // 4 mm
 
+    /**
+     * Hold the pen still at the end of a pen stroke and a line or shape is drawn clean. 0 is off; 1 is normal,
+     * less is stricter about what counts as a line or shape, more is more forgiving (see [ShapeGeometry.snap]).
+     */
+    var straightenStrength = 1f
+    private val autoStraighten get() = straightenStrength > 0f
+
     val canUndo get() = model.canUndo
     val canRedo get() = model.canRedo
 
@@ -122,6 +129,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 canvas.restore()
                 drawLassoOverlay(canvas)
                 drawLinePreview(canvas)
+                drawSnapPreview(canvas)
                 canvas.restore()
             }
         }
@@ -242,6 +250,73 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     private var liveColor = Color.BLACK
     private var liveWidth = 40
 
+    // Auto-straightening. The pen's path so far (page units), and where it is being held still. After the hold
+    // the live stroke is cancelled and [snapped], the clean line or shape, is drawn on the page layer instead;
+    // it follows the pen if it moves on, and becomes the stroke when the pen lifts.
+    private val drawn = ArrayList<Pt>()
+    private var drawStartMs = 0L
+    private val hold = ShapeGeometry.HoldTracker()
+    private var snapped: List<Pt>? = null
+
+    private val holdCheck = Runnable {
+        val id = strokeId ?: return@Runnable
+        if (!autoStraighten || liveTool != StrokeTool.TOOL_PEN) return@Runnable
+        val clean = ShapeGeometry.snap(drawn, straightenStrength) ?: return@Runnable
+        liveLayer.cancelStroke(id, null)
+        strokeId = null
+        snapped = clean
+        pageLayer.invalidate()
+    }
+
+    /** Adds the pen's points from [event] (including the ones batched in it); true if the pen moved on. */
+    private fun collect(event: MotionEvent, i: Int): Boolean {
+        var moved = false
+        fun add(sx: Float, sy: Float, t: Long) {
+            val x = geometry.toPageX(sx.toDouble()).toFloat()
+            val y = geometry.toPageY(sy.toDouble()).toFloat()
+            drawn.add(Pt(x, y, t - drawStartMs, 1f))
+            if (hold.move(x, y)) moved = true
+        }
+        for (h in 0 until event.historySize) add(event.getHistoricalX(i, h), event.getHistoricalY(i, h), event.getHistoricalEventTime(h))
+        add(event.getX(i), event.getY(i), event.eventTime)
+        return moved
+    }
+
+    private fun drawSnapPreview(canvas: Canvas) {
+        val pts = snapped ?: return
+        val g = geometry
+        linePaint.color = liveColor
+        linePaint.strokeWidth = maxOf(1.5f, (liveWidth * g.scale).toFloat())
+        linePaint.style = Paint.Style.STROKE
+        linePaint.strokeJoin = Paint.Join.ROUND
+        val path = android.graphics.Path()
+        pts.forEachIndexed { k, p ->
+            val x = g.toScreenX(p.x.toDouble()).toFloat()
+            val y = g.toScreenY(p.y.toDouble()).toFloat()
+            if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        canvas.drawPath(path, linePaint)
+    }
+
+    private fun snapping(event: MotionEvent): Boolean {
+        val i = event.findPointerIndex(pointerId)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (i >= 0 && collect(event, i)) {
+                ShapeGeometry.snap(drawn, straightenStrength)?.let { snapped = it } // moved on: the clean shape follows
+                pageLayer.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                val pts = snapped
+                snapped = null
+                if (pts != null && event.actionMasked != MotionEvent.ACTION_CANCEL) model.add(liveTool, liveColor, liveWidth, pts)
+                changed(true)
+                pageLayer.invalidate()
+            }
+        }
+        return true
+    }
+
     private fun pointsOf(stroke: Stroke): List<Pt> =
         (0 until stroke.inputs.size).map {
             val i = stroke.inputs[it]
@@ -290,7 +365,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         val action = event.actionMasked
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             val i = event.actionIndex
-            if (isPen(event.getToolType(i)) && strokeId == null && !erasing && !lassoing && !lining) {
+            if (isPen(event.getToolType(i)) && strokeId == null && snapped == null && !erasing && !lassoing && !lining) {
                 gestureActive = false // a pen landing after a palm takes over
                 requestUnbufferedDispatch(event) // deliver touch events as they happen, not once per frame
                 pointerId = event.getPointerId(i)
@@ -319,13 +394,19 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 liveColor = if (hl) highlighterColor else penColor
                 liveWidth = if (hl) highlighterWidth else penWidth
                 strokeId = liveLayer.startStroke(event, pointerId, brush, screenToPage())
+                drawn.clear()
+                drawStartMs = event.eventTime
+                hold.start(geometry.toPageX(event.getX(i).toDouble()).toFloat(), geometry.toPageY(event.getY(i).toDouble()).toFloat())
+                collect(event, i)
+                removeCallbacks(holdCheck)
+                if (autoStraighten && liveTool == StrokeTool.TOOL_PEN) postDelayed(holdCheck, ShapeGeometry.HOLD_MS)
                 return true
             }
             if (!isPen(event.getToolType(i)) && strokeId == null && (action == MotionEvent.ACTION_DOWN || gestureActive)) {
                 gestureActive = true
             }
         }
-        return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (strokeId != null) drawing(event) else moving(event)
+        return if (erasing) erase(event) else if (lassoing) lasso(event) else if (lining) line(event) else if (snapped != null) snapping(event) else if (strokeId != null) drawing(event) else moving(event)
     }
 
     // ---- Lasso: draw a loop round strokes, then drag inside the box to move or a corner to resize. ----
@@ -567,12 +648,18 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_MOVE -> {
                     val id = strokeId ?: return true
+                    val k = event.findPointerIndex(pointerId)
+                    if (k >= 0 && collect(event, k)) { // moved on: the hold starts again
+                        removeCallbacks(holdCheck)
+                        if (autoStraighten && liveTool == StrokeTool.TOOL_PEN) postDelayed(holdCheck, ShapeGeometry.HOLD_MS)
+                    }
                     liveLayer.addToStroke(event, pointerId, id, predicted)
                 }
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_POINTER_UP -> {
                     val id = strokeId ?: return true
                     if (event.getPointerId(event.actionIndex) != pointerId) return true
+                    removeCallbacks(holdCheck)
                     liveLayer.finishStroke(event, pointerId, id)
                     strokeId = null
                     // Without this, a fresh launch kept the stroke in the live layer and it vanished (seen on the SM-P620).
@@ -580,6 +667,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                     keepDrawing(30)
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    removeCallbacks(holdCheck)
                     strokeId?.let { liveLayer.cancelStroke(it, event) }
                     strokeId = null
                 }
