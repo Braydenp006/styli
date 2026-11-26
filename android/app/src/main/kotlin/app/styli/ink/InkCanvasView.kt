@@ -1658,7 +1658,82 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         canvas.drawRect(table.x, table.y, table.x + table.width, table.y + table.height, tablePaint)
         for (c in 1 until table.cols) canvas.drawLine(table.lineX(c), table.y, table.lineX(c), table.y + table.height, tablePaint)
         for (r in 1 until table.rows) canvas.drawLine(table.x, table.lineY(r), table.x + table.width, table.lineY(r), tablePaint)
+        if (table.hasText || table.headerRow) drawTableText(canvas, table)
         canvas.restore()
+    }
+
+    private val cellLayouts = HashMap<String, StaticLayout>()
+    private val cellTextPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG)
+
+    /**
+     * The typed text of a table's cells, each wrapped to its cell, centred up and down and as large as fits (the table's text
+     * size, or about half the row, shrunk until the cell holds it); a header row is bold on a faint tint. Drawn in page units.
+     */
+    private fun drawTableText(canvas: Canvas, table: Table) {
+        val ink = TextRender.ink(if (table.textColor ushr 24 == 0) table.color else table.textColor)
+        if (table.headerRow) {
+            tableFill.color = (ink and 0x00FFFFFF) or 0x1F000000
+            canvas.drawRect(table.x, table.y, table.x + table.width, table.lineY(1), tableFill)
+        }
+        for (r in 0 until table.rows) for (c in 0 until table.cols) {
+            val text = table.cellTextAt(r, c)
+            if (text.isEmpty()) continue
+            val cw = table.colWidths[c]; val ch = table.rowHeights[r]
+            val pad = minOf(cw, ch) * 0.08f
+            val layout = cellLayout(text, cw - 2 * pad, ch - 2 * pad, if (table.fontSize > 0f) table.fontSize else minOf(ch * 0.5f, 900f), table.headerRow && r == 0, table.alignOf(c), ink)
+            canvas.save()
+            canvas.clipRect(table.lineX(c), table.lineY(r), table.lineX(c + 1), table.lineY(r + 1))
+            canvas.translate(table.lineX(c) + pad, table.lineY(r) + pad + (ch - 2 * pad - layout.height).coerceAtLeast(0f) / 2)
+            layout.draw(canvas)
+            canvas.restore()
+        }
+    }
+
+    /** The cell's text laid out in [w] by [h], at [size] or the largest smaller size (down to a tenth) that fits. */
+    private fun cellLayout(text: String, w: Float, h: Float, size: Float, bold: Boolean, align: Int, color: Int): StaticLayout {
+        val key = "$w|$h|$size|$bold|$align|$color|$text"
+        cellLayouts[key]?.let { return it }
+        if (cellLayouts.size > 600) cellLayouts.clear()
+        var s = size
+        var layout: StaticLayout
+        while (true) {
+            cellTextPaint.textSize = s; cellTextPaint.color = color; cellTextPaint.isFakeBoldText = bold
+            layout = StaticLayout.Builder.obtain(text, 0, text.length, cellTextPaint, maxOf(1, w.toInt()))
+                .setAlignment(when (align) { 1 -> android.text.Layout.Alignment.ALIGN_CENTER; 2 -> android.text.Layout.Alignment.ALIGN_OPPOSITE; else -> android.text.Layout.Alignment.ALIGN_NORMAL }).build()
+            if (layout.height <= h || s <= size * 0.1f) break
+            s *= 0.9f
+        }
+        return layout.also { cellLayouts[key] = it }
+    }
+
+    // ---- Typed text in a table's cells: a window with the whole table as a grid (see TableDialog); the text tool opens it on a tap. ----
+
+    /** Asks for the table's data window. */
+    var onTableEdit: ((Table) -> Unit)? = null
+
+    /** Opens the data window for the table selected on its own. False if there is none. */
+    fun editTableData(): Boolean {
+        val t = lineTable() ?: selection.singleOrNull()?.let { model.tableOf(it) } ?: return false
+        onTableEdit?.invoke(t)
+        return true
+    }
+
+    /** Replaces the typed text, header row and alignments of table [id] on the working page: one undo step, and the charts that follow it change in it. */
+    fun commitTableData(id: String, grid: List<List<String>>, header: Boolean, align: List<Int>) {
+        finishText()
+        val t = model.tableOf(id) ?: return
+        if (model.setTable(t.withData(grid, header, align))) changed(true)
+    }
+
+    /** A new chart (not on the page yet: give it to the data window, then [commitChart]) that follows a block of table [id]'s cells, below the table. Null if the block is under 2 by 2. */
+    fun chartFromTable(id: String, row: Int, col: Int, rows: Int, cols: Int, seriesInRows: Boolean): Chart? {
+        val t = model.tableOf(id) ?: return null
+        val w = maxOf(t.width, 6000f).let { if (geometry.infinite) it else it.coerceAtMost(maxOf(3000f, geometry.pageW - t.x - 200f)) }
+        val base = Chart("", ChartKind.BAR, t.x, t.y + t.height + 800f, w, w * 0.62f)
+        val chart = TableChart.fill(base, t, ChartSource(id, row, col, rows, cols, seriesInRows))
+        if (chart.source == null) return null
+        chartPage = work
+        return chart
     }
 
     // ---- Text boxes: tap the page with the text tool to make a box or edit one. An EditText sits over the box
@@ -1688,6 +1763,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     // width (and where it starts), a tap on empty page does nothing, and anything while editing only finishes.
     private var textHit: TextBox? = null // the box the pen went down on, if any
     private var shapeHit: Shape? = null // or the shape, if no box
+    private var tableHit: Table? = null // or the table, if neither
     private var textDragging = false // going to make a new box
     private var textFromX = 0f
     private var textFromY = 0f
@@ -1702,6 +1778,8 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
         if (textHit != null) return
         shapeHit = model.order.asReversed().firstNotNullOfOrNull { model.shapeOf(it)?.takeIf { s -> s.contains(px, py) } }
         if (shapeHit != null) return // a tap in a shape types in it
+        tableHit = model.tables.lastOrNull { it.contains(px, py) }
+        if (tableHit != null) return // a tap in a table opens its data window
         textDragging = true
         textFromX = px; textFromY = py; textToX = px; textToY = py
     }
@@ -1722,8 +1800,11 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
                 textHit = null
                 val shape = shapeHit
                 shapeHit = null
+                val table = tableHit
+                tableHit = null
                 if (!cancelled && hit != null) startEdit(hit, false)
                 else if (!cancelled && shape != null) startShapeEdit(shape)
+                else if (!cancelled && table != null) onTableEdit?.invoke(table)
                 if (textDragging) {
                     textDragging = false
                     pageLayer.invalidate()

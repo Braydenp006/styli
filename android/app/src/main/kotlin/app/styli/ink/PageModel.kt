@@ -597,10 +597,27 @@ class PageModel(page: PageSet = A4_LINED) {
         return true
     }
 
+    /**
+     * Charts that follow a table (see [ChartSource]) take their numbers from its typed cells again whenever the table changed in this
+     * step, so the table and its charts move together in one undo step. A chart whose table is gone keeps its numbers and lets go.
+     */
+    private fun relinked(before: Snap, after: Snap): Snap {
+        if (after.charts.none { it.source != null }) return after
+        var changed = false
+        val charts = after.charts.map { c ->
+            val src = c.source ?: return@map c
+            val table = after.tables.firstOrNull { it.id == src.table }
+            if (table == null) { changed = true; c.copy(source = null) }
+            else if (before.tables.firstOrNull { it.id == src.table } === table) c
+            else TableChart.fill(c, table, src).also { if (it != c) changed = true }
+        }
+        return if (changed) after.copy(charts = charts) else after
+    }
+
     /** Makes [after] the state, as one new undo step (nothing happens if it is the same state). */
     private fun commit(after: Snap, tf: Tf? = null) {
         val before = now()
-        val settled = if (after.order === before.order) after.copy(order = settle(before.order, after)) else after
+        val settled = relinked(before, if (after.order === before.order) after.copy(order = settle(before.order, after)) else after)
         if (before.items === settled.items && before.texts === settled.texts && before.tables === settled.tables &&
             before.shapes === settled.shapes && before.connectors === settled.connectors && before.fills === settled.fills && before.pictures === settled.pictures && before.charts === settled.charts && before.order === settled.order && before.page == settled.page) return
         undoStack.addLast(Step(before, settled, tf))

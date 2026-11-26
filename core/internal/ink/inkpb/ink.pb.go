@@ -1446,7 +1446,20 @@ type TableSet struct {
 	// them), drawn over the table's own fill: 0xAARRGGBB, and a zero alpha means
 	// no fill for that cell. Empty (as in a log written before this was added)
 	// means no cell has one.
-	CellFills     []uint32 `protobuf:"varint,8,rep,packed,name=cell_fills,json=cellFills,proto3" json:"cell_fills,omitempty"`
+	CellFills []uint32 `protobuf:"varint,8,rep,packed,name=cell_fills,json=cellFills,proto3" json:"cell_fills,omitempty"`
+	// Typed text in the cells, row by row from the top left (rows times columns of
+	// them; an empty string is a cell with none). Empty (as in a log written
+	// before this was added) means no cell has any. The writing a cell holds as ink
+	// is unchanged by it.
+	CellText []string `protobuf:"bytes,9,rep,name=cell_text,json=cellText,proto3" json:"cell_text,omitempty"`
+	// The text's size in page units, zero for one that suits the row; its colour
+	// (0xAARRGGBB, a zero alpha meaning the page's ordinary ink colour).
+	FontSize  uint32 `protobuf:"varint,10,opt,name=font_size,json=fontSize,proto3" json:"font_size,omitempty"`
+	TextColor uint32 `protobuf:"varint,11,opt,name=text_color,json=textColor,proto3" json:"text_color,omitempty"`
+	// The first row is a header: bold, with a faint tint.
+	HeaderRow bool `protobuf:"varint,12,opt,name=header_row,json=headerRow,proto3" json:"header_row,omitempty"`
+	// Where the text sits in each column: 0 left, 1 middle, 2 right. Empty means all left.
+	ColAlign      []uint32 `protobuf:"varint,13,rep,packed,name=col_align,json=colAlign,proto3" json:"col_align,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1533,6 +1546,41 @@ func (x *TableSet) GetFill() uint32 {
 func (x *TableSet) GetCellFills() []uint32 {
 	if x != nil {
 		return x.CellFills
+	}
+	return nil
+}
+
+func (x *TableSet) GetCellText() []string {
+	if x != nil {
+		return x.CellText
+	}
+	return nil
+}
+
+func (x *TableSet) GetFontSize() uint32 {
+	if x != nil {
+		return x.FontSize
+	}
+	return 0
+}
+
+func (x *TableSet) GetTextColor() uint32 {
+	if x != nil {
+		return x.TextColor
+	}
+	return 0
+}
+
+func (x *TableSet) GetHeaderRow() bool {
+	if x != nil {
+		return x.HeaderRow
+	}
+	return false
+}
+
+func (x *TableSet) GetColAlign() []uint32 {
+	if x != nil {
+		return x.ColAlign
 	}
 	return nil
 }
@@ -3204,7 +3252,7 @@ const file_ink_proto_rawDesc = "" +
 	"\x05color\x18\x06 \x01(\rR\x05color\x12\x1c\n" +
 	"\thighlight\x18\a \x01(\rR\thighlight\x12\x14\n" +
 	"\x05angle\x18\b \x01(\x11R\x05angle\"\x10\n" +
-	"\x0eTextBoxRemoved\"\xda\x01\n" +
+	"\x0eTextBoxRemoved\"\xf3\x02\n" +
 	"\bTableSet\x12\f\n" +
 	"\x01x\x18\x01 \x01(\x11R\x01x\x12\f\n" +
 	"\x01y\x18\x02 \x01(\x11R\x01y\x12!\n" +
@@ -3217,7 +3265,15 @@ const file_ink_proto_rawDesc = "" +
 	"\x05color\x18\x06 \x01(\rR\x05color\x12\x12\n" +
 	"\x04fill\x18\a \x01(\rR\x04fill\x12!\n" +
 	"\n" +
-	"cell_fills\x18\b \x03(\rB\x02\x10\x01R\tcellFills\"\x0e\n" +
+	"cell_fills\x18\b \x03(\rB\x02\x10\x01R\tcellFills\x12\x1b\n" +
+	"\tcell_text\x18\t \x03(\tR\bcellText\x12\x1b\n" +
+	"\tfont_size\x18\n" +
+	" \x01(\rR\bfontSize\x12\x1d\n" +
+	"\n" +
+	"text_color\x18\v \x01(\rR\ttextColor\x12\x1d\n" +
+	"\n" +
+	"header_row\x18\f \x01(\bR\theaderRow\x12\x1f\n" +
+	"\tcol_align\x18\r \x03(\rB\x02\x10\x01R\bcolAlign\"\x0e\n" +
 	"\fTableRemoved\"\x1e\n" +
 	"\x06ZMoved\x12\x14\n" +
 	"\x05above\x18\x01 \x01(\fR\x05above\"\xab\x01\n" +

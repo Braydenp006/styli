@@ -16,6 +16,11 @@ class Table(
     val color: Int = 0,
     val fill: Int = 0,
     val cellFills: List<Int> = emptyList(),
+    val cellText: List<String> = emptyList(),
+    val fontSize: Float = 0f,
+    val textColor: Int = 0,
+    val headerRow: Boolean = false,
+    val colAlign: List<Int> = emptyList(),
 ) {
     val cols get() = colWidths.size
     val rows get() = rowHeights.size
@@ -25,7 +30,43 @@ class Table(
     fun copy(
         x: Float = this.x, y: Float = this.y, colWidths: List<Float> = this.colWidths, rowHeights: List<Float> = this.rowHeights,
         lineWidth: Float = this.lineWidth, color: Int = this.color, fill: Int = this.fill, cellFills: List<Int> = this.cellFills,
-    ) = Table(id, x, y, colWidths, rowHeights, lineWidth, color, fill, cellFills)
+        cellText: List<String> = this.cellText, fontSize: Float = this.fontSize, textColor: Int = this.textColor,
+        headerRow: Boolean = this.headerRow, colAlign: List<Int> = this.colAlign,
+    ) = Table(id, x, y, colWidths, rowHeights, lineWidth, color, fill, cellFills, cellText, fontSize, textColor, headerRow, colAlign)
+
+    /** The same table under another ID (a pasted copy). */
+    fun withId(newId: String) = Table(newId, x, y, colWidths, rowHeights, lineWidth, color, fill, cellFills, cellText, fontSize, textColor, headerRow, colAlign)
+
+    /** The typed text of the cell at ([row], [col]), empty for none. */
+    fun cellTextAt(row: Int, col: Int) = cellText.getOrElse(row * cols + col) { "" }
+
+    /** Where the text of column [col] sits: 0 left, 1 middle, 2 right. */
+    fun alignOf(col: Int) = colAlign.getOrElse(col) { 0 }
+
+    /** Is there any typed text at all? */
+    val hasText get() = cellText.any { it.isNotEmpty() }
+
+    /** The cells' text as rows of strings, every row [cols] long. */
+    fun textGrid(): List<List<String>> = List(rows) { r -> List(cols) { c -> cellTextAt(r, c) } }
+
+    /** The table with at least [minRows] rows and [minCols] columns: a new row or column is as big as the last one. */
+    fun grown(minRows: Int, minCols: Int): Table {
+        var t = this
+        while (t.cols < minCols && t.cols < MAX_LINES) t = t.inserted(true, t.cols, t.colWidths.last())
+        while (t.rows < minRows && t.rows < MAX_LINES) t = t.inserted(false, t.rows, t.rowHeights.last())
+        return t
+    }
+
+    /**
+     * The table with its typed text replaced by [grid] (rows of strings; it grows to hold them, up to [MAX_LINES] each way,
+     * and cells the grid does not reach are empty), the header row on or off, and the column alignments. Ink is untouched.
+     */
+    fun withData(grid: List<List<String>>, header: Boolean, align: List<Int>): Table {
+        val t = grown(grid.size, grid.maxOfOrNull { it.size } ?: 0)
+        val texts = List(t.rows * t.cols) { grid.getOrNull(it / t.cols)?.getOrNull(it % t.cols) ?: "" }
+        val aligns = List(t.cols) { align.getOrElse(it) { 0 } }
+        return t.copy(cellText = if (texts.all { it.isEmpty() }) emptyList() else texts, headerRow = header, colAlign = if (aligns.all { it == 0 }) emptyList() else aligns)
+    }
 
     /** The colour of the cell at ([row], [col]), row by row; a zero alpha (or no list at all) means none. */
     fun cellFill(row: Int, col: Int) = cellFills.getOrElse(row * cols + col) { 0 }
@@ -116,7 +157,13 @@ class Table(
         } else {
             List(rows + 1) { r -> List(cols) { c -> if (r == at) 0 else cellFill(if (r > at) r - 1 else r, c) } }.flatten()
         }
-        return if (vertical) copy(colWidths = sizes, cellFills = cells) else copy(rowHeights = sizes, cellFills = cells)
+        val texts = if (cellText.isEmpty()) cellText else if (vertical) {
+            List(rows) { r -> List(cols + 1) { c -> if (c == at) "" else cellTextAt(r, if (c > at) c - 1 else c) } }.flatten()
+        } else {
+            List(rows + 1) { r -> List(cols) { c -> if (r == at) "" else cellTextAt(if (r > at) r - 1 else r, c) } }.flatten()
+        }
+        val aligns = if (vertical && colAlign.isNotEmpty()) List(cols + 1) { c -> if (c == at) 0 else alignOf(if (c > at) c - 1 else c) } else colAlign
+        return if (vertical) copy(colWidths = sizes, cellFills = cells, cellText = texts, colAlign = aligns) else copy(rowHeights = sizes, cellFills = cells, cellText = texts)
     }
 
     /** The table without row (or column, if [vertical]) number [index]. The last one cannot go. */
@@ -129,7 +176,13 @@ class Table(
         } else {
             List(rows - 1) { r -> List(cols) { c -> cellFill(if (r >= index) r + 1 else r, c) } }.flatten()
         }
-        return if (vertical) copy(colWidths = sizes, cellFills = cells) else copy(rowHeights = sizes, cellFills = cells)
+        val texts = if (cellText.isEmpty()) cellText else if (vertical) {
+            List(rows) { r -> List(cols - 1) { c -> cellTextAt(r, if (c >= index) c + 1 else c) } }.flatten()
+        } else {
+            List(rows - 1) { r -> List(cols) { c -> cellTextAt(if (r >= index) r + 1 else r, c) } }.flatten()
+        }
+        val aligns = if (vertical && colAlign.isNotEmpty()) List(cols - 1) { c -> alignOf(if (c >= index) c + 1 else c) } else colAlign
+        return if (vertical) copy(colWidths = sizes, cellFills = cells, cellText = texts, colAlign = aligns) else copy(rowHeights = sizes, cellFills = cells, cellText = texts)
     }
 
     companion object {

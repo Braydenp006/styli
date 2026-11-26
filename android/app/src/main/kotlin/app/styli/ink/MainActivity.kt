@@ -113,6 +113,7 @@ private fun InkScreen() {
     var nameText by remember { mutableStateOf("") }
 
     val context = LocalContext.current
+    var tableEdit by remember { mutableStateOf<Table?>(null) } // the table whose cells are being typed
     var chartEdit by remember { mutableStateOf<Pair<Chart, Boolean>?>(null) } // the chart whose data is being typed, and whether it is new
     // The system photo picker: no storage permission is needed.
     val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -139,6 +140,7 @@ private fun InkScreen() {
                     it.onPlacing = { c -> placing = c }
                     it.onToolChanged = { t -> tool = t }
                     it.onChartEdit = { c, isNew -> chartEdit = c to isNew }
+                    it.onTableEdit = { t -> tableEdit = t }
                     it.onPageChanged = {
                         // The page buttons show the page that is now current.
                         val p = it.page
@@ -160,6 +162,7 @@ private fun InkScreen() {
             Button(onClick = { canvas?.undoPage() }, gap) { Text("Undo page change") }
             Button(onClick = { canvas?.redoPage() }, gap) { Text("Redo page change") }
             Button(onClick = { canvas?.deleteSelection() }, gap) { Text("Delete") }
+            Button(onClick = { canvas?.editTableData() }, gap) { Text("Table data") }
             Button(onClick = { canvas?.editChart() }, gap) { Text("Edit chart") }
             Button(onClick = { canvas?.addChartSamples() }, gap) { Text("Chart samples") }
             Button(onClick = { canvas?.toggleCrop() }, gap) { Text("Crop") }
@@ -405,6 +408,18 @@ private fun InkScreen() {
                 dismissButton = { TextButton(onClick = done) { Text("Cancel") } },
                 title = { Text("Clip name") },
                 text = { OutlinedTextField(nameText, { nameText = it }, singleLine = true) },
+            )
+        }
+        tableEdit?.let { t ->
+            TableDialog(
+                t,
+                onDone = { grid, header, align -> canvas?.commitTableData(t.id, grid, header, align); tableEdit = null },
+                onChart = { grid, header, align, row, col, rows, cols, inRows ->
+                    canvas?.commitTableData(t.id, grid, header, align)
+                    canvas?.chartFromTable(t.id, row, col, rows, cols, inRows)?.let { chartEdit = it to true }
+                    tableEdit = null
+                },
+                onCancel = { tableEdit = null },
             )
         }
         chartEdit?.let { (c, isNew) ->

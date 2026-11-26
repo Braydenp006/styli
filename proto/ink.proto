@@ -145,6 +145,19 @@ message TableSet {
   // no fill for that cell. Empty (as in a log written before this was added)
   // means no cell has one.
   repeated uint32 cell_fills = 8 [packed = true];
+  // Typed text in the cells, row by row from the top left (rows times columns of
+  // them; an empty string is a cell with none). Empty (as in a log written
+  // before this was added) means no cell has any. The writing a cell holds as ink
+  // is unchanged by it.
+  repeated string cell_text = 9;
+  // The text's size in page units, zero for one that suits the row; its colour
+  // (0xAARRGGBB, a zero alpha meaning the page's ordinary ink colour).
+  uint32 font_size = 10;
+  uint32 text_color = 11;
+  // The first row is a header: bold, with a faint tint.
+  bool header_row = 12;
+  // Where the text sits in each column: 0 left, 1 middle, 2 right. Empty means all left.
+  repeated uint32 col_align = 13 [packed = true];
 }
 
 message TableRemoved {}

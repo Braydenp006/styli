@@ -26,6 +26,25 @@ object ChartDraw {
         canvas.drawText(s, x.toFloat(), y.toFloat(), text)
     }
 
+    /** [s] cut short with an ellipsis so that it is no wider than [max] at text size [size]. */
+    private fun fitted(s: String, max: Double, size: Float): String {
+        text.textSize = size; text.isFakeBoldText = false
+        if (text.measureText(s) <= max) return s
+        var n = s.length
+        while (n > 1 && text.measureText(s.substring(0, n) + "\u2026") > max) n--
+        return s.substring(0, n).trimEnd() + "\u2026"
+    }
+
+    /** Like [label], with a white outline so the text reads over ribbons or fills. */
+    private fun haloLabel(canvas: Canvas, s: String, x: Double, y: Double, size: Float, align: Paint.Align, color: Int, bold: Boolean = false) {
+        text.textSize = size; text.textAlign = align; text.isFakeBoldText = bold
+        text.style = Paint.Style.STROKE; text.strokeWidth = size * 0.28f; text.strokeJoin = Paint.Join.ROUND; text.color = 0xE6FFFFFF.toInt()
+        canvas.drawText(s, x.toFloat(), y.toFloat(), text)
+        text.style = Paint.Style.FILL; text.strokeWidth = 0f
+        text.color = color
+        canvas.drawText(s, x.toFloat(), y.toFloat(), text)
+    }
+
     /** [px] is how long about one screen pixel is in page units (for hairlines). */
     fun draw(canvas: Canvas, c: Chart, px: Float) {
         val f = c.textSize
@@ -102,7 +121,7 @@ object ChartDraw {
             for ((i, name) in c.categories.withIndex()) label(canvas, name, p.l - f * 0.4, p.t + slot * (i + 0.5) + f * 0.3, f * 0.8f, Paint.Align.RIGHT, ink)
         } else {
             val slot = (p.r - p.l) / maxOf(1, n)
-            for ((i, name) in c.categories.withIndex()) label(canvas, name, p.l + slot * (i + 0.5), p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
+            for ((i, name) in c.categories.withIndex()) label(canvas, fitted(name, slot * 0.95, f * 0.8f), p.l + slot * (i + 0.5), p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
         }
         when (c.kind) {
             ChartKind.WATERFALL -> waterfall(canvas, c, p, scale, d, ink)
@@ -172,6 +191,13 @@ object ChartDraw {
         else -> pts
     }
 
+    /** One piece of a ribbon: the segment from [ax],[ay] to [bx],[by] swept by ([o], -[o]), drawn with a thin edge in its own colour so no seam shows between pieces. */
+    private fun ribbonQuad(canvas: Canvas, ax: Float, ay: Float, bx: Float, by: Float, o: Float, colour: Int, seam: Float) {
+        path.reset(); path.moveTo(ax, ay); path.lineTo(bx, by); path.lineTo(bx + o, by - o); path.lineTo(ax + o, ay - o); path.close()
+        solid.color = colour; canvas.drawPath(path, solid)
+        line.strokeWidth = seam; line.color = colour; canvas.drawPath(path, line)
+    }
+
     private fun addCurve(path: Path, pts: List<Pair<Double, Double>>, curve: Curve) {
         if (pts.isEmpty()) return
         when (curve) {
@@ -200,10 +226,7 @@ object ChartDraw {
                 if (d > 0) { // a ribbon behind, so the area looks like a slab
                     solid.color = shade(colour, 0.6f)
                     val edge = polyline(top, c.curve)
-                    for (k in 0 until edge.size - 1) {
-                        path.reset(); path.moveTo(edge[k].first.toFloat(), edge[k].second.toFloat()); path.lineTo(edge[k + 1].first.toFloat(), edge[k + 1].second.toFloat())
-                        path.lineTo(edge[k + 1].first.toFloat() + o, edge[k + 1].second.toFloat() - o); path.lineTo(edge[k].first.toFloat() + o, edge[k].second.toFloat() - o); path.close(); canvas.drawPath(path, solid)
-                    }
+                    for (k in 0 until edge.size - 1) ribbonQuad(canvas, edge[k].first.toFloat(), edge[k].second.toFloat(), edge[k + 1].first.toFloat(), edge[k + 1].second.toFloat(), o, solid.color, c.textSize * 0.04f)
                 }
                 path.reset()
                 addCurve(path, top, c.curve)
@@ -230,10 +253,7 @@ object ChartDraw {
                 val edge = polyline(q, c.curve)
                 if (d > 0 && edge.size > 1) { // a ribbon: the line with depth behind it
                     solid.color = shade(colour, 0.6f)
-                    for (k in 0 until edge.size - 1) {
-                        path.reset(); path.moveTo(edge[k].first.toFloat(), edge[k].second.toFloat()); path.lineTo(edge[k + 1].first.toFloat(), edge[k + 1].second.toFloat())
-                        path.lineTo(edge[k + 1].first.toFloat() + o, edge[k + 1].second.toFloat() - o); path.lineTo(edge[k].first.toFloat() + o, edge[k].second.toFloat() - o); path.close(); canvas.drawPath(path, solid)
-                    }
+                    for (k in 0 until edge.size - 1) ribbonQuad(canvas, edge[k].first.toFloat(), edge[k].second.toFloat(), edge[k + 1].first.toFloat(), edge[k + 1].second.toFloat(), o, solid.color, c.textSize * 0.04f)
                 }
                 line.strokeWidth = f * 0.2f; line.color = colour
                 path.reset(); addCurve(path, q, c.curve); canvas.drawPath(path, line)
@@ -303,7 +323,7 @@ object ChartDraw {
         for (t in scale.ticks) {
             val x = ChartMaths.xOf(p, scale, t)
             if (!c.hideGrid) { line.strokeWidth = px; line.color = 0xFFE0E0E0.toInt(); canvas.drawLine(x.toFloat(), p.t.toFloat(), x.toFloat(), p.b.toFloat(), line) }
-            label(canvas, if (date) ChartMaths.dateLabel(t) else ChartMaths.format(t), x, p.b + f * 1.2, f * 0.8f, Paint.Align.CENTER, ink)
+            label(canvas, if (date) ChartMaths.dateLabel(t) else ChartMaths.format(t), x, p.b + f * 1.2, f * 0.8f, if (x > p.r - f * 1.5) Paint.Align.RIGHT else Paint.Align.CENTER, ink)
         }
     }
 
@@ -508,14 +528,13 @@ object ChartDraw {
             }
             if (d > 0) ribbon((d * 0.6).toFloat(), -(d * 0.6).toFloat(), (shade(colour, 0.6f) and 0x00FFFFFF) or 0x66000000)
             ribbon(0f, 0f, (colour and 0x00FFFFFF) or 0x80000000.toInt())
-            if (c.showValues && l.thickness > f * 0.9) label(canvas, ChartMaths.format(l.value), (l.x0 + l.x1) / 2, (l.y0 + l.y1 + l.thickness) / 2 + f * 0.3, f * 0.7f, Paint.Align.CENTER, ink)
-            if (from.name.isEmpty()) continue
+            if (c.showValues && l.thickness > f * 0.9) haloLabel(canvas, ChartMaths.format(l.value), (l.x0 + l.x1) / 2, (l.y0 + l.y1 + l.thickness) / 2 + f * 0.3, f * 0.7f, Paint.Align.CENTER, ink)
         }
         for ((i, n) in lay.nodes.withIndex()) {
             box3d(canvas, n.box, Chart.colourFor(i), d)
-            val name = n.name + if (c.showValues) "  " + ChartMaths.format(n.total) else ""
-            if (n.level == last && lay.nodes.any { it.level != last }) label(canvas, name, n.box.l - f * 0.3, (n.box.t + n.box.b) / 2 + f * 0.3, f * 0.8f, Paint.Align.RIGHT, ink)
-            else label(canvas, name, n.box.r + f * 0.3 + d * 0.6, (n.box.t + n.box.b) / 2 + f * 0.3, f * 0.8f, Paint.Align.LEFT, ink)
+            val name = n.name
+            if (n.level == last && lay.nodes.any { it.level != last }) haloLabel(canvas, name, n.box.l - f * 0.3, (n.box.t + n.box.b) / 2 + f * 0.3, f * 0.85f, Paint.Align.RIGHT, ink, true)
+            else haloLabel(canvas, name, n.box.r + f * 0.3 + d * 0.6, (n.box.t + n.box.b) / 2 + f * 0.3, f * 0.85f, Paint.Align.LEFT, ink, true)
         }
     }
 
@@ -573,9 +592,12 @@ object ChartDraw {
         canvas.drawLine(p.l.toFloat(), axisY.toFloat(), p.r.toFloat(), axisY.toFloat(), line)
         for (t in ChartMaths.axisTicks(scale.lo, scale.hi, 8)) {
             val x = p.l + scale.fraction(t) * (p.r - p.l)
-            line.strokeWidth = px; canvas.drawLine(x.toFloat(), (axisY - f * 0.2).toFloat(), x.toFloat(), (axisY + f * 0.2).toFloat(), line)
-            label(canvas, if (c.dateAxis) ChartMaths.dateLabel(t) else ChartMaths.format(t), x, axisY + f * 0.9, f * 0.6f, Paint.Align.CENTER, 0xFF757575.toInt())
+            if (!c.hideGrid) { line.strokeWidth = px; line.color = 0xFFE0E0E0.toInt(); canvas.drawLine(x.toFloat(), p.t.toFloat(), x.toFloat(), p.b.toFloat(), line) }
+            line.strokeWidth = px * 1.5f; line.color = ink; canvas.drawLine(x.toFloat(), (axisY - f * 0.2).toFloat(), x.toFloat(), (axisY + f * 0.2).toFloat(), line)
+            label(canvas, if (c.dateAxis) ChartMaths.dateLabel(t) else ChartMaths.format(t), x, p.b + f * 1.2, f * 0.8f, if (x > p.r - f * 1.5) Paint.Align.RIGHT else Paint.Align.CENTER, ink)
         }
+        line.strokeWidth = f * 0.14f; line.color = ink
+        canvas.drawLine(p.l.toFloat(), axisY.toFloat(), p.r.toFloat(), axisY.toFloat(), line)
         val d = c.threeD
         for (e in events) {
             e ?: continue
@@ -638,16 +660,13 @@ object ChartDraw {
         canvas.drawLine(yAxisX.toFloat(), p.t.toFloat(), yAxisX.toFloat(), p.b.toFloat(), line)
         canvas.save()
         canvas.clipRect(p.l.toFloat(), p.t.toFloat(), p.r.toFloat() + if (c.threeD) f else 0f, p.b.toFloat())
-        val o = if (c.threeD) (f * 0.9 * 0.6).toFloat() else 0f
+        val o = if (c.threeD) (f * 0.5 * 0.6).toFloat() else 0f
         for ((j, pieces) in ChartMaths.curves(c, p).withIndex()) {
             val colour = c.series[j].color
             for (piece in pieces) {
                 if (o > 0f) {
                     solid.color = shade(colour, 0.6f)
-                    for (k in 0 until piece.size - 1) {
-                        path.reset(); path.moveTo(piece[k].first.toFloat(), piece[k].second.toFloat()); path.lineTo(piece[k + 1].first.toFloat(), piece[k + 1].second.toFloat())
-                        path.lineTo(piece[k + 1].first.toFloat() + o, piece[k + 1].second.toFloat() - o); path.lineTo(piece[k].first.toFloat() + o, piece[k].second.toFloat() - o); path.close(); canvas.drawPath(path, solid)
-                    }
+                    for (k in 0 until piece.size - 1) ribbonQuad(canvas, piece[k].first.toFloat(), piece[k].second.toFloat(), piece[k + 1].first.toFloat(), piece[k + 1].second.toFloat(), o, solid.color, c.textSize * 0.04f)
                 }
                 path.reset(); piece.forEachIndexed { k, q -> if (k == 0) path.moveTo(q.first.toFloat(), q.second.toFloat()) else path.lineTo(q.first.toFloat(), q.second.toFloat()) }
                 line.strokeWidth = f * 0.2f; line.color = colour; canvas.drawPath(path, line)
@@ -836,10 +855,7 @@ object ChartDraw {
             val edge = polyline(run.map { it.second }, c.curve)
             if (o > 0f && edge.size > 1) {
                 solid.color = shade(colour, 0.6f)
-                for (k in 0 until edge.size - 1) {
-                    path.reset(); path.moveTo(edge[k].first.toFloat(), edge[k].second.toFloat()); path.lineTo(edge[k + 1].first.toFloat(), edge[k + 1].second.toFloat())
-                    path.lineTo(edge[k + 1].first.toFloat() + o, edge[k + 1].second.toFloat() - o); path.lineTo(edge[k].first.toFloat() + o, edge[k].second.toFloat() - o); path.close(); canvas.drawPath(path, solid)
-                }
+                for (k in 0 until edge.size - 1) ribbonQuad(canvas, edge[k].first.toFloat(), edge[k].second.toFloat(), edge[k + 1].first.toFloat(), edge[k + 1].second.toFloat(), o, solid.color, c.textSize * 0.04f)
             }
             line.strokeWidth = f * 0.25f; line.color = colour; path.reset(); addCurve(path, run.map { it.second }, c.curve); canvas.drawPath(path, line)
         }

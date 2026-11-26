@@ -34,13 +34,14 @@ class Clip(
             name, width, height,
             items.map { Item(rename(it.id), it.tool, it.color, it.width, it.pts.map(m::apply)) },
             texts.map { TextBox(rename(it.id), it.x + dx, it.y + dy, it.width, it.fontSize, it.text, it.color, it.highlight, it.angle) },
-            tables.map { Table(rename(it.id), it.x + dx, it.y + dy, it.colWidths, it.rowHeights, it.lineWidth, it.color, it.fill, it.cellFills) },
+            tables.map { it.copy(x = it.x + dx, y = it.y + dy).withId(rename(it.id)) },
             shapes.map { s -> s.moved(m).let { Shape(rename(s.id), it.kind, it.x, it.y, it.width, it.height, it.angle, it.color, it.lineWidth, it.dashed, it.fill, it.corner, it.vertices, it.text, it.textColor, it.fontSize) } },
             connectors.map { Connector(rename(it.id), end(it.from), end(it.to), it.fromHead, it.toHead, it.color, it.lineWidth, it.dashed, it.route, it.bend, it.via.map { (x, y) -> m.x(x, y) to m.y(x, y) }) },
             fills.map { f -> f.map(m).let { Fill(rename(f.id), it.color, it.rings) } },
             order.map(rename),
             pictures.map { it.moved(m).copy(id = rename(it.id)) },
-            charts.map { it.moved(m).copy(id = rename(it.id)) },
+            // a chart that follows a table in the clip follows the copy; one that follows a table left behind keeps its numbers and lets go
+            charts.map { ch -> ch.moved(m).copy(id = rename(ch.id), source = ch.source?.takeIf { s -> tables.any { it.id == s.table } }?.let { it.copy(table = rename(it.table)) }) },
         )
     }
 

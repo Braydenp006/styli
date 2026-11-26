@@ -507,6 +507,29 @@ func TestChartKindsBatchC(t *testing.T) {
 	}
 }
 
+// Typed text in table cells reads back whole; a table written before it has none.
+func TestTableCellText(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	id := []byte("0123456789abcdef")
+	typed := &inkpb.TableSet{ColWidths: []uint32{1000, 1000}, RowHeights: []uint32{500, 500}, LineWidth: 40,
+		CellText: []string{"Item", "Cost", "Tea", "2.50"}, FontSize: 300, TextColor: 0xff1565c0, HeaderRow: true, ColAlign: []uint32{0, 2}}
+	old := &inkpb.TableSet{ColWidths: []uint32{1000}, RowHeights: []uint32{500}, LineWidth: 40, CellFills: []uint32{0xff00ff00}}
+	if err := Append(p, &inkpb.Event{Id: id, Device: "d", Seq: 1, Kind: &inkpb.Event_TableSet{TableSet: typed}}, &inkpb.Event{Id: id, Device: "d", Seq: 2, Kind: &inkpb.Event_TableSet{TableSet: old}}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(p)
+	if err != nil || len(l.Events) != 2 {
+		t.Fatal(l, err)
+	}
+	if !proto.Equal(l.Events[0].GetTableSet(), typed) {
+		t.Error("the table changed on the way")
+	}
+	o := l.Events[1].GetTableSet()
+	if len(o.CellText) != 0 || o.FontSize != 0 || o.TextColor != 0 || o.HeaderRow || len(o.ColAlign) != 0 || len(o.CellFills) != 1 {
+		t.Error("a table written before typed text must read with none of it, and keep what it had")
+	}
+}
+
 // A dotted stroke is an ordinary stroke event with its own tool; it reads back and dumps by name.
 func TestDottedStroke(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p")

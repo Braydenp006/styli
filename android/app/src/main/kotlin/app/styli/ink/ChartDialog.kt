@@ -43,6 +43,7 @@ private val ERRORS = setOf(ChartKind.BAR, ChartKind.LINE, ChartKind.AREA, ChartK
 /** The chart being edited, as text the person can type: numbers stay strings until Done, so half-typed ones are not lost. */
 private class ChartDraft(c: Chart) {
     var kind by mutableStateOf(c.kind)
+    var linked by mutableStateOf(c.source != null) // its numbers come from a table's cells
     var title by mutableStateOf(c.title)
     var xLabel by mutableStateOf(c.xLabel)
     var yLabel by mutableStateOf(c.yLabel)
@@ -133,6 +134,7 @@ private class ChartDraft(c: Chart) {
     fun value(s: String, si: Int): Double? = if ((kind == ChartKind.GANTT || kind == ChartKind.TIMELINE) && dateAxis && si < 2) ChartMaths.parseDate(s) ?: parse(s) else parse(s)
 
     fun toChart(base: Chart): Chart = base.copy(
+        source = if (linked) base.source else null,
         kind = kind, title = title.trim(), xLabel = xLabel.trim(), yLabel = yLabel.trim(),
         hideLegend = !legend, hideGrid = !grid, stacked = stack != Stack.GROUPED, percent = stack == Stack.PERCENT,
         horizontal = horizontal || pyramid, pyramid = pyramid, curve = curve, hideMarkers = !markers,
@@ -212,6 +214,7 @@ private fun Tick(label: String, on: Boolean, change: (Boolean) -> Unit) {
 fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
     val d = remember(chart) { ChartDraft(chart) }
     val k = d.kind
+    val locked = d.linked // a chart that follows a table cannot be typed over
     val axes = ChartMaths.hasAxes(k)
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = RoundedCornerShape(16.dp), tonalElevation = 6.dp) {
@@ -219,6 +222,10 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                 Text("Chart data")
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     ChartKind.entries.chunked(5).forEach { row -> Row { for (kk in row) Pick(KIND_NAMES.getValue(kk), d.kind == kk) { d.pickKind(kk) } } }
+                    if (locked) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("This chart follows a table: its numbers come from the table's cells and change when you type there.", Modifier.weight(1f))
+                        TextButton(onClick = { d.linked = false }) { Text("Unlink, keep these numbers") }
+                    }
                     hint(k).takeIf { it.isNotEmpty() }?.let { Text(it, Modifier.padding(bottom = 4.dp)) }
                     OutlinedTextField(d.title, { d.title = it }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true)
                     if (axes) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -291,13 +298,13 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                                     TextButton(onClick = { d.kinds[s] = when (d.kinds[s]) { ChartKind.BAR -> ChartKind.LINE; ChartKind.LINE -> ChartKind.AREA; else -> ChartKind.BAR } }) { Text("drawn as: " + KIND_NAMES.getValue(d.kinds[s])) }
                                     Tick("2nd axis", d.second[s]) { d.second[s] = it }
                                 }
-                                OutlinedTextField(d.names[s], { d.names[s] = it }, Modifier.width(144.dp).padding(bottom = 4.dp), singleLine = true)
+                                OutlinedTextField(d.names[s], { d.names[s] = it }, Modifier.width(144.dp).padding(bottom = 4.dp), singleLine = true, enabled = !locked)
                                 if (xy || hasErr) Row { for (t in (if (xy) listOf("X", "Y", "Size").take(base) else listOf("Value")) + (if (hasErr) listOf("\u00B1 error") else emptyList())) Text(t, Modifier.width(150.dp).padding(start = 16.dp)) }
                             }
                             if (groupCol) Text(if (k == ChartKind.SANKEY) "To" else "Group", Modifier.width(150.dp).padding(top = 40.dp, start = 16.dp))
                         }
                         for (i in d.cats.indices) Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (rowNames) OutlinedTextField(d.cats[i], { d.cats[i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true)
+                            if (rowNames) OutlinedTextField(d.cats[i], { d.cats[i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true, enabled = !locked)
                             for (s in 0 until shown) {
                                 if (xy) OutlinedTextField(
                                     d.xcells[s][i], { d.xcells[s][i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true,
@@ -305,7 +312,7 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                                 )
                                 val text = d.cells[s][i]
                                 OutlinedTextField(
-                                    text, { d.cells[s][i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true,
+                                    text, { d.cells[s][i] = it }, Modifier.width(150.dp).padding(end = 6.dp, bottom = 4.dp), singleLine = true, enabled = !locked,
                                     isError = text.isNotBlank() && d.value(text, s) == null,
                                 )
                                 if (k == ChartKind.BUBBLE) OutlinedTextField(
@@ -322,14 +329,16 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                         }
                     }
                     Row {
-                        if (k != ChartKind.FUNCTION) {
+                        if (locked) {
+                            // the rows and columns belong to the table
+                        } else if (k != ChartKind.FUNCTION) {
                             TextButton(onClick = { d.addCategory() }) { Text("Add row") }
                             TextButton(onClick = { d.removeCategory() }, enabled = d.cats.size > 1) { Text("Remove last row") }
                         } else {
                             TextButton(onClick = { d.addSeries(); d.exprs[d.exprs.lastIndex] = "x"; d.names[d.names.lastIndex] = "f${d.names.size}(x)" }) { Text("Add a formula") }
                             TextButton(onClick = { d.removeSeries() }, enabled = d.names.size > 1) { Text("Remove last formula") }
                         }
-                        if (k !in fixedCols && k != ChartKind.FUNCTION) {
+                        if (!locked && k !in fixedCols && k != ChartKind.FUNCTION) {
                             TextButton(onClick = { d.addSeries() }) { Text(if (xy) "Add a set of points" else "Add column") }
                             TextButton(onClick = { d.removeSeries() }, enabled = d.names.size > 1) { Text(if (xy) "Remove last set" else "Remove last column") }
                         }
