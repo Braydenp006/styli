@@ -40,6 +40,16 @@ class Shape(
         text: String = this.text, textColor: Int = this.textColor, fontSize: Float = this.fontSize,
     ) = Shape(id, kind, x, y, width, height, angle, color, lineWidth, dashed, fill, corner, vertices, text, textColor, fontSize)
 
+    /** The shape after a move, resize or turn by [map] (a move, a uniform scale and a turn, as the lasso makes). Line widths are not scaled. */
+    fun moved(map: Affine): Shape {
+        val scale = sqrt(abs(map.a * map.d - map.b * map.c)).toFloat()
+        val turn = kotlin.math.atan2(map.b, map.a).toFloat()
+        return copy(
+            x = map.x(x, y), y = map.y(x, y), width = width * scale, height = height * scale, angle = angle + turn,
+            corner = corner * scale, fontSize = fontSize * scale,
+        )
+    }
+
     /** The page point of the point (lx, ly) in the shape's own frame: origin at (x, y), turned by [angle] about it. */
     fun toPage(lx: Float, ly: Float): Pair<Float, Float> {
         val c = cos(angle); val s = sin(angle)
@@ -51,6 +61,13 @@ class Shape(
         val c = cos(angle); val s = sin(angle)
         val dx = px - x; val dy = py - y
         return (dx * c + dy * s) to (-dx * s + dy * c)
+    }
+
+    /** Is the page point inside the shape or within about [tol] of it? (Sampled round the point, which is close enough for aiming.) */
+    fun near(px: Float, py: Float, tol: Float): Boolean {
+        if (contains(px, py)) return true
+        val d = tol * 0.7f
+        return listOf(tol to 0f, -tol to 0f, 0f to tol, 0f to -tol, d to d, d to -d, -d to d, -d to -d).any { contains(px + it.first, py + it.second) }
     }
 
     val center get() = toPage(width / 2, height / 2)
@@ -108,6 +125,98 @@ class Shape(
             if (t > 0f && u in 0f..1f && (best == null || t > best)) best = t
         }
         return best
+    }
+
+    /** The nearest point of the outline to a point in the shape's own frame (the point itself if it is on it). */
+    private fun nearestLocal(lx: Float, ly: Float): Pair<Float, Float> {
+        val w = width; val h = height
+        return when (kind) {
+            ShapeKind.RECT -> {
+                val cx = lx.coerceIn(0f, w); val cy = ly.coerceIn(0f, h)
+                if (cx != lx || cy != ly) cx to cy // outside: the nearest point of the box is on its edge
+                else when (listOf(lx, w - lx, ly, h - ly).withIndex().minByOrNull { it.value }!!.index) { 0 -> 0f to ly; 1 -> w to ly; 2 -> lx to 0f; else -> lx to h }
+            }
+            ShapeKind.ELLIPSE -> {
+                val dx = lx - w / 2; val dy = ly - h / 2
+                val k = sqrt((dx / (w / 2)) * (dx / (w / 2)) + (dy / (h / 2)) * (dy / (h / 2)))
+                if (k == 0f) w / 2 to 0f else (w / 2 + dx / k) to (h / 2 + dy / k)
+            }
+            ShapeKind.POLYGON -> {
+                val pts = local()
+                if (pts.isEmpty()) return w / 2 to h / 2
+                var best = pts[0]; var bestD = Float.MAX_VALUE
+                for (i in pts.indices) {
+                    val (ax, ay) = pts[i]; val (bx, by) = pts[(i + 1) % pts.size]
+                    val dx = bx - ax; val dy = by - ay
+                    val len2 = dx * dx + dy * dy
+                    val t = if (len2 == 0f) 0f else (((lx - ax) * dx + (ly - ay) * dy) / len2).coerceIn(0f, 1f)
+                    val qx = ax + t * dx; val qy = ay + t * dy
+                    val d = (qx - lx) * (qx - lx) + (qy - ly) * (qy - ly)
+                    if (d < bestD) { bestD = d; best = qx to qy }
+                }
+                best
+            }
+        }
+    }
+
+    /** The spot on the outline nearest the page point, as fractions of the box (0 to 1 each way). */
+    fun nearestOutline(px: Float, py: Float): Pair<Float, Float> {
+        val (lx, ly) = toLocal(px, py)
+        val (x, y) = nearestLocal(lx, ly)
+        return (if (width == 0f) 0f else x / width) to (if (height == 0f) 0f else y / height)
+    }
+
+    /** The page point at fractions ([fx], [fy]) of the box. */
+    fun spot(fx: Float, fy: Float) = toPage(fx * width, fy * height)
+
+    /** The spots on the outline that a connector snaps to, as box fractions: the middle of each side (of a polygon, each edge). */
+    fun snapSpots(): List<Pair<Float, Float>> = when (kind) {
+        ShapeKind.RECT, ShapeKind.ELLIPSE -> listOf(.5f to 0f, 1f to .5f, .5f to 1f, 0f to .5f)
+        ShapeKind.POLYGON -> vertices.indices.map { i ->
+            val (ax, ay) = vertices[i]; val (bx, by) = vertices[(i + 1) % vertices.size]
+            (ax + bx) / 2 to (ay + by) / 2
+        }
+    }
+
+    /** The unit direction pointing out of the shape at the outline spot nearest the page point, on the page. */
+    fun outwardAt(px: Float, py: Float): Pair<Float, Float> {
+        val (lx0, ly0) = toLocal(px, py)
+        val (lx, ly) = nearestLocal(lx0, ly0)
+        val w = width; val h = height
+        var nx: Float; var ny: Float
+        when (kind) {
+            ShapeKind.RECT -> {
+                val d = listOf(lx, w - lx, ly, h - ly)
+                when (d.withIndex().minByOrNull { abs(it.value) }!!.index) { 0 -> { nx = -1f; ny = 0f }; 1 -> { nx = 1f; ny = 0f }; 2 -> { nx = 0f; ny = -1f }; else -> { nx = 0f; ny = 1f } }
+            }
+            ShapeKind.ELLIPSE -> {
+                nx = (lx - w / 2) / ((w / 2) * (w / 2)); ny = (ly - h / 2) / ((h / 2) * (h / 2))
+            }
+            ShapeKind.POLYGON -> {
+                val pts = local()
+                nx = 0f; ny = -1f
+                var bestD = Float.MAX_VALUE
+                for (i in pts.indices) {
+                    val (ax, ay) = pts[i]; val (bx, by) = pts[(i + 1) % pts.size]
+                    val dx = bx - ax; val dy = by - ay
+                    val len2 = dx * dx + dy * dy
+                    if (len2 == 0f) continue
+                    val t = (((lx - ax) * dx + (ly - ay) * dy) / len2).coerceIn(0f, 1f)
+                    val d = (ax + t * dx - lx) * (ax + t * dx - lx) + (ay + t * dy - ly) * (ay + t * dy - ly)
+                    if (d >= bestD) continue
+                    bestD = d
+                    val len = sqrt(len2)
+                    var ex = dy / len; var ey = -dx / len
+                    if (Fill.insideRing(pts, lx + ex * 2, ly + ey * 2)) { ex = -ex; ey = -ey } // point away from the inside
+                    nx = ex; ny = ey
+                }
+            }
+        }
+        val len = sqrt(nx * nx + ny * ny)
+        if (len == 0f) return 0f to -1f
+        nx /= len; ny /= len
+        val c = cos(angle); val s = sin(angle)
+        return (nx * c - ny * s) to (nx * s + ny * c)
     }
 
     /** The middle of side [anchor] of the box (1 top, 2 right, 3 bottom, 4 left), on the page. */

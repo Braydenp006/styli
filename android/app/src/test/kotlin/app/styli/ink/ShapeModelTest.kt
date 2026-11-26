@@ -112,4 +112,21 @@ class ShapeModelTest {
         assertEquals(listOf(s, a.id), m.order)
         assertTrue(m.log.any { it is Ev.ZMoved })
     }
+
+    @Test
+    fun scalingAConnectorScalesItsBend() {
+        val m = PageModel()
+        val c = m.addConnector { Connector(it, End(null, 0, 0f, 0f), End(null, 0, 1000f, 0f), route = Route.CURVE, bend = 100f) }
+        m.transform(setOf(c.id), Affine.scaleAbout(2.0, 0.0, 0.0))
+        assertEquals(200f, m.connectorOf(c.id)!!.bend, 0.01f)
+        assertEquals(2000f, m.connectorOf(c.id)!!.to.x, 0.01f)
+    }
+
+    @Test
+    fun movingAConnectorMovesItsBendPoints() {
+        val m = PageModel()
+        val c = m.addConnector { Connector(it, End(null, 0, 0f, 0f), End(null, 0, 1000f, 0f), via = listOf(500f to 300f)) }
+        m.transform(setOf(c.id), Affine.translate(100.0, 50.0))
+        assertEquals(600f to 350f, m.connectorOf(c.id)!!.via[0])
+    }
 }

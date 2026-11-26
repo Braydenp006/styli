@@ -228,14 +228,27 @@ enum Arrowhead {
 // One end of a connector. With a `shape` the end sits on that shape's outline:
 // where the line from the shape's centre towards `anchor` crosses it (1 top,
 // 2 right, 3 bottom, 4 left: the middle of that side of the box), or towards
-// the connector's other end if `anchor` is 0. Without one it is the free point
-// (x, y). (x, y) is also where the end was when last written, for a reader
-// that cannot find the shape.
+// the connector's other end if `anchor` is 0, or (anchor 5) at the spot (fx, fy)
+// on the outline, as a whole number of 1/10000 of the shape's box width and
+// height, so it stays in the same place on the shape as the shape is moved,
+// resized or turned. Without a shape it is the free point (x, y). (x, y) is
+// also where the end was when last written, for a reader that cannot find the
+// shape.
 message ConnectorEnd {
   bytes shape = 1;
   uint32 anchor = 2;
   sint32 x = 3;
   sint32 y = 4;
+  uint32 fx = 5;
+  uint32 fy = 6;
+}
+
+enum ConnectorRoute {
+  ROUTE_STRAIGHT = 0;
+  // Right angles: it leaves a shape at right angles to its edge, then bends once or twice.
+  ROUTE_ELBOW = 1;
+  // A smooth curve that leaves a shape at right angles to its edge.
+  ROUTE_CURVE = 2;
 }
 
 // The whole state of a connector, a straight line between two ends with an
@@ -249,6 +262,16 @@ message ConnectorSet {
   uint32 color = 5;  // as a shape's outline colour
   uint32 line_width = 6;
   LineStyle line_style = 7;
+  ConnectorRoute route = 8;
+  // How far the middle of the route is pushed from where it would be, in page
+  // units: sideways for a curve, along the span for an elbow's middle segment.
+  // Zero (and so absent in a log written before this was added) is the default.
+  sint32 bend = 9;
+  // Extra points the route passes through between its two ends, each as x then
+  // y in page units, in order from the first end. A curve runs smoothly through
+  // them, an elbow turns at right angles between them and a straight route
+  // bends at them. With any, `bend` is not used.
+  repeated sint32 via = 10 [packed = true];
 }
 
 message ConnectorRemoved {}

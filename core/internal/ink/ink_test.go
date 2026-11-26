@@ -285,7 +285,9 @@ func TestShapesConnectorsFills(t *testing.T) {
 	shape := &inkpb.ShapeSet{Kind: inkpb.ShapeKind_SHAPE_POLYGON, X: -50, Y: 80, Width: 3000, Height: 2000, Angle: 4500, Color: 0xff1565c0, LineWidth: 40,
 		LineStyle: inkpb.LineStyle_LINE_DASHED, Fill: 0x99ffeb3b, Vertices: []uint32{5000, 0, 10000, 10000, 0, 10000}, Text: "hi", TextColor: 0xff000000, FontSize: 400}
 	conn := &inkpb.ConnectorSet{From: &inkpb.ConnectorEnd{Shape: id, Anchor: 2, X: 10, Y: 20}, To: &inkpb.ConnectorEnd{X: -300, Y: 400},
-		FromHead: inkpb.Arrowhead_ARROW_DOT, ToHead: inkpb.Arrowhead_ARROW_FILLED, Color: 0xffc62828, LineWidth: 60}
+		FromHead: inkpb.Arrowhead_ARROW_DOT, ToHead: inkpb.Arrowhead_ARROW_FILLED, Color: 0xffc62828, LineWidth: 60,
+		Route: inkpb.ConnectorRoute_ROUTE_CURVE, Bend: -250, Via: []int32{100, -200, 3000, 40}}
+	conn.From = &inkpb.ConnectorEnd{Shape: id, Anchor: 5, X: 10, Y: 20, Fx: 5000, Fy: 10000}
 	fill := &inkpb.FillSet{Color: 0x9966bb6a, Rings: []*inkpb.Ring{{X0: 5, Y0: -5, Dx: []int32{100, 0, -100}, Dy: []int32{0, 100, 0}}}}
 	table := &inkpb.TableSet{X: 0, Y: 0, ColWidths: []uint32{1000, 1000}, RowHeights: []uint32{500}, LineWidth: 40, CellFills: []uint32{0, 0x99ffeb3b}}
 	evs := []*inkpb.Event{
@@ -312,7 +314,7 @@ func TestShapesConnectorsFills(t *testing.T) {
 	Dump(&out, l)
 	for _, want := range []string{
 		`polygon at=(-50,80) size=3000x2000 angle=4500 line=ff1565c0/40/dashed fill=99ffeb3b corner=0 vertices=3 "hi"`,
-		"3031323334353637383961626364656" + "6/2@(10,20) -> (-300,400) heads=dot,filled",
+		"30313233343536373839616263646566/at(5000,10000)@(10,20) -> (-300,400) heads=dot,filled", "route=curve bend=-250 via=2",
 		"color=9966bb6a rings=1", "cells=2", "shape-removed", "connector-removed", "fill-removed",
 	} {
 		if !strings.Contains(out.String(), want) {

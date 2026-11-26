@@ -349,15 +349,10 @@ class PageModel(page: PageSet = A4_LINED) {
         val tablesAfter = tables.map {
             if (it.id in ids) it.copy(x = map.x(it.x, it.y), y = map.y(it.x, it.y), colWidths = it.colWidths.map { w -> w * scale }, rowHeights = it.rowHeights.map { h -> h * scale }) else it
         }
-        val shapesAfter = shapes.map {
-            if (it.id in ids) it.copy(
-                x = map.x(it.x, it.y), y = map.y(it.x, it.y), width = it.width * scale, height = it.height * scale, angle = it.angle + turn,
-                corner = it.corner * scale, fontSize = it.fontSize * scale,
-            ) else it
-        }
+        val shapesAfter = shapes.map { if (it.id in ids) it.moved(map) else it }
         // A connector's free ends move with it; an end on a shape follows the shape.
         fun end(e: End) = if (e.shape == null) End(null, 0, map.x(e.x, e.y), map.y(e.x, e.y)) else e
-        val connectorsAfter = connectors.map { if (it.id in ids) it.copy(from = end(it.from), to = end(it.to)) else it }
+        val connectorsAfter = connectors.map { if (it.id in ids) it.copy(from = end(it.from), to = end(it.to), bend = it.bend * scale, via = it.via.map { (x, y) -> map.x(x, y) to map.y(x, y) }) else it }
         val fillsAfter = fills.map { if (it.id in ids) it.map(map) else it }
         commit(
             now().copy(items = after, texts = textsAfter, tables = tablesAfter, shapes = shapesAfter, connectors = connectorsAfter, fills = fillsAfter),

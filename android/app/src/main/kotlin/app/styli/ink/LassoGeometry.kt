@@ -195,6 +195,24 @@ object LassoGeometry {
 
     private const val FILL_GRID = 20
 
+    /** The lines (ID and the points they run through) with more than half their length inside the loop. */
+    fun selectedLines(lines: List<Pair<String, List<Pair<Float, Float>>>>, poly: FloatArray): Set<String> {
+        if (poly.size < 6) return emptySet()
+        return lines.filter { (_, p) -> insideShare(p.map { Pt(it.first, it.second, 0, 1f) }, poly) > 0.5 }.mapTo(HashSet()) { it.first }
+    }
+
+    /** How far the point is from the line running through [path]. */
+    fun distToPath(px: Float, py: Float, path: List<Pair<Float, Float>>): Float =
+        (1 until path.size).minOfOrNull { distToSegment(px, py, path[it - 1], path[it]) } ?: Float.MAX_VALUE
+
+    /** How far the point is from the segment a-b. */
+    fun distToSegment(px: Float, py: Float, a: Pair<Float, Float>, b: Pair<Float, Float>): Float {
+        val dx = b.first - a.first; val dy = b.second - a.second
+        val len2 = dx * dx + dy * dy
+        val t = if (len2 == 0f) 0f else (((px - a.first) * dx + (py - a.second) * dy) / len2).coerceIn(0f, 1f)
+        return hypot(px - (a.first + t * dx), py - (a.second + t * dy))
+    }
+
     /** Do two angles (radians) point the same way? */
     fun sameTurn(a: Float, b: Float) = kotlin.math.abs(sin((a - b).toDouble())) < 1e-3 && cos((a - b).toDouble()) > 0
 

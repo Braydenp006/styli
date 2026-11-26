@@ -77,6 +77,10 @@ private fun InkScreen() {
     var sLine by remember { mutableStateOf(1) }
     var sDashed by remember { mutableStateOf(false) }
     var bColor by remember { mutableStateOf(0x99FFEB3B.toInt()) }
+    var route by remember { mutableStateOf(Route.STRAIGHT) }
+    var auto by remember { mutableStateOf(false) }
+    var startHead by remember { mutableStateOf(Arrowhead.NONE) }
+    var endHead by remember { mutableStateOf(Arrowhead.FILLED) }
     var preset by remember { mutableStateOf(ShapePreset.RECTANGLE) }
     var scroll by remember { mutableStateOf(2) } // how far a scroll carries on: off, low, medium, high
     var cell by remember { mutableStateOf(0 to 0) } // the page's (column, row)
@@ -137,6 +141,21 @@ private fun InkScreen() {
             if (tool == InkCanvasView.Tool.TABLE) {
                 Button(onClick = { tableDialog = true }, gap) { Text("Table: $tRows rows, $tCols columns", softWrap = false) }
             }
+            if (tool == InkCanvasView.Tool.CONNECTOR) {
+                Menu("Route: " + routeLabel(route)) { close ->
+                    for (r in Route.entries) Choice(routeLabel(r), r == route) { route = r; canvas?.connectorRoute = r; close() }
+                }
+                Menu("Attach: " + if (auto) "aim at other end" else "exact spot") { close ->
+                    Choice("exact spot (snaps to side middles)", !auto) { auto = false; canvas?.connectAuto = false; close() }
+                    Choice("aim at the other end", auto) { auto = true; canvas?.connectAuto = true; close() }
+                }
+                Menu("Start: " + startHead.name.lowercase()) { close ->
+                    for (h in Arrowhead.entries) Choice(h.name.lowercase(), h == startHead) { startHead = h; canvas?.connectorFromHead = h; close() }
+                }
+                Menu("End: " + endHead.name.lowercase()) { close ->
+                    for (h in Arrowhead.entries) Choice(h.name.lowercase(), h == endHead) { endHead = h; canvas?.connectorToHead = h; close() }
+                }
+            }
             if (tool == InkCanvasView.Tool.BUCKET) {
                 Button(onClick = { picking = 7 }, gap) { Text("Fill colour", softWrap = false) }
             }
@@ -144,6 +163,10 @@ private fun InkScreen() {
                 Button(onClick = { picking = 1 }, gap) { Text("Text colour", softWrap = false) }
                 Button(onClick = { picking = 2 }, gap) { Text("Highlight", softWrap = false) }
                 Button(onClick = { canvas?.finishText() }, gap) { Text("Done") }
+            }
+
+            if (tool == InkCanvasView.Tool.LASSO) {
+                Button(onClick = { canvas?.addBendPoint() }, gap) { Text("Add bend point", softWrap = false) }
             }
 
             Menu("Ink") { close ->
@@ -177,14 +200,21 @@ private fun InkScreen() {
                 Heading("Text")
                 Item("Text colour") { picking = 1; close() }
                 Item("Highlight") { picking = 2; close() }
-                Heading("Shape")
+                Heading("Shape and connector lines")
                 Item("Outline colour") { picking = 5; close() }
-                Item("Fill colour") { picking = 6; close() }
+                Item("Fill colour (shapes)") { picking = 6; close() }
                 for (k in 0..3) Choice("Line: " + listOf("thin", "normal", "thick", "bold")[k], sLine == k) {
                     sLine = k; canvas?.setShapeStyle(null, null, listOf(20f, 40f, 80f, 160f)[k], null); close()
                 }
                 Choice("Line: solid", !sDashed) { sDashed = false; canvas?.setShapeStyle(null, null, null, false); close() }
                 Choice("Line: dashed", sDashed) { sDashed = true; canvas?.setShapeStyle(null, null, null, true); close() }
+                Heading("Connector (select it alone: drag its handles to bend or re-attach)")
+                for (r in Route.entries) Item("Route: " + routeLabel(r)) { canvas?.routeSelected(r); close() }
+                Item("Add bend point (then tap the line)") { canvas?.addBendPoint(); close() }
+                Item("Remove bend point") { canvas?.removeBendPoint(); close() }
+                Heading("Connector arrowheads")
+                for (h in Arrowhead.entries) Item("Start: " + h.name.lowercase()) { canvas?.setConnectorHeads(h, null); close() }
+                for (h in Arrowhead.entries) Item("End: " + h.name.lowercase()) { canvas?.setConnectorHeads(null, h); close() }
                 Heading("Table (tap a cell first for rows and columns)")
                 Item("Row above") { canvas?.insertRow(false); close() }
                 Item("Row below") { canvas?.insertRow(true); close() }
@@ -333,6 +363,7 @@ private fun toolName(t: InkCanvasView.Tool) = when (t) {
     InkCanvasView.Tool.TABLE -> "Table"
     InkCanvasView.Tool.SHAPE -> "Shape"
     InkCanvasView.Tool.BUCKET -> "Paint bucket"
+    InkCanvasView.Tool.CONNECTOR -> "Connector"
 }
 
 /** A button that opens a menu. [content] gets a function that closes it (some items leave it open). */
@@ -355,3 +386,5 @@ private fun Choice(text: String, chosen: Boolean, onClick: () -> Unit) =
 
 @Composable
 private fun Heading(text: String) = Text(text, Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp), style = MaterialTheme.typography.labelMedium)
+
+private fun routeLabel(r: Route) = when (r) { Route.STRAIGHT -> "straight"; Route.ELBOW -> "right angles"; Route.CURVE -> "rounded" }

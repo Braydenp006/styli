@@ -273,6 +273,57 @@ func (Arrowhead) EnumDescriptor() ([]byte, []int) {
 	return file_ink_proto_rawDescGZIP(), []int{4}
 }
 
+type ConnectorRoute int32
+
+const (
+	ConnectorRoute_ROUTE_STRAIGHT ConnectorRoute = 0
+	// Right angles: it leaves a shape at right angles to its edge, then bends once or twice.
+	ConnectorRoute_ROUTE_ELBOW ConnectorRoute = 1
+	// A smooth curve that leaves a shape at right angles to its edge.
+	ConnectorRoute_ROUTE_CURVE ConnectorRoute = 2
+)
+
+// Enum value maps for ConnectorRoute.
+var (
+	ConnectorRoute_name = map[int32]string{
+		0: "ROUTE_STRAIGHT",
+		1: "ROUTE_ELBOW",
+		2: "ROUTE_CURVE",
+	}
+	ConnectorRoute_value = map[string]int32{
+		"ROUTE_STRAIGHT": 0,
+		"ROUTE_ELBOW":    1,
+		"ROUTE_CURVE":    2,
+	}
+)
+
+func (x ConnectorRoute) Enum() *ConnectorRoute {
+	p := new(ConnectorRoute)
+	*p = x
+	return p
+}
+
+func (x ConnectorRoute) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConnectorRoute) Descriptor() protoreflect.EnumDescriptor {
+	return file_ink_proto_enumTypes[5].Descriptor()
+}
+
+func (ConnectorRoute) Type() protoreflect.EnumType {
+	return &file_ink_proto_enumTypes[5]
+}
+
+func (x ConnectorRoute) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConnectorRoute.Descriptor instead.
+func (ConnectorRoute) EnumDescriptor() ([]byte, []int) {
+	return file_ink_proto_rawDescGZIP(), []int{5}
+}
+
 type Record struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -1614,15 +1665,20 @@ func (*ShapeRemoved) Descriptor() ([]byte, []int) {
 // One end of a connector. With a `shape` the end sits on that shape's outline:
 // where the line from the shape's centre towards `anchor` crosses it (1 top,
 // 2 right, 3 bottom, 4 left: the middle of that side of the box), or towards
-// the connector's other end if `anchor` is 0. Without one it is the free point
-// (x, y). (x, y) is also where the end was when last written, for a reader
-// that cannot find the shape.
+// the connector's other end if `anchor` is 0, or (anchor 5) at the spot (fx, fy)
+// on the outline, as a whole number of 1/10000 of the shape's box width and
+// height, so it stays in the same place on the shape as the shape is moved,
+// resized or turned. Without a shape it is the free point (x, y). (x, y) is
+// also where the end was when last written, for a reader that cannot find the
+// shape.
 type ConnectorEnd struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Shape         []byte                 `protobuf:"bytes,1,opt,name=shape,proto3" json:"shape,omitempty"`
 	Anchor        uint32                 `protobuf:"varint,2,opt,name=anchor,proto3" json:"anchor,omitempty"`
 	X             int32                  `protobuf:"zigzag32,3,opt,name=x,proto3" json:"x,omitempty"`
 	Y             int32                  `protobuf:"zigzag32,4,opt,name=y,proto3" json:"y,omitempty"`
+	Fx            uint32                 `protobuf:"varint,5,opt,name=fx,proto3" json:"fx,omitempty"`
+	Fy            uint32                 `protobuf:"varint,6,opt,name=fy,proto3" json:"fy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1685,18 +1741,42 @@ func (x *ConnectorEnd) GetY() int32 {
 	return 0
 }
 
+func (x *ConnectorEnd) GetFx() uint32 {
+	if x != nil {
+		return x.Fx
+	}
+	return 0
+}
+
+func (x *ConnectorEnd) GetFy() uint32 {
+	if x != nil {
+		return x.Fy
+	}
+	return 0
+}
+
 // The whole state of a connector, a straight line between two ends with an
 // optional arrowhead at each; the last event wins. It follows the shapes it is
 // attached to. Drawn in the page's layers.
 type ConnectorSet struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	From          *ConnectorEnd          `protobuf:"bytes,1,opt,name=from,proto3" json:"from,omitempty"`
-	To            *ConnectorEnd          `protobuf:"bytes,2,opt,name=to,proto3" json:"to,omitempty"`
-	FromHead      Arrowhead              `protobuf:"varint,3,opt,name=from_head,json=fromHead,proto3,enum=styli.ink.v1.Arrowhead" json:"from_head,omitempty"`
-	ToHead        Arrowhead              `protobuf:"varint,4,opt,name=to_head,json=toHead,proto3,enum=styli.ink.v1.Arrowhead" json:"to_head,omitempty"`
-	Color         uint32                 `protobuf:"varint,5,opt,name=color,proto3" json:"color,omitempty"` // as a shape's outline colour
-	LineWidth     uint32                 `protobuf:"varint,6,opt,name=line_width,json=lineWidth,proto3" json:"line_width,omitempty"`
-	LineStyle     LineStyle              `protobuf:"varint,7,opt,name=line_style,json=lineStyle,proto3,enum=styli.ink.v1.LineStyle" json:"line_style,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	From      *ConnectorEnd          `protobuf:"bytes,1,opt,name=from,proto3" json:"from,omitempty"`
+	To        *ConnectorEnd          `protobuf:"bytes,2,opt,name=to,proto3" json:"to,omitempty"`
+	FromHead  Arrowhead              `protobuf:"varint,3,opt,name=from_head,json=fromHead,proto3,enum=styli.ink.v1.Arrowhead" json:"from_head,omitempty"`
+	ToHead    Arrowhead              `protobuf:"varint,4,opt,name=to_head,json=toHead,proto3,enum=styli.ink.v1.Arrowhead" json:"to_head,omitempty"`
+	Color     uint32                 `protobuf:"varint,5,opt,name=color,proto3" json:"color,omitempty"` // as a shape's outline colour
+	LineWidth uint32                 `protobuf:"varint,6,opt,name=line_width,json=lineWidth,proto3" json:"line_width,omitempty"`
+	LineStyle LineStyle              `protobuf:"varint,7,opt,name=line_style,json=lineStyle,proto3,enum=styli.ink.v1.LineStyle" json:"line_style,omitempty"`
+	Route     ConnectorRoute         `protobuf:"varint,8,opt,name=route,proto3,enum=styli.ink.v1.ConnectorRoute" json:"route,omitempty"`
+	// How far the middle of the route is pushed from where it would be, in page
+	// units: sideways for a curve, along the span for an elbow's middle segment.
+	// Zero (and so absent in a log written before this was added) is the default.
+	Bend int32 `protobuf:"zigzag32,9,opt,name=bend,proto3" json:"bend,omitempty"`
+	// Extra points the route passes through between its two ends, each as x then
+	// y in page units, in order from the first end. A curve runs smoothly through
+	// them, an elbow turns at right angles between them and a straight route
+	// bends at them. With any, `bend` is not used.
+	Via           []int32 `protobuf:"zigzag32,10,rep,packed,name=via,proto3" json:"via,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1778,6 +1858,27 @@ func (x *ConnectorSet) GetLineStyle() LineStyle {
 		return x.LineStyle
 	}
 	return LineStyle_LINE_SOLID
+}
+
+func (x *ConnectorSet) GetRoute() ConnectorRoute {
+	if x != nil {
+		return x.Route
+	}
+	return ConnectorRoute_ROUTE_STRAIGHT
+}
+
+func (x *ConnectorSet) GetBend() int32 {
+	if x != nil {
+		return x.Bend
+	}
+	return 0
+}
+
+func (x *ConnectorSet) GetVia() []int32 {
+	if x != nil {
+		return x.Via
+	}
+	return nil
 }
 
 type ConnectorRemoved struct {
@@ -2083,12 +2184,14 @@ const file_ink_proto_rawDesc = "" +
 	"\n" +
 	"text_color\x18\x0e \x01(\rR\ttextColor\x12\x1b\n" +
 	"\tfont_size\x18\x0f \x01(\rR\bfontSize\"\x0e\n" +
-	"\fShapeRemoved\"X\n" +
+	"\fShapeRemoved\"x\n" +
 	"\fConnectorEnd\x12\x14\n" +
 	"\x05shape\x18\x01 \x01(\fR\x05shape\x12\x16\n" +
 	"\x06anchor\x18\x02 \x01(\rR\x06anchor\x12\f\n" +
 	"\x01x\x18\x03 \x01(\x11R\x01x\x12\f\n" +
-	"\x01y\x18\x04 \x01(\x11R\x01y\"\xbf\x02\n" +
+	"\x01y\x18\x04 \x01(\x11R\x01y\x12\x0e\n" +
+	"\x02fx\x18\x05 \x01(\rR\x02fx\x12\x0e\n" +
+	"\x02fy\x18\x06 \x01(\rR\x02fy\"\x9d\x03\n" +
 	"\fConnectorSet\x12.\n" +
 	"\x04from\x18\x01 \x01(\v2\x1a.styli.ink.v1.ConnectorEndR\x04from\x12*\n" +
 	"\x02to\x18\x02 \x01(\v2\x1a.styli.ink.v1.ConnectorEndR\x02to\x124\n" +
@@ -2098,7 +2201,11 @@ const file_ink_proto_rawDesc = "" +
 	"\n" +
 	"line_width\x18\x06 \x01(\rR\tlineWidth\x126\n" +
 	"\n" +
-	"line_style\x18\a \x01(\x0e2\x17.styli.ink.v1.LineStyleR\tlineStyle\"\x12\n" +
+	"line_style\x18\a \x01(\x0e2\x17.styli.ink.v1.LineStyleR\tlineStyle\x122\n" +
+	"\x05route\x18\b \x01(\x0e2\x1c.styli.ink.v1.ConnectorRouteR\x05route\x12\x12\n" +
+	"\x04bend\x18\t \x01(\x11R\x04bend\x12\x14\n" +
+	"\x03via\x18\n" +
+	" \x03(\x11B\x02\x10\x01R\x03via\"\x12\n" +
 	"\x10ConnectorRemoved\"N\n" +
 	"\x04Ring\x12\x0e\n" +
 	"\x02x0\x18\x01 \x01(\x11R\x02x0\x12\x0e\n" +
@@ -2131,7 +2238,11 @@ const file_ink_proto_rawDesc = "" +
 	"\n" +
 	"ARROW_OPEN\x10\x01\x12\x10\n" +
 	"\fARROW_FILLED\x10\x02\x12\r\n" +
-	"\tARROW_DOT\x10\x03B6\n" +
+	"\tARROW_DOT\x10\x03*F\n" +
+	"\x0eConnectorRoute\x12\x12\n" +
+	"\x0eROUTE_STRAIGHT\x10\x00\x12\x0f\n" +
+	"\vROUTE_ELBOW\x10\x01\x12\x0f\n" +
+	"\vROUTE_CURVE\x10\x02B6\n" +
 	"\x13app.styli.ink.protoP\x01Z\x1dstyli/core/internal/ink/inkpbb\x06proto3"
 
 var (
@@ -2146,7 +2257,7 @@ func file_ink_proto_rawDescGZIP() []byte {
 	return file_ink_proto_rawDescData
 }
 
-var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_ink_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_ink_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_ink_proto_goTypes = []any{
 	(Tool)(0),                // 0: styli.ink.v1.Tool
@@ -2154,60 +2265,62 @@ var file_ink_proto_goTypes = []any{
 	(LineStyle)(0),           // 2: styli.ink.v1.LineStyle
 	(ShapeKind)(0),           // 3: styli.ink.v1.ShapeKind
 	(Arrowhead)(0),           // 4: styli.ink.v1.Arrowhead
-	(*Record)(nil),           // 5: styli.ink.v1.Record
-	(*Header)(nil),           // 6: styli.ink.v1.Header
-	(*Event)(nil),            // 7: styli.ink.v1.Event
-	(*StrokeAdded)(nil),      // 8: styli.ink.v1.StrokeAdded
-	(*StrokeErased)(nil),     // 9: styli.ink.v1.StrokeErased
-	(*Transformed)(nil),      // 10: styli.ink.v1.Transformed
-	(*TextBoxSet)(nil),       // 11: styli.ink.v1.TextBoxSet
-	(*TextBoxRemoved)(nil),   // 12: styli.ink.v1.TextBoxRemoved
-	(*TableSet)(nil),         // 13: styli.ink.v1.TableSet
-	(*TableRemoved)(nil),     // 14: styli.ink.v1.TableRemoved
-	(*ZMoved)(nil),           // 15: styli.ink.v1.ZMoved
-	(*PageSet)(nil),          // 16: styli.ink.v1.PageSet
-	(*ShapeSet)(nil),         // 17: styli.ink.v1.ShapeSet
-	(*ShapeRemoved)(nil),     // 18: styli.ink.v1.ShapeRemoved
-	(*ConnectorEnd)(nil),     // 19: styli.ink.v1.ConnectorEnd
-	(*ConnectorSet)(nil),     // 20: styli.ink.v1.ConnectorSet
-	(*ConnectorRemoved)(nil), // 21: styli.ink.v1.ConnectorRemoved
-	(*Ring)(nil),             // 22: styli.ink.v1.Ring
-	(*FillSet)(nil),          // 23: styli.ink.v1.FillSet
-	(*FillRemoved)(nil),      // 24: styli.ink.v1.FillRemoved
+	(ConnectorRoute)(0),      // 5: styli.ink.v1.ConnectorRoute
+	(*Record)(nil),           // 6: styli.ink.v1.Record
+	(*Header)(nil),           // 7: styli.ink.v1.Header
+	(*Event)(nil),            // 8: styli.ink.v1.Event
+	(*StrokeAdded)(nil),      // 9: styli.ink.v1.StrokeAdded
+	(*StrokeErased)(nil),     // 10: styli.ink.v1.StrokeErased
+	(*Transformed)(nil),      // 11: styli.ink.v1.Transformed
+	(*TextBoxSet)(nil),       // 12: styli.ink.v1.TextBoxSet
+	(*TextBoxRemoved)(nil),   // 13: styli.ink.v1.TextBoxRemoved
+	(*TableSet)(nil),         // 14: styli.ink.v1.TableSet
+	(*TableRemoved)(nil),     // 15: styli.ink.v1.TableRemoved
+	(*ZMoved)(nil),           // 16: styli.ink.v1.ZMoved
+	(*PageSet)(nil),          // 17: styli.ink.v1.PageSet
+	(*ShapeSet)(nil),         // 18: styli.ink.v1.ShapeSet
+	(*ShapeRemoved)(nil),     // 19: styli.ink.v1.ShapeRemoved
+	(*ConnectorEnd)(nil),     // 20: styli.ink.v1.ConnectorEnd
+	(*ConnectorSet)(nil),     // 21: styli.ink.v1.ConnectorSet
+	(*ConnectorRemoved)(nil), // 22: styli.ink.v1.ConnectorRemoved
+	(*Ring)(nil),             // 23: styli.ink.v1.Ring
+	(*FillSet)(nil),          // 24: styli.ink.v1.FillSet
+	(*FillRemoved)(nil),      // 25: styli.ink.v1.FillRemoved
 }
 var file_ink_proto_depIdxs = []int32{
-	6,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
-	7,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
-	8,  // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
-	9,  // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
-	10, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
-	11, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
-	12, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
-	16, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
-	13, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
-	14, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
-	15, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
-	17, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
-	18, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
-	20, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
-	21, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
-	23, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
-	24, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
+	7,  // 0: styli.ink.v1.Record.header:type_name -> styli.ink.v1.Header
+	8,  // 1: styli.ink.v1.Record.event:type_name -> styli.ink.v1.Event
+	9,  // 2: styli.ink.v1.Event.stroke_added:type_name -> styli.ink.v1.StrokeAdded
+	10, // 3: styli.ink.v1.Event.stroke_erased:type_name -> styli.ink.v1.StrokeErased
+	11, // 4: styli.ink.v1.Event.transformed:type_name -> styli.ink.v1.Transformed
+	12, // 5: styli.ink.v1.Event.text_box_set:type_name -> styli.ink.v1.TextBoxSet
+	13, // 6: styli.ink.v1.Event.text_box_removed:type_name -> styli.ink.v1.TextBoxRemoved
+	17, // 7: styli.ink.v1.Event.page_set:type_name -> styli.ink.v1.PageSet
+	14, // 8: styli.ink.v1.Event.table_set:type_name -> styli.ink.v1.TableSet
+	15, // 9: styli.ink.v1.Event.table_removed:type_name -> styli.ink.v1.TableRemoved
+	16, // 10: styli.ink.v1.Event.z_moved:type_name -> styli.ink.v1.ZMoved
+	18, // 11: styli.ink.v1.Event.shape_set:type_name -> styli.ink.v1.ShapeSet
+	19, // 12: styli.ink.v1.Event.shape_removed:type_name -> styli.ink.v1.ShapeRemoved
+	21, // 13: styli.ink.v1.Event.connector_set:type_name -> styli.ink.v1.ConnectorSet
+	22, // 14: styli.ink.v1.Event.connector_removed:type_name -> styli.ink.v1.ConnectorRemoved
+	24, // 15: styli.ink.v1.Event.fill_set:type_name -> styli.ink.v1.FillSet
+	25, // 16: styli.ink.v1.Event.fill_removed:type_name -> styli.ink.v1.FillRemoved
 	0,  // 17: styli.ink.v1.StrokeAdded.tool:type_name -> styli.ink.v1.Tool
 	1,  // 18: styli.ink.v1.PageSet.template:type_name -> styli.ink.v1.Template
 	3,  // 19: styli.ink.v1.ShapeSet.kind:type_name -> styli.ink.v1.ShapeKind
 	2,  // 20: styli.ink.v1.ShapeSet.line_style:type_name -> styli.ink.v1.LineStyle
-	19, // 21: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
-	19, // 22: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
+	20, // 21: styli.ink.v1.ConnectorSet.from:type_name -> styli.ink.v1.ConnectorEnd
+	20, // 22: styli.ink.v1.ConnectorSet.to:type_name -> styli.ink.v1.ConnectorEnd
 	4,  // 23: styli.ink.v1.ConnectorSet.from_head:type_name -> styli.ink.v1.Arrowhead
 	4,  // 24: styli.ink.v1.ConnectorSet.to_head:type_name -> styli.ink.v1.Arrowhead
 	2,  // 25: styli.ink.v1.ConnectorSet.line_style:type_name -> styli.ink.v1.LineStyle
-	22, // 26: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	5,  // 26: styli.ink.v1.ConnectorSet.route:type_name -> styli.ink.v1.ConnectorRoute
+	23, // 27: styli.ink.v1.FillSet.rings:type_name -> styli.ink.v1.Ring
+	28, // [28:28] is the sub-list for method output_type
+	28, // [28:28] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_ink_proto_init() }
@@ -2241,7 +2354,7 @@ func file_ink_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ink_proto_rawDesc), len(file_ink_proto_rawDesc)),
-			NumEnums:      5,
+			NumEnums:      6,
 			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
