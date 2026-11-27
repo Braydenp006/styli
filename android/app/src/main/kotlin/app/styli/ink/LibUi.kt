@@ -55,6 +55,10 @@ class DragState {
     var grab by mutableStateOf(Offset.Zero) // where on the tile the finger took hold, so the lifted copy does not jump
     var size by mutableStateOf(IntSize.Zero) // the tile's size
     val targets = mutableStateMapOf<Folder, Rect>()
+    var trashBox by mutableStateOf<Rect?>(null) // the trash bin that shows while dragging, once it is on screen
+
+    /** Is the finger over the trash bin? */
+    fun overTrash(): Boolean = item != null && trashBox?.let { pos in it } == true
 
     /** The smallest folder box under the finger, never the folder being dragged. */
     fun over(): Folder? {
@@ -80,10 +84,10 @@ fun Modifier.dropTarget(drag: DragState, folder: Folder): Modifier = composed {
  * A tile or row that is tapped to open, or pressed and held to be dragged. Held and let go without moving, it asks
  * for its menu instead (so one gesture does both).
  */
-fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMenu: () -> Unit, onDrop: (Folder) -> Unit, enabled: Boolean = true): Modifier = composed {
+fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMenu: () -> Unit, onDrop: (Folder) -> Unit, enabled: Boolean = true, onTrash: () -> Unit = {}): Modifier = composed {
     var origin by remember { mutableStateOf(Offset.Zero) }
     var tile by remember { mutableStateOf(IntSize.Zero) }
-    val tap = rememberUpdatedState(onTap); val menu = rememberUpdatedState(onMenu); val dropped = rememberUpdatedState(onDrop)
+    val tap = rememberUpdatedState(onTap); val menu = rememberUpdatedState(onMenu); val dropped = rememberUpdatedState(onDrop); val trashed = rememberUpdatedState(onTrash)
     val dragged = rememberUpdatedState(item)
     onGloballyPositioned { origin = it.positionInRoot(); tile = it.size }
         .pointerInput(Unit) { detectTapGestures(onTap = { tap.value() }) }
@@ -94,9 +98,9 @@ fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMen
                 onDragStart = { off -> travel = 0f; drag.item = dragged.value; drag.pos = origin + off; drag.grab = off; drag.size = tile },
                 onDrag = { change, amount -> change.consume(); drag.pos += amount; travel += amount.getDistance() },
                 onDragEnd = {
-                    val target = drag.over()
+                    val target = drag.over(); val bin = drag.overTrash()
                     drag.item = null
-                    if (travel < 24f) menu.value() else if (target != null) dropped.value(target)
+                    if (travel < 24f) menu.value() else if (bin) trashed.value() else if (target != null) dropped.value(target)
                 },
                 onDragCancel = { drag.item = null },
             )

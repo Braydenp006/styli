@@ -168,6 +168,12 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
         return folder
     }
 
+    /** Deletes one trashed file for good. The only way a file leaves the trash without coming back, so the screen asks first. */
+    fun purge(t: Trashed) { require(trash.remove(t)) { "not in the trash" } }
+
+    /** Deletes everything in the trash for good. */
+    fun emptyTrash() { trash.clear() }
+
     fun setPinned(f: Folder, pinned: Boolean) { f.pinned = pinned }
     fun setPinned(file: NoteFile, pinned: Boolean) { file.pinned = pinned }
 

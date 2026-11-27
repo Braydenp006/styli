@@ -94,6 +94,17 @@ class LibraryTest {
         assertSame(x, lib.folders.single().files.single()) // joins the folder just remade
     }
 
+    @Test fun purgeAndEmptyTrashRemoveOnlyWhatIsAsked() {
+        val f = lib.newFolder("A")
+        val one = lib.newFile(f, "One"); val two = lib.newFile(f, "Two"); val three = lib.newFile(f, "Three")
+        lib.delete(f, one); lib.delete(f, two); lib.delete(f, three)
+        lib.purge(lib.trash.first { it.file === two })
+        assertEquals(setOf(one, three), lib.trash.map { it.file }.toSet())
+        assertTrue(runCatching { lib.purge(Trashed(two, emptyList(), 0)) }.isFailure) // not in the trash any more
+        lib.emptyTrash()
+        assertTrue(lib.trash.isEmpty())
+    }
+
     @Test fun moveFileRenamesOnClash() {
         val a = lib.newFolder("A"); val b = lib.newFolder("B")
         val x = lib.newFile(a, "Note"); lib.newFile(b, "Note")

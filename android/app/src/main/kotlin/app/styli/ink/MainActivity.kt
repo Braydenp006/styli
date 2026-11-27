@@ -29,14 +29,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.navigationBarsPadding
 import kotlinx.coroutines.delay
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.TextButton
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
@@ -65,19 +63,20 @@ class MainActivity : ComponentActivity() {
 private fun Root() {
     val library = remember { Library().also { it.addSamples() } }
     val ui = remember { LibUi() }
+    val settings = remember { AppSettings() }
     var open by remember { mutableStateOf<NoteFile?>(null) }
     val file = open
-    if (file == null) LibraryScreen(library, ui) { open = it }
+    if (file == null) LibraryScreen(library, ui, settings) { open = it }
     else {
         androidx.activity.compose.BackHandler { open = null }
         // A new canvas view for each file, so it starts on that file's own pages.
-        androidx.compose.runtime.key(file) { InkScreen(file.notebook!!) { open = null } }
+        androidx.compose.runtime.key(file) { InkScreen(file.notebook!!, settings) { open = null } }
     }
 }
 
 // Phase 0a prototype only: not styled with the Styli design system on purpose.
 @Composable
-private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
+private fun InkScreen(notebook: Notebook, settings: AppSettings, onLibrary: () -> Unit) {
     var latency by remember { mutableStateOf("Draw to measure latency") }
     var canvas by remember { mutableStateOf<InkCanvasView?>(null) }
     var infinite by remember { mutableStateOf(false) }
@@ -90,12 +89,12 @@ private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
     var shade by remember { mutableStateOf(0) }
     var thick by remember { mutableStateOf(0) }
     // Penmanship, each 0 off, 1 low, 2 medium, 3 high (hold time: 0.3, 0.5, 0.8, 1.2 s)
-    var pLines by remember { mutableStateOf(2) }
-    var pShapes by remember { mutableStateOf(2) }
-    var pLevel by remember { mutableStateOf(2) }
-    var pHold by remember { mutableStateOf(1) }
-    var solid by remember { mutableStateOf(false) }
-    var gridScroll by remember { mutableStateOf(true) } // scrolling over pages: locked to the grid, or seamless
+    var pLines by settings::pLines
+    var pShapes by settings::pShapes
+    var pLevel by settings::pLevel
+    var pHold by settings::pHold
+    var solid by settings::solid
+    var gridScroll by settings::gridScroll
     var tableDialog by remember { mutableStateOf(false) }
     var tRows by remember { mutableStateOf(3) }
     var tCols by remember { mutableStateOf(3) }
@@ -116,7 +115,7 @@ private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
     var startHead by remember { mutableStateOf(Arrowhead.NONE) }
     var endHead by remember { mutableStateOf(Arrowhead.FILLED) }
     var preset by remember { mutableStateOf(ShapePreset.RECTANGLE) }
-    var scroll by remember { mutableStateOf(2) } // how far a scroll carries on: off, low, medium, high
+    var scroll by settings::scroll
     var cell by remember { mutableStateOf(0 to 0) } // the page's (column, row)
     var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
     var textColor by remember { mutableStateOf(0) }
@@ -149,6 +148,7 @@ private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 InkCanvasView(context, notebook).also {
+                    settings.applyTo(it)
                     it.onLatency = { text -> latency = text }
                     it.onZoom = { percent -> zoom = percent }
                     it.onPlacing = { c -> placing = c }

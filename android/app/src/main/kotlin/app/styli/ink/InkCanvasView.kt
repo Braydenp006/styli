@@ -165,6 +165,30 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         flyTo(p)
     }
 
+    /**
+     * The working page drawn alone into a bitmap about [width] pixels wide, for a cover in the Library: just the sheet
+     * (the whole canvas if it is infinite), with no tools' overlays. Lays the view out at an off-screen size first, so
+     * call it on a view that was never shown, over a notebook of one page.
+     */
+    fun snapshot(width: Int, thicken: Float = 1f): Bitmap {
+        this.thicken = thicken
+        val m = PageGeometry.MARGIN
+        val p = work.page
+        val sheetW = width - 2 * m
+        val sheetH = if (p.infinite) sheetW else sheetW * p.height / p.width
+        val w = width; val h = (sheetH + 2 * m).toInt() + 2
+        measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
+        layout(0, 0, w, h)
+        val full = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        sampling = true
+        try { pageLayer.draw(Canvas(full)) } finally { sampling = false }
+        if (p.infinite) return full
+        val g = geometry
+        val l = g.toScreenX(0.0).toInt().coerceIn(0, w - 1); val t = g.toScreenY(0.0).toInt().coerceIn(0, h - 1)
+        val r = g.toScreenX(g.pageW.toDouble()).toInt().coerceIn(l + 1, w); val b = g.toScreenY(g.pageH.toDouble()).toInt().coerceIn(t + 1, h)
+        return Bitmap.createBitmap(full, l, t, r - l, b - t).also { full.recycle() }
+    }
+
     /** How scrolling goes over several pages: free across them, or locked to the grid (see [ScrollMode]). */
     var scrollMode = ScrollMode.GRID
         set(v) { field = v; stopGlide(); gridCell = null; settle(); pageLayer.invalidate() }
@@ -831,11 +855,13 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         }
 
     /** A stroke the library can draw, rebuilt from recorded points (after an undo or a partial erase). */
+    private var thicken = 1f // above 1 only for a cover picture: hairlines would vanish when it is shrunk (see [snapshot])
+
     private fun buildStroke(item: Item): Stroke {
         val batch = MutableStrokeInputBatch()
         for (p in item.pts) batch.add(InputToolType.STYLUS, p.x, p.y, p.t, StrokeInput.NO_STROKE_UNIT_LENGTH, p.p)
         val hl = item.tool == StrokeTool.TOOL_HIGHLIGHTER
-        return Stroke(brushFor(if (hl) highlighterFamily else penFamily, item.color, item.width), batch)
+        return Stroke(brushFor(if (hl) highlighterFamily else penFamily, item.color, (item.width * thicken).toInt()), batch)
     }
 
     private fun place(stroke: Stroke, item: Item): Placed {

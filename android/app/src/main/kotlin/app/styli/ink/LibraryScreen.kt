@@ -28,21 +28,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,7 +49,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -93,7 +95,7 @@ private val folderColours: List<Pair<String, Int?>> = listOf(
     "Green" to 0xFF4F9A6B.toInt(), "Teal" to 0xFF3A9AA0.toInt(), "Blue" to 0xFF4A78C2.toInt(), "Purple" to 0xFF8A64B8.toInt(),
 )
 
-private fun noteWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 96.dp; Size3.MEDIUM -> 132.dp; Size3.LARGE -> 180.dp }
+internal fun noteWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 96.dp; Size3.MEDIUM -> 132.dp; Size3.LARGE -> 180.dp }
 private fun folderWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 88.dp; Size3.MEDIUM -> 120.dp; Size3.LARGE -> 168.dp }
 internal fun kindLabel(k: FileKind) = when (k) { FileKind.INK -> "Ink"; FileKind.MARKDOWN -> "Markdown"; FileKind.PDF -> "PDF" }
 
@@ -112,7 +114,7 @@ internal fun folderChoices(lib: Library, exclude: Folder? = null): List<Pair<Fol
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
+fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteFile) -> Unit) {
     val sty = LocalSty.current
     val context = LocalContext.current
     val drag = remember { DragState() }
@@ -147,18 +149,26 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
         ui.changed()
     }
     fun parentOf(f: NoteFile): Folder? = lib.root.allFiles().firstOrNull { it.second === f }?.first
+    fun trashed(d: Dragged) {
+        val file = d.file
+        if (file != null && d.from != null) {
+            lib.delete(d.from, file)
+            Toast.makeText(context, "\"${file.name}\" moved to the trash on this device", Toast.LENGTH_SHORT).show()
+            ui.changed()
+        } else if (d.folder != null) action = Action.DeleteFolder(d.folder) // a folder takes many files with it, so it asks
+    }
     fun visible(files: List<NoteFile>) = lib.sorted(files.filter { ui.filter == null || it.kind == ui.filter }, ui.sort)
 
     @Composable
     fun Card(folder: Folder, file: NoteFile) {
         var menu by remember { mutableStateOf(false) }
         val w = noteWidth(ui.noteSize)
-        val item = Dragged(null, file, folder, file.name, { CardFace(folder, file, w, now, Modifier) })
+        val item = Dragged(null, file, folder, file.name, { CardFace(folder.color, file, w, cardSub(file, now), Modifier) })
         Box {
             CardFace(
-                folder, file, w, now,
+                folder.color, file, w, cardSub(file, now),
                 Modifier.alpha(if (drag.item?.file === file) 0.3f else 1f) // the one being carried leaves a faint ghost behind
-                    .dragSource(drag, item, { if (ui.selecting) ui.toggle(file) else open(file) }, { menu = true }, { moved(item, it) }, enabled = !ui.selecting),
+                    .dragSource(drag, item, { if (ui.selecting) ui.toggle(file) else open(file) }, { menu = true }, { moved(item, it) }, enabled = !ui.selecting, onTrash = { trashed(item) }),
                 picked = if (ui.selecting) file in ui.selected else null,
             )
             DropdownMenu(menu, { menu = false }) {
@@ -183,7 +193,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                 folder, w, total, hover === folder,
                 Modifier.alpha(if (drag.item?.folder === folder) 0.3f else 1f).graphicsLayer { scaleX = grow; scaleY = grow }
                     .dropTarget(drag, folder)
-                    .dragSource(drag, item, { if (ui.selecting) ui.toggle(folder) else ui.openFolder = folder }, { menu = true }, { moved(item, it) }, enabled = !ui.selecting),
+                    .dragSource(drag, item, { if (ui.selecting) ui.toggle(folder) else ui.openFolder = folder }, { menu = true }, { moved(item, it) }, enabled = !ui.selecting, onTrash = { trashed(item) }),
                 picked = if (ui.selecting) folder in ui.selected else null,
             )
             DropdownMenu(menu, { menu = false }) {
@@ -212,14 +222,16 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = StySize.space6, vertical = StySize.space5)) {
                     if (tab != 0) {
-                        val (title, blurb) = when (tab) {
-                            1 -> "Nexus" to "A graph of how your notes link together. It comes later."
-                            2 -> "Itinerarium" to "Paths you choose through your notes, in an order you set. It comes later."
-                            3 -> "Trash" to "Deleted files will be listed here, so you can bring them back. It comes later."
-                            else -> "Settings" to "Device, pens and storage settings. They come later."
+                        when (tab) {
+                            3 -> TrashScreen(lib, ui) { settings.section = SettingsSection.TRASH; tab = 4 }
+                            4 -> SettingsScreen(settings, lib, ui)
+                            else -> {
+                                val (title, blurb) = if (tab == 1) "Nexus" to "A graph of how your notes link together. It comes later."
+                                else "Itinerarium" to "Paths you choose through your notes, in an order you set. It comes later."
+                                Text(title, color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
+                                Text(blurb, Modifier.padding(top = StySize.space2), color = sty.inkMuted)
+                            }
                         }
-                        Text(title, color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
-                        Text(blurb, Modifier.padding(top = StySize.space2), color = sty.inkMuted)
                     } else if (managing) {
                         ManageFolders(lib, ui, drag, hover, onOpen = ::open, onAction = { action = it }, onDone = { managing = false })
                     } else {
@@ -322,10 +334,27 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                     }
                 }
                 if (tab == 0 && !managing) {
+                    Box(Modifier.align(Alignment.BottomStart).padding(start = StySize.space6, bottom = StySize.space4)) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        drag.item != null,
+                        enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut(),
+                    ) {
+                        // Same style as the plus, but outlined in red: let go of a file or folder here to send it to the trash.
+                        val over = drag.overTrash()
+                        val grow by androidx.compose.animation.core.animateFloatAsState(if (over) 1.15f else 1f, label = "bin grows")
+                        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { drag.trashBox = null } }
+                        Box(
+                            Modifier.size(60.dp).graphicsLayer { scaleX = grow; scaleY = grow }.shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp))
+                                .background(sty.bg.copy(alpha = 0.7f)).background(if (over) sty.danger.copy(alpha = 0.4f) else sty.danger.copy(alpha = 0.22f)).border(2.dp, sty.danger, SquircleShape(20.dp))
+                                .onGloballyPositioned { drag.trashBox = it.boundsInRoot() },
+                            contentAlignment = Alignment.Center,
+                        ) { StyIcon(Ic.TRASH, sty.ink, 28.dp) }
+                    }
+                    }
                     Row(Modifier.align(Alignment.BottomEnd).padding(end = StySize.space6, bottom = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
                         Box {
                             Box(
-                                Modifier.size(60.dp).clip(SquircleShape(20.dp)).background(sty.honeyTint).border(2.dp, sty.honey, SquircleShape(20.dp)).clickable { plusOpen = true },
+                                Modifier.size(60.dp).shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp)).background(sty.bg.copy(alpha = 0.7f)).background(sty.honeyTint).border(2.dp, sty.honey, SquircleShape(20.dp)).clickable { plusOpen = true },
                                 contentAlignment = Alignment.Center,
                             ) { StyIcon(Ic.PLUS, sty.ink, 28.dp) }
                             DropdownMenu(plusOpen, { plusOpen = false }) {
@@ -470,22 +499,24 @@ private fun PinBadge() {
     }
 }
 
+private fun cardSub(file: NoteFile, now: Long) = if (file.kind == FileKind.INK) agoText(now, file.opened) else kindLabel(file.kind)
+
 /** A file as a card (cover, name, when it was opened). Also what is shown lifted while it is dragged. */
 @Composable
-private fun CardFace(folder: Folder, file: NoteFile, w: Dp, now: Long, modifier: Modifier, picked: Boolean? = null) {
+internal fun CardFace(color: Int?, file: NoteFile, w: Dp, sub: String, modifier: Modifier, picked: Boolean? = null) {
     val sty = LocalSty.current
     Box(Modifier.width(w)) {
     Column(
         Modifier.fillMaxWidth().clip(SquircleShape(StySize.radiusLg)).border(if (picked == true) 2.dp else 1.dp, if (picked == true) sty.honey else sty.border, SquircleShape(StySize.radiusLg))
             .background(sty.surface).then(modifier).padding(StySize.space3),
     ) {
-        folder.color?.let { Box(Modifier.fillMaxWidth().height(4.dp).clip(SquircleShape(2.dp)).background(Color(it))) }
+        color?.let { Box(Modifier.fillMaxWidth().height(4.dp).clip(SquircleShape(2.dp)).background(Color(it))) }
         Box {
             Cover(file, Modifier.fillMaxWidth().height(w * 1.1f).padding(top = StySize.space2))
             if (file.pinned) Box(Modifier.align(Alignment.TopEnd).padding(StySize.space1)) { PinBadge() }
         }
         Text(file.name, Modifier.padding(top = StySize.space2), color = sty.ink, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
-        Text(if (file.kind == FileKind.INK) agoText(now, file.opened) else kindLabel(file.kind), color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
+        Text(sub, color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
     }
     picked?.let { SelectTab(it, Modifier.align(Alignment.TopCenter)) }
     }
@@ -562,9 +593,13 @@ private fun DragGhost(drag: DragState, d: Dragged) {
 
 /** A tiny picture of the file: its first page for ink, text lines for Markdown, a page with a tag for a PDF. */
 @Composable
-private fun Cover(file: NoteFile, modifier: Modifier) {
+internal fun Cover(file: NoteFile, modifier: Modifier) {
     val sty = LocalSty.current
     val p = file.notebook?.pages?.first()?.page
+    val context = LocalContext.current
+    val version = Covers.version(file)
+    // Made after the cover first appears (a blank page needs none), then kept until the page changes.
+    val picture by produceState<Covers.Pyramid?>(null, file, version) { value = Covers.of(context, file) }
     Canvas(modifier) {
         val aspect = if (p == null) 0.75f else if (p.infinite) 1f else p.width.toFloat() / p.height
         val h = minOf(size.height, size.width / aspect)
@@ -572,6 +607,12 @@ private fun Cover(file: NoteFile, modifier: Modifier) {
         val x0 = (size.width - w) / 2; val y0 = (size.height - h) / 2
         drawRect(Color.White, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h))
         drawRect(sty.border, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1f))
+        val pic = picture?.pick(w.roundToInt())
+        if (pic != null) {
+            drawImage(pic, dstOffset = androidx.compose.ui.unit.IntOffset(x0.roundToInt(), y0.roundToInt()), dstSize = androidx.compose.ui.unit.IntSize(w.roundToInt(), h.roundToInt()), filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+            drawRect(sty.border, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1f))
+            return@Canvas
+        }
         val step = h / 14
         val ruling = Color(0xFFC9D3E6) // the paper is white in both themes, so its lines are too
         when {
@@ -670,9 +711,12 @@ private fun NewFileDialog(lib: Library, start: Folder, onDismiss: () -> Unit, on
 }
 
 @Composable
-internal fun Chips(label: String, options: List<String>, chosen: Int, onPick: (Int) -> Unit) {
+internal fun Chips(label: String, options: List<String>, chosen: Int, special: Boolean = false, onPick: (Int) -> Unit) {
+    val sty = LocalSty.current
+    // A special (important) setting picks in solid honey, so it stands out from the ordinary ones.
+    val colours = if (special) FilterChipDefaults.filterChipColors(selectedContainerColor = sty.honey, selectedLabelColor = sty.onHoney) else FilterChipDefaults.filterChipColors()
     Text(label, color = LocalSty.current.inkMuted, style = MaterialTheme.typography.labelMedium)
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space2)) {
-        options.forEachIndexed { i, o -> FilterChip(i == chosen, { onPick(i) }, { Text(o) }, Modifier.heightIn(min = StySize.touch)) }
+        options.forEachIndexed { i, o -> FilterChip(i == chosen, { onPick(i) }, { Text(o) }, Modifier.heightIn(min = StySize.touch), colors = colours) }
     }
 }
