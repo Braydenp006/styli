@@ -65,13 +65,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Root() {
     val library = remember { Library() }
+    val ui = remember { LibUi() }
     var open by remember { mutableStateOf<NoteFile?>(null) }
     val file = open
-    if (file == null) LibraryScreen(library) { open = it }
+    if (file == null) LibraryScreen(library, ui) { open = it }
     else {
         androidx.activity.compose.BackHandler { open = null }
         // A new canvas view for each file, so it starts on that file's own pages.
-        androidx.compose.runtime.key(file) { InkScreen(file.notebook) { open = null } }
+        androidx.compose.runtime.key(file) { InkScreen(file.notebook!!) { open = null } }
     }
 }
 
@@ -174,7 +175,7 @@ private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val gap = Modifier.padding(start = 8.dp)
-            Button(onClick = onLibrary) { Text("Library") }
+            Button(onClick = onLibrary) { Text("Tabularium") }
             Button(onClick = { canvas?.undo() }, gap) { Text("Undo") }
             Button(onClick = { canvas?.redo() }, gap) { Text("Redo") }
             Button(onClick = { canvas?.undoPage() }, gap) { Text("Undo page change") }

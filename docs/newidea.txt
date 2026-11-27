@@ -1,0 +1,131 @@
+I think Nexus and Itinerarium could complement each other really well without feeling like two versions of the same feature.
+- Nexus shows you the relationships between your notes.
+- Itinerarium lets you turn those relationships into a deliberate journey through your ideas.
+The key distinction is that Nexus is discovery, while Itinerarium is direction.
+The basic concept
+Imagine you're collecting notes about consciousness, philosophy, and the universe. Your Nexus graph might reveal that several notes connect to one another.
+
+But sometimes you don't want to explore randomly. You want to follow a particular line of thought, perhaps one you've been developing over several weeks.
+
+That's where Itinerarium comes in.
+1. Itinerarium as a path through your notes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+10
+
+
+
+
+
+
+
+
+
+
+
+Rather than another canvas full of nodes, Itinerarium could be a linear, scrollable trail of notes.
+
+Each Itinerarium has:
+- A title
+- A short description of what you're exploring
+- An ordered sequence of notes
+- Optional commentary between notes
+- A way to branch into another path
+For example:
+ITINERARIUM / PHILOSOPHY
+The nature of consciousness
+A path through my thoughts on awareness and reality.
+
+7 entries
+
+
+1. What is consciousness?
+   
+   The original question that started this path.
+2. The hard problem
+   
+   Why subjective experience is difficult to explain.
+3. Emergence and complexity
+   
+   Could consciousness emerge from simpler systems?
+4. The universe observing itself
+   
+   A speculative connection to cosmology.
+5. Where this leaves me
+   
+   Your own synthesis or conclusion.
+
+Each entry opens the original note. The path doesn't duplicate or move your notes.
+
+This would be useful for research, essay preparation, personal reflection, or simply following a fascinating train of thought.
+2. The important part: paths aren't folders
+I wouldn't make Itinerarium another organizational hierarchy.
+
+A note should be able to belong to:
+- Your Tabularium, as its permanent home
+- Several Nexus connections
+- Multiple Itineraria
+For instance, your note about emergence could appear in a path about consciousness, another about artificial intelligence, and another about the philosophy of science.
+
+The Itinerarium is not where the note lives. It's how you choose to encounter it.
+
+That distinction makes the feature genuinely valuable.
+3. How users could create one
+I'd support three ways of making an Itinerarium.
+
+Curate a path
+
+Start with a blank Itinerarium, then add notes in whatever order makes sense. Drag entries around, add commentary, and create branches.
+
+
+
+
+Create from Nexus
+
+Select a group of connected notes in the graph and turn them into an Itinerarium. You can then arrange them into a meaningful sequence.
+
+
+
+
+Suggested paths
+
+Styli could suggest a route through related notes based on links, tags, and recent writing. You decide whether to save it as an Itinerarium.
+
+
+
+4. Make it feel like Styli, not a generic playlist
+I would give Itinerarium a few distinctive features:
+Waypoints
+Each note in the path is a waypoint. You can mark certain notes as important stops, or add a brief explanation of why they belong in the sequence.
+Branches
+At certain points, a path could split into two directions.
+
+For example, a path about consciousness might branch into neuroscience and philosophy. Both branches could eventually reconnect.
+
+This is where Itinerarium could borrow a little from Nexus without becoming a graph itself.
+Resumable journeys
+You could mark where you last stopped and return later. An Itinerarium might show your progress through a research project or a collection of ideas you're still developing.
+A final synthesis
+At the end of a path, Styli could offer a special concluding entry: a note where you summarize what you've learned, what changed your mind, or what questions remain.
+
+That would make Itinerarium more than a reading list. It becomes a record of how your understanding evolved.
