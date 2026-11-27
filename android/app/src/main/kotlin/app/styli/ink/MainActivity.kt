@@ -57,13 +57,27 @@ import app.styli.ink.proto.Template
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { InkScreen() } }
+        setContent { StyliTheme { Root() } }
+    }
+}
+
+/** The Library first; opening a file shows its pages on the canvas, and Back returns to the Library. */
+@Composable
+private fun Root() {
+    val library = remember { Library() }
+    var open by remember { mutableStateOf<NoteFile?>(null) }
+    val file = open
+    if (file == null) LibraryScreen(library) { open = it }
+    else {
+        androidx.activity.compose.BackHandler { open = null }
+        // A new canvas view for each file, so it starts on that file's own pages.
+        androidx.compose.runtime.key(file) { InkScreen(file.notebook) { open = null } }
     }
 }
 
 // Phase 0a prototype only: not styled with the Styli design system on purpose.
 @Composable
-private fun InkScreen() {
+private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
     var latency by remember { mutableStateOf("Draw to measure latency") }
     var canvas by remember { mutableStateOf<InkCanvasView?>(null) }
     var infinite by remember { mutableStateOf(false) }
@@ -134,7 +148,7 @@ private fun InkScreen() {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
-                InkCanvasView(context).also {
+                InkCanvasView(context, notebook).also {
                     it.onLatency = { text -> latency = text }
                     it.onZoom = { percent -> zoom = percent }
                     it.onPlacing = { c -> placing = c }
@@ -148,7 +162,10 @@ private fun InkScreen() {
                         cell = p.col to p.row
                     }
                     canvas = it
-                    apply()
+                    // Show the opened file's own first page in the page buttons (the file already has its look).
+                    val p = it.page
+                    infinite = p.infinite; template = p.template; letter = PageSizes.isLetter(p) == true; landscape = PageSizes.isLandscape(p)
+                    cell = p.col to p.row
                 }
             },
         )
@@ -157,7 +174,8 @@ private fun InkScreen() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val gap = Modifier.padding(start = 8.dp)
-            Button(onClick = { canvas?.undo() }) { Text("Undo") }
+            Button(onClick = onLibrary) { Text("Library") }
+            Button(onClick = { canvas?.undo() }, gap) { Text("Undo") }
             Button(onClick = { canvas?.redo() }, gap) { Text("Redo") }
             Button(onClick = { canvas?.undoPage() }, gap) { Text("Undo page change") }
             Button(onClick = { canvas?.redoPage() }, gap) { Text("Redo page change") }

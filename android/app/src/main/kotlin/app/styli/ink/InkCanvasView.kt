@@ -50,7 +50,7 @@ import app.styli.ink.proto.Tool as StrokeTool
  */
 @SuppressLint("RestrictedApi") // the latency callback is marked library-internal, fine for a test tool
 @OptIn(ExperimentalInkLatencyDataApi::class, ExperimentalInkHandoffApi::class)
-class InkCanvasView(context: Context) : FrameLayout(context) {
+class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : FrameLayout(context) {
 
     /** Called with a short latency summary while drawing. */
     var onLatency: ((String) -> Unit)? = null
@@ -61,8 +61,7 @@ class InkCanvasView(context: Context) : FrameLayout(context) {
     /** What the pen in your hand does. */
     enum class Tool { PEN, HIGHLIGHTER, ERASER_STROKE, ERASER_PART, LASSO, LINE, LINE_HIGHLIGHTER, DOTTED, LINE_DOTTED, LASER, TEXT, TABLE, SHAPE, BUCKET, CONNECTOR, CHART }
 
-    /** The pages of this notebook (in memory only for now); the view shows [Notebook.current]. */
-    val notebook = Notebook()
+    // The view shows [notebook]'s current page (in memory only for now).
 
     /** The page the drawing and editing code is working on: the one being drawn, or the one under the pen. */
     private var active: PageModel = notebook.current
