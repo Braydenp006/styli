@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /** Line icons on a 24 grid, 1.5 stroke, rounded caps and joins (the design system's style; Lucide is not bundled yet). */
-enum class Ic { LIBRARY, NEXUS, TRASH, SETTINGS, PLUS, PIN, CHEVRON }
+enum class Ic { LIBRARY, NEXUS, ITINERARIUM, NEWNOTE, TRASH, SETTINGS, PLUS, PIN, CHEVRON }
 
 @Composable
 fun StyIcon(ic: Ic, color: Color, size: Dp = 24.dp) {
@@ -41,6 +41,17 @@ fun StyIcon(ic: Ic, color: Color, size: Dp = 24.dp) {
             Ic.NEXUS -> { // three linked nodes
                 line(p(7f, 16f), p(12f, 7f)); line(p(12f, 7f), p(17f, 16f)); line(p(7f, 16f), p(17f, 16f))
                 for (c in listOf(p(12f, 6f), p(6f, 17f), p(18f, 17f))) drawCircle(color, 2.5f * k, c, style = st)
+            }
+            Ic.ITINERARIUM -> { // a winding path between two stops
+                val route = Path().apply { moveTo(7f * k, 18f * k); cubicTo(18f * k, 18f * k, 6f * k, 11f * k, 17f * k, 6f * k) }
+                drawPath(route, color, style = st)
+                drawCircle(color, 2f * k, p(6f, 18f), style = st); drawCircle(color, 2f * k, p(18f, 6f), style = st)
+            }
+            Ic.NEWNOTE -> { // a sheet of paper with a pen across its corner
+                val sheet = Path().apply { moveTo(14f * k, 4f * k); lineTo(6f * k, 4f * k); lineTo(6f * k, 20f * k); lineTo(18f * k, 20f * k); lineTo(18f * k, 11f * k) }
+                drawPath(sheet, color, style = st)
+                line(p(9f, 9f), p(12f, 9f)); line(p(9f, 13f), p(15f, 13f))
+                line(p(20f, 4f), p(13f, 11f)); line(p(13f, 11f), p(12.5f, 12.5f)); line(p(12.5f, 12.5f), p(14f, 12f)); line(p(14f, 12f), p(21f, 5f))
             }
             Ic.TRASH -> {
                 line(p(4f, 7f), p(20f, 7f)); line(p(9f, 7f), p(9f, 4f)); line(p(9f, 4f), p(15f, 4f)); line(p(15f, 4f), p(15f, 7f))

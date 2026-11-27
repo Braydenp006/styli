@@ -1,6 +1,7 @@
 package app.styli.ink
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,7 +26,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -34,6 +34,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,7 +47,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -79,6 +83,8 @@ internal sealed interface Action {
     class ColourFolder(val folder: Folder) : Action
     class NewFolder(val parent: Folder) : Action
     object ViewOptions : Action
+    object MoveSelected : Action
+    object DeleteSelected : Action
 }
 
 /** Throwaway folder colours (not in `design/tokens.json` yet); null is the default. */
@@ -87,8 +93,8 @@ private val folderColours: List<Pair<String, Int?>> = listOf(
     "Green" to 0xFF4F9A6B.toInt(), "Teal" to 0xFF3A9AA0.toInt(), "Blue" to 0xFF4A78C2.toInt(), "Purple" to 0xFF8A64B8.toInt(),
 )
 
-private fun noteWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 120.dp; Size3.MEDIUM -> 160.dp; Size3.LARGE -> 210.dp }
-private fun folderWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 110.dp; Size3.MEDIUM -> 150.dp; Size3.LARGE -> 200.dp }
+private fun noteWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 96.dp; Size3.MEDIUM -> 132.dp; Size3.LARGE -> 180.dp }
+private fun folderWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 88.dp; Size3.MEDIUM -> 120.dp; Size3.LARGE -> 168.dp }
 internal fun kindLabel(k: FileKind) = when (k) { FileKind.INK -> "Ink"; FileKind.MARKDOWN -> "Markdown"; FileKind.PDF -> "PDF" }
 
 /** Every folder of the library as a choice, indented by depth, leaving out [exclude] and what is inside it. */
@@ -101,7 +107,7 @@ internal fun folderChoices(lib: Library, exclude: Folder? = null): List<Pair<Fol
 }
 
 /**
- * The Tabularium: a bottom bar (Tabularium, Nexus, Trash, Settings), folders as coloured icons, files as covers,
+ * The Tabularium: a bottom bar (Tabularium, Nexus, Itinerarium, Trash, Settings), folders as coloured icons, files as covers,
  * pinned and recent files, a kind filter, search, and drag and drop to move things.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -115,14 +121,16 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
     var query by remember { mutableStateOf("") }
     var creating by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<Action?>(null) }
-    var tab by remember { mutableIntStateOf(0) } // 0 Tabularium, 1 Nexus, 2 Trash, 3 Settings
+    var tab by remember { mutableIntStateOf(0) } // 0 Tabularium, 1 Nexus, 2 Itinerarium, 3 Trash, 4 Settings
     var managing by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var plusOpen by remember { mutableStateOf(false) }
     val now = System.currentTimeMillis()
     val inFolder = ui.openFolder?.takeIf { lib.contains(it) }
     val here = inFolder ?: lib.root
 
-    androidx.activity.compose.BackHandler(tab == 0 && (managing || inFolder != null)) {
+    androidx.activity.compose.BackHandler(tab == 0 && ui.selecting) { ui.stopSelect() }
+    androidx.activity.compose.BackHandler(tab == 0 && !ui.selecting && (managing || inFolder != null)) {
         if (managing) managing = false else ui.openFolder = inFolder?.parent?.takeIf { it !== lib.root }
     }
 
@@ -138,29 +146,23 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
         if (!drop(lib, d, to)) Toast.makeText(context, "A folder cannot go inside itself", Toast.LENGTH_SHORT).show()
         ui.changed()
     }
+    fun parentOf(f: NoteFile): Folder? = lib.root.allFiles().firstOrNull { it.second === f }?.first
     fun visible(files: List<NoteFile>) = lib.sorted(files.filter { ui.filter == null || it.kind == ui.filter }, ui.sort)
 
     @Composable
     fun Card(folder: Folder, file: NoteFile) {
         var menu by remember { mutableStateOf(false) }
         val w = noteWidth(ui.noteSize)
-        val item = Dragged(null, file, folder, file.name)
+        val item = Dragged(null, file, folder, file.name, { CardFace(folder, file, w, now, Modifier) })
         Box {
-            Column(
-                Modifier.width(w).clip(RoundedCornerShape(StySize.radiusLg))
-                    .border(1.dp, sty.border, RoundedCornerShape(StySize.radiusLg)).background(sty.surface)
-                    .dragSource(drag, item, { open(file) }, { menu = true }, { moved(item, it) })
-                    .padding(StySize.space3),
-            ) {
-                folder.color?.let { Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(it))) }
-                Box {
-                    Cover(file, Modifier.fillMaxWidth().height(w * 1.1f).padding(top = StySize.space2))
-                    if (file.pinned) Box(Modifier.align(Alignment.TopEnd).padding(StySize.space1)) { StyIcon(Ic.PIN, sty.honeyText, 18.dp) }
-                }
-                Text(file.name, Modifier.padding(top = StySize.space2), color = sty.ink, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
-                Text(if (file.kind == FileKind.INK) agoText(now, file.opened) else kindLabel(file.kind), color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
-            }
+            CardFace(
+                folder, file, w, now,
+                Modifier.alpha(if (drag.item?.file === file) 0.3f else 1f) // the one being carried leaves a faint ghost behind
+                    .dragSource(drag, item, { if (ui.selecting) ui.toggle(file) else open(file) }, { menu = true }, { moved(item, it) }, enabled = !ui.selecting),
+                picked = if (ui.selecting) file in ui.selected else null,
+            )
             DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem({ Text("Select") }, { menu = false; ui.startSelect(file) })
                 DropdownMenuItem({ Text(if (file.pinned) "Unpin" else "Pin") }, { menu = false; lib.setPinned(file, !file.pinned); ui.changed() })
                 DropdownMenuItem({ Text("Rename") }, { menu = false; action = Action.RenameFile(folder, file) })
                 DropdownMenuItem({ Text("Move to folder") }, { menu = false; action = Action.MoveFile(folder, file) })
@@ -174,24 +176,18 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
         var menu by remember(folder) { mutableStateOf(false) }
         val w = folderWidth(ui.folderSize)
         val total = folder.allFiles().size
-        val item = Dragged(folder, null, null, folder.name)
+        val item = Dragged(folder, null, null, folder.name, { FolderFace(folder, w, total, false, Modifier) })
+        val grow by androidx.compose.animation.core.animateFloatAsState(if (hover === folder) 1.1f else 1f, label = "folder grows under a drag")
         Box {
-            Column(
-                Modifier.width(w).clip(RoundedCornerShape(StySize.radiusLg))
-                    .background(if (hover === folder) sty.honeyTint else Color.Transparent)
+            FolderFace(
+                folder, w, total, hover === folder,
+                Modifier.alpha(if (drag.item?.folder === folder) 0.3f else 1f).graphicsLayer { scaleX = grow; scaleY = grow }
                     .dropTarget(drag, folder)
-                    .dragSource(drag, item, { ui.openFolder = folder }, { menu = true }, { moved(item, it) })
-                    .padding(StySize.space3),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Box {
-                    FolderIcon(folder.color?.let { Color(it) } ?: sty.borderStrong, Modifier.width(w * 0.73f).height(w * 0.59f))
-                    if (folder.pinned) Box(Modifier.align(Alignment.TopEnd).padding(2.dp)) { StyIcon(Ic.PIN, sty.ink, 18.dp) }
-                }
-                Text(folder.name, Modifier.padding(top = StySize.space2), color = sty.ink, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
-                Text(if (total == 1) "1 file" else "$total files", color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
-            }
+                    .dragSource(drag, item, { if (ui.selecting) ui.toggle(folder) else ui.openFolder = folder }, { menu = true }, { moved(item, it) }, enabled = !ui.selecting),
+                picked = if (ui.selecting) folder in ui.selected else null,
+            )
             DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem({ Text("Select") }, { menu = false; ui.startSelect(folder) })
                 DropdownMenuItem({ Text(if (folder.pinned) "Unpin" else "Pin") }, { menu = false; lib.setPinned(folder, !folder.pinned); ui.changed() })
                 DropdownMenuItem({ Text("Change colour") }, { menu = false; action = Action.ColourFolder(folder) })
                 DropdownMenuItem({ Text("Rename folder") }, { menu = false; action = Action.RenameFolder(folder) })
@@ -218,7 +214,8 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                     if (tab != 0) {
                         val (title, blurb) = when (tab) {
                             1 -> "Nexus" to "A graph of how your notes link together. It comes later."
-                            2 -> "Trash" to "Deleted files will be listed here, so you can bring them back. It comes later."
+                            2 -> "Itinerarium" to "Paths you choose through your notes, in an order you set. It comes later."
+                            3 -> "Trash" to "Deleted files will be listed here, so you can bring them back. It comes later."
                             else -> "Settings" to "Device, pens and storage settings. They come later."
                         }
                         Text(title, color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
@@ -226,7 +223,20 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                     } else if (managing) {
                         ManageFolders(lib, ui, drag, hover, onOpen = ::open, onAction = { action = it }, onDone = { managing = false })
                     } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (ui.selecting) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(StySize.space2)) {
+                            Button({ ui.stopSelect() }) { Text("Done") }
+                            Text("${ui.selected.size} selected", Modifier.weight(1f).padding(start = StySize.space2), color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineMedium)
+                            val any = ui.selected.isNotEmpty()
+                            val allPinned = ui.selected.all { (it as? NoteFile)?.pinned ?: (it as Folder).pinned }
+                            OutlinedButton({ ui.selected.forEach { if (it is NoteFile) lib.setPinned(it, !allPinned) else lib.setPinned(it as Folder, !allPinned) }; ui.changed() }, enabled = any) { Text(if (allPinned && any) "Unpin" else "Pin") }
+                            OutlinedButton({ action = Action.MoveSelected }, enabled = any) { Text("Move") }
+                            Button({ action = Action.DeleteSelected }, enabled = any, colors = ButtonDefaults.buttonColors(containerColor = sty.danger)) { Text("Delete") }
+                        } else Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (inFolder != null) Box(
+                                Modifier.padding(end = StySize.space3).size(StySize.touch).clip(SquircleShape(14.dp)).background(sty.honeyTint)
+                                    .border(2.dp, sty.honey, SquircleShape(14.dp)).clickable { ui.openFolder = inFolder.parent?.takeIf { it !== lib.root } },
+                                contentAlignment = Alignment.Center,
+                            ) { Box(Modifier.rotate(180f)) { StyIcon(Ic.CHEVRON, sty.ink, 24.dp) } }
                             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                                 // The way back up: each folder above this one is a link, and a place to drop things.
                                 val trail = generateSequence(inFolder) { it.parent }.takeWhile { it !== lib.root }.toList().reversed()
@@ -245,13 +255,12 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                             OutlinedTextField(query, { query = it }, Modifier.width(260.dp), singleLine = true, placeholder = { Text("Search by name") })
                             Box(Modifier.padding(start = StySize.space3)) {
                                 Box(
-                                    Modifier.size(StySize.touch).clip(RoundedCornerShape(StySize.radiusMd)).border(1.dp, sty.borderStrong, RoundedCornerShape(StySize.radiusMd))
+                                    Modifier.size(StySize.touch).clip(SquircleShape(StySize.radiusMd)).border(1.dp, sty.borderStrong, SquircleShape(StySize.radiusMd))
                                         .clickable { menuOpen = !menuOpen },
                                     contentAlignment = Alignment.Center,
                                 ) { MenuIcon(menuOpen, sty.ink) }
                                 DropdownMenu(menuOpen, { menuOpen = false }) {
-                                    DropdownMenuItem({ Text("Add PDF") }, { menuOpen = false }, enabled = false)
-                                    DropdownMenuItem({ Text("New folder") }, { menuOpen = false; action = Action.NewFolder(here) })
+                                    DropdownMenuItem({ Text("Select") }, { menuOpen = false; ui.startSelect() })
                                     DropdownMenuItem({ Text("Manage folders") }, { menuOpen = false; managing = true })
                                     DropdownMenuItem({ Text("View options") }, { menuOpen = false; action = Action.ViewOptions })
                                 }
@@ -269,25 +278,34 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                             } else if (inFolder != null) {
                                 if (inFolder.folders.isNotEmpty()) Tiles(inFolder.folders.sortedBy { it.name.lowercase() })
                                 val files = visible(inFolder.files)
-                                if (inFolder.folders.isEmpty() && inFolder.files.isEmpty()) Text("Empty folder. Tap the plus to add a file.", color = sty.inkMuted)
+                                if (inFolder.folders.isEmpty() && inFolder.files.isEmpty()) Text("Empty folder. Tap the pen and paper to add a note.", color = sty.inkMuted)
                                 else if (files.isEmpty() && inFolder.files.isNotEmpty()) Text("No ${ui.filter?.let(::kindLabel)} files here.", color = sty.inkMuted)
                                 Box(Modifier.padding(top = StySize.space3)) { Cards(files.map { inFolder to it }) }
                             } else if (lib.root.allFolders().size == 1 && lib.root.files.isEmpty()) {
                                 Text("Nothing here yet", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineMedium)
-                                Text("Tap the plus to make your first file, or add a folder from the menu by the search box.", color = sty.inkMuted)
+                                Text("Tap the pen and paper to write your first note, or the plus to add a folder.", color = sty.inkMuted)
                             } else {
                                 val pinnedFolders = lib.pinnedFolders()
                                 val pinnedFiles = lib.pinnedFiles().filter { ui.filter == null || it.second.kind == ui.filter }
                                 if (pinnedFolders.isNotEmpty() || pinnedFiles.isNotEmpty()) {
-                                    Section("Pinned")
-                                    Tiles(pinnedFolders)
-                                    Cards(pinnedFiles)
+                                    Section("Pinned", ui.pinnedOpen) { ui.pinnedOpen = !ui.pinnedOpen }
+                                    AnimatedVisibility(ui.pinnedOpen) {
+                                        Column {
+                                            if (pinnedFolders.isNotEmpty()) { SubHeading("Pinned folders"); Tiles(pinnedFolders) }
+                                            if (pinnedFiles.isNotEmpty()) {
+                                                Box(Modifier.padding(top = if (pinnedFolders.isNotEmpty()) StySize.space4 else 0.dp)) { SubHeading("Pinned notes") }
+                                                Cards(pinnedFiles)
+                                            }
+                                        }
+                                    }
                                 }
                                 val recent = lib.recent(6, ui.filter)
                                 if (recent.isNotEmpty()) {
-                                    Box(Modifier.padding(top = StySize.space5)) { Section("Recent") }
-                                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
-                                        recent.forEach { (f, file) -> Card(f, file) }
+                                    Box(Modifier.padding(top = StySize.space5)) { Section("Recent", ui.recentOpen) { ui.recentOpen = !ui.recentOpen } }
+                                    AnimatedVisibility(ui.recentOpen) {
+                                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                                            recent.forEach { (f, file) -> Card(f, file) }
+                                        }
                                     }
                                 }
                                 if (lib.root.folders.isNotEmpty()) {
@@ -304,15 +322,27 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
                     }
                 }
                 if (tab == 0 && !managing) {
-                    Box(
-                        Modifier.align(Alignment.BottomEnd).padding(end = StySize.space6, bottom = StySize.space4).size(60.dp)
-                            .clip(CircleShape).background(sty.honey).clickable { creating = true },
-                        contentAlignment = Alignment.Center,
-                    ) { StyIcon(Ic.PLUS, sty.onHoney, 28.dp) }
+                    Row(Modifier.align(Alignment.BottomEnd).padding(end = StySize.space6, bottom = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                        Box {
+                            Box(
+                                Modifier.size(60.dp).clip(SquircleShape(20.dp)).background(sty.honeyTint).border(2.dp, sty.honey, SquircleShape(20.dp)).clickable { plusOpen = true },
+                                contentAlignment = Alignment.Center,
+                            ) { StyIcon(Ic.PLUS, sty.ink, 28.dp) }
+                            DropdownMenu(plusOpen, { plusOpen = false }) {
+                                DropdownMenuItem({ Text("New folder") }, { plusOpen = false; action = Action.NewFolder(here) })
+                                DropdownMenuItem({ Text("Add a file (PDF, Markdown): later") }, { plusOpen = false }, enabled = false)
+                                DropdownMenuItem({ Text("Import notes from other services: later") }, { plusOpen = false }, enabled = false)
+                            }
+                        }
+                        Box(
+                            Modifier.size(60.dp).clip(SquircleShape(20.dp)).background(sty.honey).clickable { creating = true },
+                            contentAlignment = Alignment.Center,
+                        ) { StyIcon(Ic.NEWNOTE, sty.onHoney, 28.dp) }
+                    }
                 }
             }
             Row(Modifier.fillMaxWidth().background(sty.sidebar).border(1.dp, sty.border).navigationBarsPadding().height(64.dp)) {
-                listOf(Ic.LIBRARY to "Tabularium", Ic.NEXUS to "Nexus", Ic.TRASH to "Trash", Ic.SETTINGS to "Settings").forEachIndexed { i, (ic, label) ->
+                listOf(Ic.LIBRARY to "Tabularium", Ic.NEXUS to "Nexus", Ic.ITINERARIUM to "Itinerarium", Ic.TRASH to "Trash", Ic.SETTINGS to "Settings").forEachIndexed { i, (ic, label) ->
                     Column(
                         Modifier.weight(1f).fillMaxHeight().clickable { tab = i; if (i == 0) { ui.openFolder = null; managing = false } },
                         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
@@ -326,12 +356,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
             }
         }
         // What is being dragged follows the finger.
-        drag.item?.let { d ->
-            Box(
-                Modifier.offset { IntOffset(drag.pos.x.roundToInt() - 40, drag.pos.y.roundToInt() - 70) }
-                    .clip(RoundedCornerShape(StySize.radiusMd)).background(sty.honey).padding(horizontal = StySize.space3, vertical = StySize.space2),
-            ) { Text(d.label, color = sty.onHoney, maxLines = 1) }
-        }
+        drag.item?.let { d -> DragGhost(drag, d) }
     }
 
     if (creating) NewFileDialog(lib, here, onDismiss = { creating = false }) { name, folder, look ->
@@ -356,6 +381,21 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
         )
         is Action.NewFolder -> NewFolderDialog({ action = null }) { name, color -> lib.newFolder(name, color, a.parent); action = null; ui.changed() }
         Action.ViewOptions -> ViewOptionsDialog(ui) { action = null }
+        Action.MoveSelected -> MoveDialog(lib, null, { action = null }) { to ->
+            val items = ui.selected.toList()
+            var refused = 0
+            items.filterIsInstance<NoteFile>().forEach { f -> parentOf(f)?.let { lib.moveFile(it, f, to) } }
+            items.filterIsInstance<Folder>().forEach { if (!lib.moveFolder(it, to)) refused++ }
+            if (refused > 0) Toast.makeText(context, "A folder cannot go inside itself", Toast.LENGTH_SHORT).show()
+            action = null; ui.stopSelect(); ui.changed()
+        }
+        Action.DeleteSelected -> DeleteDialog("Delete ${ui.selected.size} selected item(s)?", { action = null }) {
+            val items = ui.selected.toList()
+            val parents = items.filterIsInstance<NoteFile>().associateWith { parentOf(it) } // look up before any folder goes
+            parents.forEach { (f, p) -> if (p != null) lib.delete(p, f) }
+            items.filterIsInstance<Folder>().forEach { if (lib.contains(it)) lib.deleteFolder(it) }
+            action = null; ui.stopSelect(); ui.changed()
+        }
         null -> {}
     }
 }
@@ -364,7 +404,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, onOpen: (NoteFile) -> Unit) {
 private fun Crumb(text: String, hovered: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val sty = LocalSty.current
     Text(
-        text, modifier.clip(RoundedCornerShape(StySize.radiusMd)).background(if (hovered) sty.honeyTint else Color.Transparent)
+        text, modifier.clip(SquircleShape(StySize.radiusMd)).background(if (hovered) sty.honeyTint else Color.Transparent)
             .clickable(onClick = onClick).padding(horizontal = StySize.space2, vertical = StySize.space1),
         color = sty.honeyText, style = MaterialTheme.typography.titleMedium,
     )
@@ -375,7 +415,7 @@ private fun Swatches(chosen: Int?, onPick: (Int?) -> Unit) {
     val sty = LocalSty.current
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
         folderColours.forEach { (label, c) ->
-            Column(Modifier.clip(RoundedCornerShape(StySize.radiusMd)).clickable { onPick(c) }.padding(StySize.space1), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.clip(SquircleShape(StySize.radiusMd)).clickable { onPick(c) }.padding(StySize.space1), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(
                     Modifier.size(40.dp).clip(CircleShape).background(c?.let { Color(it) } ?: sty.surface)
                         .border(if (c == chosen) 3.dp else 1.dp, if (c == chosen) sty.ink else sty.borderStrong, CircleShape),
@@ -403,9 +443,122 @@ private fun NewFolderDialog(onDismiss: () -> Unit, onOk: (String, Int?) -> Unit)
     )
 }
 
+/** A heading. With [open] set it is an accordion: tap to fold the section up or down. */
 @Composable
-private fun Section(text: String) =
-    Text(text, color = LocalSty.current.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = StySize.space2))
+private fun Section(text: String, open: Boolean? = null, onToggle: () -> Unit = {}) {
+    val sty = LocalSty.current
+    val turn by androidx.compose.animation.core.animateFloatAsState(if (open == true) 90f else 0f, label = "chevron")
+    Row(
+        Modifier.then(if (open != null) Modifier.clip(SquircleShape(StySize.radiusMd)).clickable(onClick = onToggle) else Modifier).padding(bottom = StySize.space2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (open != null) Box(Modifier.rotate(turn)) { StyIcon(Ic.CHEVRON, sty.inkMuted, 22.dp) }
+        Text(text, color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun SubHeading(text: String) =
+    Text(text, color = LocalSty.current.inkMuted, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = StySize.space2, bottom = StySize.space2))
+
+/** The pin mark: a honey pin on a small badge, so a pinned file or folder is easy to spot. */
+@Composable
+private fun PinBadge() {
+    val sty = LocalSty.current
+    Box(Modifier.size(28.dp).clip(SquircleShape(9.dp)).background(sty.surface).border(1.dp, sty.honey, SquircleShape(9.dp)), contentAlignment = Alignment.Center) {
+        StyIcon(Ic.PIN, sty.honey, 20.dp)
+    }
+}
+
+/** A file as a card (cover, name, when it was opened). Also what is shown lifted while it is dragged. */
+@Composable
+private fun CardFace(folder: Folder, file: NoteFile, w: Dp, now: Long, modifier: Modifier, picked: Boolean? = null) {
+    val sty = LocalSty.current
+    Box(Modifier.width(w)) {
+    Column(
+        Modifier.fillMaxWidth().clip(SquircleShape(StySize.radiusLg)).border(if (picked == true) 2.dp else 1.dp, if (picked == true) sty.honey else sty.border, SquircleShape(StySize.radiusLg))
+            .background(sty.surface).then(modifier).padding(StySize.space3),
+    ) {
+        folder.color?.let { Box(Modifier.fillMaxWidth().height(4.dp).clip(SquircleShape(2.dp)).background(Color(it))) }
+        Box {
+            Cover(file, Modifier.fillMaxWidth().height(w * 1.1f).padding(top = StySize.space2))
+            if (file.pinned) Box(Modifier.align(Alignment.TopEnd).padding(StySize.space1)) { PinBadge() }
+        }
+        Text(file.name, Modifier.padding(top = StySize.space2), color = sty.ink, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
+        Text(if (file.kind == FileKind.INK) agoText(now, file.opened) else kindLabel(file.kind), color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
+    }
+    picked?.let { SelectTab(it, Modifier.align(Alignment.TopCenter)) }
+    }
+}
+
+/** A folder tile: coloured icon, name, file count. Also what is shown lifted while it is dragged. */
+@Composable
+private fun FolderFace(folder: Folder, w: Dp, total: Int, hovered: Boolean, modifier: Modifier, picked: Boolean? = null) {
+    val sty = LocalSty.current
+    Box(Modifier.width(w)) {
+    Column(
+        Modifier.fillMaxWidth().clip(SquircleShape(StySize.radiusLg)).background(if (hovered || picked == true) sty.honeyTint else if (picked == false) sty.surface else Color.Transparent)
+            .then(if (picked != null) Modifier.border(if (picked) 2.dp else 1.dp, if (picked) sty.honey else sty.border, SquircleShape(StySize.radiusLg)) else Modifier)
+            .then(modifier).padding(start = StySize.space3, end = StySize.space3, bottom = StySize.space3, top = if (picked != null) StySize.space6 else StySize.space3),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box {
+            FolderIcon(folder.color?.let { Color(it) } ?: sty.borderStrong, Modifier.width(w * 0.73f).height(w * 0.59f))
+            if (folder.pinned) Box(Modifier.align(Alignment.TopEnd)) { PinBadge() }
+        }
+        Text(folder.name, Modifier.padding(top = StySize.space2), color = sty.ink, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
+        Text(if (total == 1) "1 file" else "$total files", color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
+    }
+    picked?.let { SelectTab(it, Modifier.align(Alignment.TopCenter)) }
+    }
+}
+
+/** The tab hung from the top edge of a note in select mode: an angular notch, filled honey (with a tick) once picked. */
+@Composable
+private fun SelectTab(picked: Boolean, modifier: Modifier) {
+    val sty = LocalSty.current
+    Canvas(modifier.size(width = 76.dp, height = 16.dp)) {
+        val w = size.width; val h = size.height; val slant = h * 0.9f; val r = h * 0.45f
+        // The two lower corners are rounded: stop short of each, then curve through it.
+        val tab = androidx.compose.ui.graphics.Path().apply {
+            moveTo(0f, 0f); lineTo(slant - r * 0.6f, h - r * 0.7f); quadraticTo(slant, h, slant + r, h)
+            lineTo(w - slant - r, h); quadraticTo(w - slant, h, w - slant + r * 0.6f, h - r * 0.7f); lineTo(w, 0f); close()
+        }
+        drawPath(tab, if (picked) sty.honey else sty.surface)
+        drawPath(tab, if (picked) sty.honey else sty.borderStrong, style = Stroke(2.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round))
+        if (picked) {
+            val c = Offset(w / 2, h * 0.5f); val u = h * 0.22f
+            drawLine(sty.onHoney, Offset(c.x - 2 * u, c.y), Offset(c.x - 0.5f * u, c.y + 1.5f * u), 2.5.dp.toPx(), androidx.compose.ui.graphics.StrokeCap.Round)
+            drawLine(sty.onHoney, Offset(c.x - 0.5f * u, c.y + 1.5f * u), Offset(c.x + 2.2f * u, c.y - 1.5f * u), 2.5.dp.toPx(), androidx.compose.ui.graphics.StrokeCap.Round)
+        }
+    }
+}
+
+/**
+ * The thing being dragged, picked up like an icon on a phone: it grows a little, throws a shadow, and follows the
+ * finger on a spring so it trails behind and swings a few degrees in the direction of travel.
+ */
+@Composable
+private fun DragGhost(drag: DragState, d: Dragged) {
+    val sty = LocalSty.current
+    val target = drag.pos - drag.grab
+    val at by androidx.compose.animation.core.animateOffsetAsState(target, androidx.compose.animation.core.spring(0.65f, 220f), label = "trail")
+    var lifted by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { lifted = true }
+    val grow by androidx.compose.animation.core.animateFloatAsState(
+        if (lifted) 1.1f else 1f, androidx.compose.animation.core.spring(0.5f, 400f), label = "lift",
+    )
+    val swing = ((target.x - at.x) * 0.1f).coerceIn(-12f, 12f) // it lags behind, so this leans into the move
+    val width = with(androidx.compose.ui.platform.LocalDensity.current) { drag.size.width.toDp() }
+    Box(
+        Modifier.offset { IntOffset(at.x.roundToInt(), at.y.roundToInt()) }.width(width)
+            .graphicsLayer { scaleX = grow; scaleY = grow; rotationZ = swing; shadowElevation = 36f; shape = SquircleShape(StySize.radiusLg); clip = false },
+    ) {
+        val look = d.preview
+        if (look != null) look()
+        else Text(d.label, Modifier.clip(SquircleShape(StySize.radiusMd)).background(sty.honey).padding(horizontal = StySize.space3, vertical = StySize.space2), color = sty.onHoney, maxLines = 1)
+    }
+}
 
 /** A tiny picture of the file: its first page for ink, text lines for Markdown, a page with a tag for a PDF. */
 @Composable

@@ -21,7 +21,7 @@ Styli is the working name. This system covers the Android tablet app (Kotlin), t
 - **Status colours** `danger` and `success` are for state only, never decoration.
 - **Wood and bone** belong to the logo. Don't use them for UI.
 - **Type:** Marcellus (`display`, `title`, `heading`) for note titles and section headings only; Inter for body and all UI; JetBrains Mono for code and Mermaid. Marcellus has one weight; never fake bold.
-- **Shape:** `radius-md` for controls, `radius-lg` for cards and sheets, `radius-pill` for toggles.
+- **Shape:** every rounded box (buttons, inputs, cards, sheets, dialogs, menus) is a squircle: a corner that eases into the edge, kept gentle. `radius-md` for controls, `radius-lg` for cards and sheets, `radius-pill` for toggles. Circles stay circles (dots, avatars). On the web this is `corner-shape: squircle` (falls back to a plain radius where unsupported); on Android it is `SquircleShape`.
 - **Spacing** runs on a 4 px base (`space-1` to `space-7`). Touch targets are at least 44 px on the tablet and phone.
 - **Themes:** the apps follow the system setting. Light is bone and ink; dark is deep ink with lighter honey.
 

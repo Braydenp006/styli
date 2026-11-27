@@ -19,6 +19,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.IntSize
 
 enum class Size3(val label: String) { SMALL("Small"), MEDIUM("Medium"), LARGE("Large") }
 
@@ -29,7 +30,15 @@ class LibUi {
     var sort by mutableStateOf(Sort.EDITED)
     var filter by mutableStateOf<FileKind?>(null) // null shows every kind
     var openFolder by mutableStateOf<Folder?>(null) // null is the top level
+    var pinnedOpen by mutableStateOf(true) // the Pinned and Recent sections fold up like an accordion
+    var recentOpen by mutableStateOf(true)
+    var selecting by mutableStateOf(false) // select mode: taps pick notes and folders instead of opening them
+    val selected = androidx.compose.runtime.mutableStateListOf<Any>() // NoteFile or Folder
     private var tick by mutableIntStateOf(0)
+
+    fun startSelect(first: Any? = null) { selecting = true; selected.clear(); first?.let { selected.add(it) } }
+    fun toggle(x: Any) { if (!selected.remove(x)) selected.add(x) }
+    fun stopSelect() { selecting = false; selected.clear() }
 
     /** Call after changing the library, so lists redraw. Read [version] in a composable to depend on it. */
     fun changed() { tick++ }
@@ -37,12 +46,14 @@ class LibUi {
 }
 
 /** What is being dragged: a folder, or a file with the folder it is in. */
-class Dragged(val folder: Folder?, val file: NoteFile?, val from: Folder?, val label: String)
+class Dragged(val folder: Folder?, val file: NoteFile?, val from: Folder?, val label: String, val preview: (@Composable () -> Unit)? = null)
 
 /** One drag at a time, across the whole screen: where the finger is and which folders could take the drop. */
 class DragState {
     var item by mutableStateOf<Dragged?>(null)
     var pos by mutableStateOf(Offset.Zero) // in the root's coordinates
+    var grab by mutableStateOf(Offset.Zero) // where on the tile the finger took hold, so the lifted copy does not jump
+    var size by mutableStateOf(IntSize.Zero) // the tile's size
     val targets = mutableStateMapOf<Folder, Rect>()
 
     /** The smallest folder box under the finger, never the folder being dragged. */
@@ -69,16 +80,18 @@ fun Modifier.dropTarget(drag: DragState, folder: Folder): Modifier = composed {
  * A tile or row that is tapped to open, or pressed and held to be dragged. Held and let go without moving, it asks
  * for its menu instead (so one gesture does both).
  */
-fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMenu: () -> Unit, onDrop: (Folder) -> Unit): Modifier = composed {
+fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMenu: () -> Unit, onDrop: (Folder) -> Unit, enabled: Boolean = true): Modifier = composed {
     var origin by remember { mutableStateOf(Offset.Zero) }
+    var tile by remember { mutableStateOf(IntSize.Zero) }
     val tap = rememberUpdatedState(onTap); val menu = rememberUpdatedState(onMenu); val dropped = rememberUpdatedState(onDrop)
     val dragged = rememberUpdatedState(item)
-    onGloballyPositioned { origin = it.positionInRoot() }
+    onGloballyPositioned { origin = it.positionInRoot(); tile = it.size }
         .pointerInput(Unit) { detectTapGestures(onTap = { tap.value() }) }
-        .pointerInput(Unit) {
+        .pointerInput(enabled) {
+            if (!enabled) return@pointerInput // select mode: tapping picks, nothing is held or dragged
             var travel = 0f
             detectDragGesturesAfterLongPress(
-                onDragStart = { off -> travel = 0f; drag.item = dragged.value; drag.pos = origin + off },
+                onDragStart = { off -> travel = 0f; drag.item = dragged.value; drag.pos = origin + off; drag.grab = off; drag.size = tile },
                 onDrag = { change, amount -> change.consume(); drag.pos += amount; travel += amount.getDistance() },
                 onDragEnd = {
                     val target = drag.over()

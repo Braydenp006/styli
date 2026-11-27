@@ -54,6 +54,13 @@ fun StyliTheme(content: @Composable () -> Unit) {
         error = c.danger, outline = c.borderStrong, outlineVariant = c.border,
     )
     androidx.compose.runtime.CompositionLocalProvider(LocalSty provides c) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        MaterialTheme(
+            colorScheme = scheme, content = content,
+            // Buttons, chips, menus and dialogs are squircles too, not Material's rounded corners.
+            shapes = androidx.compose.material3.Shapes(
+                extraSmall = SquircleShape(4.dp), small = SquircleShape(StySize.radiusMd), medium = SquircleShape(StySize.radiusMd),
+                large = SquircleShape(StySize.radiusLg), extraLarge = SquircleShape(28.dp),
+            ),
+        )
     }
 }

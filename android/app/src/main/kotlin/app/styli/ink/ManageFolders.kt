@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -51,13 +50,13 @@ internal fun ColumnScope.ManageFolders(
         val item = Dragged(null, file, folder, file.name)
         Box {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(RoundedCornerShape(StySize.radiusMd))
+                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(SquircleShape(StySize.radiusMd))
                     .dragSource(drag, item, { onOpen(file) }, { menu = true }, { to -> drop(lib, item, to); ui.changed() })
                     .padding(start = (depth * 24 + 28).dp, end = StySize.space2),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(file.name, Modifier.weight(1f), color = sty.ink, maxLines = 1)
-                if (file.pinned) StyIcon(Ic.PIN, sty.honeyText, 16.dp)
+                if (file.pinned) StyIcon(Ic.PIN, sty.honey, 22.dp)
                 Text(kindLabel(file.kind), Modifier.padding(start = StySize.space3), color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
             }
             DropdownMenu(menu, { menu = false }) {
@@ -77,7 +76,7 @@ internal fun ColumnScope.ManageFolders(
         val total = folder.allFiles().size
         Box {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(RoundedCornerShape(StySize.radiusMd))
+                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(SquircleShape(StySize.radiusMd))
                     .background(if (hover === folder) sty.honeyTint else Color.Transparent)
                     .dropTarget(drag, folder)
                     .dragSource(drag, item, { expanded[folder] = !open }, { menu = true }, { to -> drop(lib, item, to); ui.changed() })
@@ -89,7 +88,7 @@ internal fun ColumnScope.ManageFolders(
                 }
                 FolderIcon(folder.color?.let { Color(it) } ?: sty.borderStrong, Modifier.size(width = 26.dp, height = 21.dp))
                 Text(folder.name, Modifier.padding(start = StySize.space3).weight(1f), color = sty.ink, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
-                if (folder.pinned) StyIcon(Ic.PIN, sty.honeyText, 16.dp)
+                if (folder.pinned) StyIcon(Ic.PIN, sty.honey, 22.dp)
                 Text(if (total == 1) "1 file" else "$total files", Modifier.padding(start = StySize.space3), color = sty.inkMuted, style = MaterialTheme.typography.bodySmall)
             }
             DropdownMenu(menu, { menu = false }) {
@@ -118,7 +117,7 @@ internal fun ColumnScope.ManageFolders(
     Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(bottom = StySize.space5)) {
         // The top level is a place to drop things too.
         Row(
-            Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(RoundedCornerShape(StySize.radiusMd))
+            Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(SquircleShape(StySize.radiusMd))
                 .background(if (hover === lib.root) sty.honeyTint else Color.Transparent).dropTarget(drag, lib.root),
             verticalAlignment = Alignment.CenterVertically,
         ) { Text("Tabularium (top level)", Modifier.padding(start = StySize.space2), color = sty.inkMuted, style = MaterialTheme.typography.bodyLarge) }

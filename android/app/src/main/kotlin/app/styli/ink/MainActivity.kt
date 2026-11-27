@@ -33,7 +33,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.delay
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -64,7 +63,7 @@ class MainActivity : ComponentActivity() {
 /** The Library first; opening a file shows its pages on the canvas, and Back returns to the Library. */
 @Composable
 private fun Root() {
-    val library = remember { Library() }
+    val library = remember { Library().also { it.addSamples() } }
     val ui = remember { LibUi() }
     var open by remember { mutableStateOf<NoteFile?>(null) }
     val file = open
@@ -379,7 +378,7 @@ private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
         if (zoomShown || zoom != 100) {
             Surface(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
-                shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp,
+                shape = SquircleShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp,
             ) {
                 Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("$zoom%")
@@ -389,7 +388,7 @@ private fun InkScreen(notebook: Notebook, onLibrary: () -> Unit) {
             }
         }
         placing?.let { c ->
-            Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp) {
+            Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), shape = SquircleShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp) {
                 Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Tap where \"${c.name}\" goes")
                     TextButton(onClick = { canvas?.placeClip(null) }, Modifier.padding(start = 8.dp)) { Text("Cancel") }

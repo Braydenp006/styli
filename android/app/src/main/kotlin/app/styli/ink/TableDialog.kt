@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
@@ -83,7 +82,7 @@ fun TableDialog(
     val context = LocalContext.current
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = RoundedCornerShape(16.dp), tonalElevation = 6.dp) {
+        Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = SquircleShape(16.dp), tonalElevation = 6.dp) {
             Column(Modifier.padding(16.dp)) {
                 Text("Table data")
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {

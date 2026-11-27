@@ -31,3 +31,5 @@
 .sty-toggle span::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:var(--radius-pill);background:var(--ink-muted);transition:transform .15s}
 .sty-toggle input:checked+span{background:var(--honey);border-color:var(--honey)}
 .sty-toggle input:checked+span::after{transform:translateX(16px);background:var(--on-honey)}
+
+@supports (corner-shape: squircle){*,::before,::after{corner-shape:squircle}.sty-toggle span,.sty-toggle span::after{corner-shape:round}} /* every rounded box is a squircle; pills stay round */
