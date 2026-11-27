@@ -40,6 +40,16 @@ class LibUi {
     fun toggle(x: Any) { if (!selected.remove(x)) selected.add(x) }
     fun stopSelect() { selecting = false; selected.clear() }
 
+    /**
+     * Runs changes to the library that touch the disk. If the disk refuses one, it says so in plain words and that change did
+     * not happen (the library only changes after the disk has). True if everything went through.
+     */
+    fun attempt(context: android.content.Context, what: String, block: () -> Unit): Boolean = try {
+        block(); true
+    } catch (e: java.io.IOException) {
+        android.widget.Toast.makeText(context, "Could not $what: ${e.message}", android.widget.Toast.LENGTH_LONG).show(); false
+    } finally { changed() }
+
     /** Call after changing the library, so lists redraw. Read [version] in a composable to depend on it. */
     fun changed() { tick++ }
     val version: Int get() = tick

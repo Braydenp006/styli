@@ -46,7 +46,8 @@ fun TrashScreen(lib: Library, ui: LibUi, onSettings: () -> Unit) {
 
     fun stop() { selecting = false; picked.clear() }
     fun restore(list: List<Trashed>) {
-        val folders = list.map { lib.restore(it) }
+        val folders = ArrayList<Folder>()
+        if (!ui.attempt(context, "bring it back") { list.forEach { folders.add(lib.restore(it)) } } && folders.isEmpty()) return
         val where = folders.map { lib.path(it).joinToString(" / ").ifEmpty { "Tabularium" } }.distinct()
         Toast.makeText(context, (if (list.size == 1) "Restored" else "Restored ${list.size} files") + " to " + where.joinToString(", "), Toast.LENGTH_SHORT).show()
         stop(); ui.changed()
@@ -97,8 +98,8 @@ fun TrashScreen(lib: Library, ui: LibUi, onSettings: () -> Unit) {
             text = { Text("This removes ${if (list.size == 1) "it" else "them"} from this device and cannot be undone. Nothing is deleted everywhere: sync does not exist yet.") },
             confirmButton = {
                 Button({
-                    list.forEach { if (it in lib.trash) lib.purge(it) }
-                    ask = null; stop(); ui.changed()
+                    ask = null; stop()
+                    ui.attempt(context, "delete it for good") { list.forEach { if (it in lib.trash) lib.purge(it) } }
                 }, colors = ButtonDefaults.buttonColors(containerColor = sty.danger)) { Text("Delete for good") }
             },
             dismissButton = { TextButton({ ask = null }) { Text("Cancel") } },

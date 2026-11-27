@@ -42,7 +42,11 @@ internal fun FolderPanel(
     onOpen: (NoteFile) -> Unit, onAction: (Action) -> Unit, onTrash: (Dragged) -> Unit,
 ) {
     val sty = LocalSty.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     @Suppress("UNUSED_EXPRESSION") ui.version
+    fun dropped(item: Dragged, to: Folder) = ui.attempt(context, "move it") {
+        if (!drop(lib, item, to)) android.widget.Toast.makeText(context, "A folder cannot go inside itself", android.widget.Toast.LENGTH_SHORT).show()
+    }
 
     // Whatever folder is open shows unfolded, with the ones above it.
     androidx.compose.runtime.LaunchedEffect(here) { generateSequence(here) { it.parent }.forEach { ui.expanded[it] = true } }
@@ -54,7 +58,7 @@ internal fun FolderPanel(
         Box {
             Row(
                 Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(StyShapes.Md)
-                    .dragSource(drag, item, { onOpen(file) }, { menu = true }, { to -> drop(lib, item, to); ui.changed() }, onTrash = { onTrash(item) })
+                    .dragSource(drag, item, { onOpen(file) }, { menu = true }, { to -> dropped(item, to) }, onTrash = { onTrash(item) })
                     .padding(start = (depth * 20 + 40).dp, end = StySize.space2),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -82,7 +86,7 @@ internal fun FolderPanel(
                 Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(StyShapes.Md)
                     .background(if (hover === folder) sty.honeyTint else if (here === folder) sty.honeyTint.copy(alpha = 0.5f) else Color.Transparent)
                     .dropTarget(drag, folder, key = "panel" to folder)
-                    .dragSource(drag, item, { ui.openFolder = folder; ui.expanded[folder] = true }, { menu = true }, { to -> drop(lib, item, to); ui.changed() }, onTrash = { onTrash(item) })
+                    .dragSource(drag, item, { ui.openFolder = folder; ui.expanded[folder] = true }, { menu = true }, { to -> dropped(item, to) }, onTrash = { onTrash(item) })
                     .padding(start = (depth * 20).dp, end = StySize.space2),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

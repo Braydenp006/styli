@@ -59,6 +59,26 @@ data class NewFileLook(
 enum class Sort { NAME, EDITED, CREATED }
 
 /**
+ * Where the library is kept ([Vault] on the device). Each call makes its change on disk first and throws
+ * [java.io.IOException] if it cannot; the [Library] changes itself only after the call returns, so a refused change leaves
+ * memory and disk as they were. [begin] and [settled] wrap each change, so the store can note what is already on disk.
+ */
+interface Store {
+    fun begin(folders: List<Folder>, trash: Boolean)
+    fun settled()
+    /** Makes [f]'s folder (a new one too) be called [name] inside [to]. */
+    fun folderAt(f: Folder, to: Folder, name: String)
+    /** Makes [file]'s folder (a new one, or one in the trash, too) be called [name] inside [to]. */
+    fun fileAt(file: NoteFile, to: Folder, name: String)
+    /** Moves [file] into the trash, noting the folder path it came from and when. */
+    fun toTrash(file: NoteFile, from: List<String>, at: Long)
+    /** Removes [f]'s now empty folder (its files are in the trash by now). One that holds something else is left. */
+    fun removeFolder(f: Folder)
+    /** Deletes a trashed file for good. */
+    fun purge(file: NoteFile)
+}
+
+/**
  * Every folder and file on this device, under one [root] (the Tabularium). In memory only for now (saving to disk
  * comes later), but nothing here touches Android, so it is tested on the JVM. Deletes go to [trash] first.
  */
@@ -66,7 +86,16 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
     val root = Folder("Tabularium")
     val trash = mutableListOf<Trashed>()
 
-    /** Folders and files that are gone for good, waiting for [Vault] to remove them from disk. */
+    /** Where changes are made on the spot; null keeps the library in memory only (the tests, and [Vault.save] catching up). */
+    var store: Store? = null
+
+    private inline fun <T> change(vararg folders: Folder?, trash: Boolean = false, block: () -> T): T {
+        val s = store ?: return block()
+        s.begin(folders.filterNotNull(), trash)
+        try { return block() } finally { s.settled() }
+    }
+
+    /** Folders and files that are gone for good, waiting for [Vault] to remove them from disk (only without a [store]). */
     internal val goneFolders = mutableListOf<Folder>()
     internal val purged = mutableListOf<NoteFile>()
 
@@ -101,14 +130,18 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
     fun newFolder(name: String, color: Int? = null, parent: Folder = root): Folder {
         require(contains(parent)) { "not a folder of this library" }
         val f = Folder(unique(clean(name), parent.folders.map { it.name }), color)
-        f.parent = parent
-        parent.folders.add(f)
-        return f
+        return change(parent) {
+            store?.folderAt(f, parent, f.name)
+            f.parent = parent
+            parent.folders.add(f)
+            f
+        }
     }
 
     fun renameFolder(f: Folder, name: String) {
         require(f !== root) { "the root cannot be renamed" }
-        f.name = unique(clean(name), f.parent!!.folders.filter { it !== f }.map { it.name })
+        val n = unique(clean(name), f.parent!!.folders.filter { it !== f }.map { it.name })
+        change(f.parent) { store?.folderAt(f, f.parent!!, n); f.name = n }
     }
 
     /** New ink file in [folder]. */
@@ -125,20 +158,24 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
         require(contains(folder)) { "not a folder of this library" }
         val now = clock()
         val file = NoteFile(unique(clean(name), folder.files.map { it.name }), kind, nb, now, now)
-        folder.files.add(file)
-        return file
+        return change(folder) { store?.fileAt(file, folder, file.name); folder.files.add(file); file }
     }
 
     fun renameFile(folder: Folder, file: NoteFile, name: String) {
-        file.name = unique(clean(name), folder.files.filter { it !== file }.map { it.name })
+        val n = unique(clean(name), folder.files.filter { it !== file }.map { it.name })
+        change(folder) { store?.fileAt(file, folder, n); file.name = n }
     }
 
     fun moveFile(from: Folder, file: NoteFile, to: Folder) {
         require(file in from.files && contains(to)) { "not in this library" }
         if (from === to) return
-        from.files.remove(file)
-        file.name = unique(file.name, to.files.map { it.name })
-        to.files.add(file)
+        val n = unique(file.name, to.files.map { it.name })
+        change(from, to) {
+            store?.fileAt(file, to, n)
+            from.files.remove(file)
+            file.name = n
+            to.files.add(file)
+        }
     }
 
     /** Moves [f] (with everything in it) into [to]. False, and nothing moves, if [to] is [f] or inside it. */
@@ -146,10 +183,14 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
         require(f !== root && contains(f) && contains(to)) { "not in this library" }
         if (to in f.allFolders()) return false
         if (f.parent === to) return true
-        f.parent!!.folders.remove(f)
-        f.name = unique(f.name, to.folders.map { it.name })
-        f.parent = to
-        to.folders.add(f)
+        val n = unique(f.name, to.folders.map { it.name })
+        change(f.parent, to) {
+            store?.folderAt(f, to, n)
+            f.parent!!.folders.remove(f)
+            f.name = n
+            f.parent = to
+            to.folders.add(f)
+        }
         return true
     }
 
@@ -159,18 +200,33 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
     /** Sends a file to the trash. */
     fun delete(folder: Folder, file: NoteFile) {
         require(file in folder.files) { "not in this folder" }
-        folder.files.remove(file)
-        trash.add(Trashed(file, path(folder), clock()))
+        val from = path(folder); val at = clock()
+        change(folder, trash = true) {
+            store?.toTrash(file, from, at)
+            folder.files.remove(file)
+            trash.add(Trashed(file, from, at))
+        }
     }
 
     /** Sends every file below [folder] to the trash, then removes the folder and its subfolders. */
     fun deleteFolder(folder: Folder) {
         require(folder !== root && contains(folder)) { "not in this library" }
         val at = clock()
-        for ((f, file) in folder.allFiles()) trash.add(Trashed(file, path(f), at))
-        goneFolders.addAll(folder.allFolders().asReversed()) // deepest first, so empty folders can be removed from disk
-        folder.parent!!.folders.remove(folder)
-        folder.parent = null
+        val parent = folder.parent!!
+        change(parent, trash = true) {
+            // One file at a time: if one cannot move, the ones before it are in the trash and the rest stay where they are.
+            for ((f, file) in folder.allFiles()) {
+                val from = path(f)
+                store?.toTrash(file, from, at)
+                f.files.remove(file)
+                trash.add(Trashed(file, from, at))
+            }
+            val all = folder.allFolders().asReversed() // deepest first, so each is empty when its turn comes
+            val s = store
+            if (s != null) all.forEach(s::removeFolder) else goneFolders.addAll(all)
+            parent.folders.remove(folder)
+            folder.parent = null
+        }
     }
 
     /** Brings a trashed file back to the folder path it came from (made again where missing). */
@@ -178,17 +234,29 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
         require(t in trash) { "not in the trash" }
         var folder = root
         for (n in t.from) folder = folder.folders.firstOrNull { it.name == n } ?: newFolder(n, parent = folder)
-        t.file.name = unique(t.file.name, folder.files.map { it.name })
-        folder.files.add(t.file)
-        trash.remove(t)
+        val n = unique(t.file.name, folder.files.map { it.name })
+        val into = folder
+        change(into, trash = true) {
+            store?.fileAt(t.file, into, n)
+            t.file.name = n
+            into.files.add(t.file)
+            trash.remove(t)
+        }
         return folder
     }
 
     /** Deletes one trashed file for good. The only way a file leaves the trash without coming back, so the screen asks first. */
-    fun purge(t: Trashed) { require(trash.remove(t)) { "not in the trash" }; purged.add(t.file) }
+    fun purge(t: Trashed) {
+        require(t in trash) { "not in the trash" }
+        change(trash = true) {
+            val s = store
+            if (s != null) s.purge(t.file) else purged.add(t.file)
+            trash.remove(t)
+        }
+    }
 
-    /** Deletes everything in the trash for good. */
-    fun emptyTrash() { purged.addAll(trash.map { it.file }); trash.clear() }
+    /** Deletes everything in the trash for good. If one cannot be deleted, it and the ones after it stay in the trash. */
+    fun emptyTrash() { trash.toList().forEach(::purge) }
 
     fun setPinned(f: Folder, pinned: Boolean) { f.pinned = pinned }
     fun setPinned(file: NoteFile, pinned: Boolean) { file.pinned = pinned }

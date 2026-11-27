@@ -287,10 +287,12 @@ class VaultTest {
         a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(9, 9, 12, 12))
         assertTrue(v.autosave(l, a)!!.isEmpty())
         assertFalse(File(dir, "B2.ink/file.json").exists()) // the other note was not visited
+        v.flush(); v.autosave(l, a) // the finished write is settled
         assertNull(v.autosave(l, a)) // nothing new: nothing written
         v.flush()
         assertEquals(2, reload().root.files.first { it.name == "A" }.notebook!!.current.items.size)
-        assertNull(v.autosave(l, null)) // leaving the note: everything outside it was already saved when it changed
+        assertTrue(v.autosave(l, null)!!.isEmpty()) // leaving the note: its scroll position is saved now
+        assertNull(v.autosave(l, null)) // and everything else was already saved when it changed
     }
 
     @Test fun autosaveKeepsEveryStrokeAcrossManySavesAndRenamesWaitForNothingLost() {
@@ -359,5 +361,79 @@ class VaultTest {
         l.renameFile(l.root, a, "Renamed")
         assertTrue(v.save(l).isEmpty()) // no flush by hand: save does it
         assertEquals(1, reload().root.files.single().notebook!!.current.items.size)
+    }
+
+    // ---- autosave saves only what changed: opening, pinning, renaming and moving no longer walk the library ----
+
+    private fun twoNotes(): Triple<Library, Vault, Pair<NoteFile, NoteFile>> {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A"); val b = l.newFile(l.root, "B")
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        assertTrue(v.save(l).isEmpty())
+        return Triple(l, v, a to b)
+    }
+
+    @Test fun openingANoteWritesOnlyThatNote() {
+        val (l, v, ab) = twoNotes(); val (a, b) = ab
+        File(dir, "B.ink/file.json").delete(); File(dir, "A.ink/file.json").delete()
+        l.open(a)
+        assertTrue(v.autosave(l, a)!!.isEmpty())
+        assertTrue(File(dir, "A.ink/file.json").exists())
+        assertFalse(File(dir, "B.ink/file.json").exists()) // the other note was not visited
+    }
+
+    @Test fun pinningANoteOrAFolderWritesOnlyItsOwnFile() {
+        val (l, v, ab) = twoNotes(); val (a, b) = ab
+        val f = l.newFolder("F"); v.save(l)
+        File(dir, "B.ink/file.json").delete()
+        l.setPinned(a, true); l.setPinned(f, true)
+        assertTrue(v.autosave(l, null)!!.isEmpty())
+        assertFalse(File(dir, "B.ink/file.json").exists())
+        val back = reload()
+        assertTrue(back.root.files.first { it.name == "A" }.pinned); assertTrue(back.root.folders.single().pinned)
+    }
+
+    @Test fun renamingAndMovingANoteOrAFolderIsSavedWithoutTheFullPass() {
+        val (l, v, ab) = twoNotes(); val (a, b) = ab
+        val f = l.newFolder("F"); val g = l.newFolder("G"); val inside = l.newFile(f, "Inside"); v.save(l)
+        File(dir, "B.ink/file.json").delete() // a note nobody touches: the pass must not visit it
+        l.renameFile(l.root, a, "A2")
+        l.moveFile(f, inside, g)
+        l.renameFolder(f, "F2")
+        val got = v.autosave(l, null); assertEquals(emptyList<String>(), got)
+        assertFalse(File(dir, "B.ink/file.json").exists())
+        val back = reload()
+        assertEquals(setOf("A2", "B"), back.root.files.map { it.name }.toSet())
+        assertEquals(1, back.root.files.first { it.name == "A2" }.notebook!!.current.items.size) // the ink moved with it
+        assertEquals(listOf("F2", "G"), back.root.folders.map { it.name }.sorted())
+        assertEquals(listOf("Inside"), back.root.folders.first { it.name == "G" }.files.map { it.name })
+        assertTrue(back.root.folders.first { it.name == "F2" }.files.isEmpty())
+    }
+
+    @Test fun renamingAFolderKeepsTheNotesInsideItAndANewNoteOrADeleteIsSaved() {
+        val l = lib(); val v = vault()
+        val f = l.newFolder("F"); val n = l.newFile(f, "N")
+        n.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        v.save(l)
+        l.renameFolder(f, "Renamed")
+        assertTrue(v.autosave(l, null)!!.isEmpty())
+        n.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(9, 9, 12, 12)) // the note's path moved: writes must follow
+        val fresh = l.newFile(f, "Fresh")
+        l.delete(l.root.folders.single(), n) // to the trash
+        assertTrue(v.autosave(l, null)!!.isEmpty()); v.flush()
+        val back = reload()
+        assertEquals(listOf("Fresh"), back.root.folders.single().files.map { it.name })
+        assertEquals(listOf("N"), back.trash.map { it.file.name })
+        assertEquals(2, back.trash.single().file.notebook!!.current.items.size)
+    }
+
+    @Test fun aNoteMovedOutOfAFolderThatIsRenamedInTheSameSaveStillMoves() { // the full save used to fail on this, every time
+        val l = lib(); val v = vault()
+        val f = l.newFolder("F"); val g = l.newFolder("G"); val inside = l.newFile(f, "Inside")
+        inside.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        assertTrue(v.save(l).isEmpty())
+        l.moveFile(f, inside, g); l.renameFolder(f, "F2")
+        assertEquals(emptyList<String>(), v.save(l))
+        assertEquals(1, reload().root.folders.first { it.name == "G" }.files.single().notebook!!.current.items.size)
     }
 }

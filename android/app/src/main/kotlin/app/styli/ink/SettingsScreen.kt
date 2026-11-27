@@ -133,12 +133,13 @@ private fun SelectionSettings(s: AppSettings) =
 
 @Composable
 private fun TrashSettings(lib: Library, ui: LibUi) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val sty = LocalSty.current
     Note("Deleted files stay in the trash until you bring them back or delete them for good. Keeping them for a set time and then clearing them out is not built yet.")
     Text("${lib.trash.size} file(s) in the trash", color = sty.ink)
     // A destructive action: red, so it reads as special.
     Button(
-        { lib.emptyTrash(); ui.changed() }, enabled = lib.trash.isNotEmpty(),
+        { ui.attempt(context, "empty the trash") { lib.emptyTrash() } }, enabled = lib.trash.isNotEmpty(),
         colors = ButtonDefaults.buttonColors(containerColor = sty.danger),
     ) { Text("Empty the trash for good") }
 }

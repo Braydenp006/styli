@@ -165,16 +165,22 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
         lib.open(f); onOpen(f)
     }
     fun moved(d: Dragged, to: Folder) {
-        if (!drop(lib, d, to)) Toast.makeText(context, "A folder cannot go inside itself", Toast.LENGTH_SHORT).show()
-        ui.changed()
+        ui.attempt(context, "move it") { if (!drop(lib, d, to)) Toast.makeText(context, "A folder cannot go inside itself", Toast.LENGTH_SHORT).show() }
+    }
+    /** Runs [one] for each item; any the disk refuses are left as they were and counted in one message. */
+    fun each(items: List<Any>, verb: String, one: (Any) -> Unit) {
+        var done = 0; var why: String? = null
+        for (x in items) try { one(x); done++ } catch (e: java.io.IOException) { why = e.message }
+        if (why != null) Toast.makeText(context, "$verb $done of ${items.size}. Could not do the rest: $why", Toast.LENGTH_LONG).show()
     }
     fun parentOf(f: NoteFile): Folder? = lib.root.allFiles().firstOrNull { it.second === f }?.first
     fun trashed(d: Dragged) {
         val file = d.file
         if (file != null && d.from != null) {
-            lib.delete(d.from, file)
-            Toast.makeText(context, "\"${file.name}\" moved to the trash on this device", Toast.LENGTH_SHORT).show()
-            ui.changed()
+            ui.attempt(context, "move it to the trash") {
+                lib.delete(d.from, file)
+                Toast.makeText(context, "\"${file.name}\" moved to the trash on this device", Toast.LENGTH_SHORT).show()
+            }
         } else if (d.folder != null) action = Action.DeleteFolder(d.folder) // a folder takes many files with it, so it asks
     }
     fun visible(files: List<NoteFile>) = lib.sorted(files.filter { ui.filter == null || it.kind == ui.filter }, ui.sort)
@@ -479,39 +485,38 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
 
     if (creating) NewFileDialog(lib, here, onDismiss = { creating = false }) { name, folder, look ->
         creating = false
-        open(lib.newFile(folder, name, look))
-        ui.changed()
+        ui.attempt(context, "make the note") { open(lib.newFile(folder, name, look)) }
     }
 
     when (val a = action) {
-        is Action.RenameFile -> NameDialog("Rename file", a.file.name, { action = null }) { lib.renameFile(a.folder, a.file, it); action = null; ui.changed() }
-        is Action.RenameFolder -> NameDialog("Rename folder", a.folder.name, { action = null }) { lib.renameFolder(a.folder, it); action = null; ui.changed() }
-        is Action.MoveFile -> MoveDialog(lib, null, { action = null }) { lib.moveFile(a.folder, a.file, it); action = null; ui.changed() }
-        is Action.MoveFolder -> MoveDialog(lib, a.folder, { action = null }) { lib.moveFolder(a.folder, it); action = null; ui.changed() }
-        is Action.DeleteFile -> DeleteDialog("Delete \"${a.file.name}\"?", { action = null }) { lib.delete(a.folder, a.file); action = null; ui.changed() }
+        is Action.RenameFile -> NameDialog("Rename file", a.file.name, { action = null }) { action = null; ui.attempt(context, "rename it") { lib.renameFile(a.folder, a.file, it) } }
+        is Action.RenameFolder -> NameDialog("Rename folder", a.folder.name, { action = null }) { action = null; ui.attempt(context, "rename it") { lib.renameFolder(a.folder, it) } }
+        is Action.MoveFile -> MoveDialog(lib, null, { action = null }) { action = null; ui.attempt(context, "move it") { lib.moveFile(a.folder, a.file, it) } }
+        is Action.MoveFolder -> MoveDialog(lib, a.folder, { action = null }) { action = null; ui.attempt(context, "move it") { lib.moveFolder(a.folder, it) } }
+        is Action.DeleteFile -> DeleteDialog("Delete \"${a.file.name}\"?", { action = null }) { action = null; ui.attempt(context, "move it to the trash") { lib.delete(a.folder, a.file) } }
         is Action.DeleteFolder -> DeleteDialog(
             "Delete the folder \"${a.folder.name}\" and everything in it (${a.folder.allFiles().size} file(s))?", { action = null },
-        ) { lib.deleteFolder(a.folder); action = null; ui.changed() }
+        ) { action = null; ui.attempt(context, "move it to the trash") { lib.deleteFolder(a.folder) } }
         is Action.ColourFolder -> AlertDialog(
             onDismissRequest = { action = null }, title = { Text("Colour for \"${a.folder.name}\"") },
             text = { Swatches(a.folder.color) { a.folder.color = it; action = null; ui.changed() } },
             confirmButton = {}, dismissButton = { TextButton({ action = null }) { Text("Cancel") } },
         )
-        is Action.NewFolder -> NewFolderDialog({ action = null }) { name, color -> lib.newFolder(name, color, a.parent); action = null; ui.changed() }
+        is Action.NewFolder -> NewFolderDialog({ action = null }) { name, color -> action = null; ui.attempt(context, "make the folder") { lib.newFolder(name, color, a.parent) } }
         Action.ViewOptions -> ViewOptionsDialog(ui) { action = null }
         Action.MoveSelected -> MoveDialog(lib, null, { action = null }) { to ->
             val items = ui.selected.toList()
             var refused = 0
-            items.filterIsInstance<NoteFile>().forEach { f -> parentOf(f)?.let { lib.moveFile(it, f, to) } }
-            items.filterIsInstance<Folder>().forEach { if (!lib.moveFolder(it, to)) refused++ }
+            each(items, "Moved") { x -> if (x is NoteFile) parentOf(x)?.let { lib.moveFile(it, x, to) } else if (!lib.moveFolder(x as Folder, to)) refused++ }
             if (refused > 0) Toast.makeText(context, "A folder cannot go inside itself", Toast.LENGTH_SHORT).show()
             action = null; ui.stopSelect(); ui.changed()
         }
         Action.DeleteSelected -> DeleteDialog("Delete ${ui.selected.size} selected item(s)?", { action = null }) {
             val items = ui.selected.toList()
             val parents = items.filterIsInstance<NoteFile>().associateWith { parentOf(it) } // look up before any folder goes
-            parents.forEach { (f, p) -> if (p != null) lib.delete(p, f) }
-            items.filterIsInstance<Folder>().forEach { if (lib.contains(it)) lib.deleteFolder(it) }
+            each(parents.keys.toList() + items.filterIsInstance<Folder>(), "Moved to the trash:") { x ->
+                if (x is NoteFile) parents[x]?.let { lib.delete(it, x) } else if (lib.contains(x as Folder)) lib.deleteFolder(x)
+            }
             action = null; ui.stopSelect(); ui.changed()
         }
         null -> {}
