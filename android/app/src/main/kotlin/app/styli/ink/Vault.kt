@@ -247,6 +247,21 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         }
     }
 
+    // ---- Moving to another folder ----
+
+    /**
+     * Copies the whole vault (notes, trash, clips, settings) into [dest], which must be empty or not exist yet. The old folder
+     * is not touched: nothing is deleted. Null if it worked (every file the same size), otherwise what went wrong.
+     */
+    fun copyTo(dest: File): String? {
+        if (dest.exists() && (dest.list()?.isNotEmpty() == true)) return "That folder is not empty, so nothing was moved"
+        return try {
+            if (!root.copyRecursively(dest, overwrite = false)) return "Some files could not be copied"
+            fun tally(d: File) = d.walkTopDown().filter { it.isFile }.let { fs -> fs.count() to fs.sumOf { it.length() } }
+            if (tally(root) != tally(dest)) "The copy did not match the original, so nothing was moved" else null
+        } catch (e: Exception) { "Could not copy the notes: ${e.message}" }
+    }
+
     // ---- Settings ----
 
     /** The app's saved settings, or null if there are none (or the file cannot be read). */

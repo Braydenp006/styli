@@ -115,7 +115,7 @@ internal fun folderChoices(lib: Library, exclude: Folder? = null): List<Pair<Fol
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteFile) -> Unit) {
+fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: StorageControls, onOpen: (NoteFile) -> Unit) {
     val sty = LocalSty.current
     val context = LocalContext.current
     val drag = remember { DragState() }
@@ -230,7 +230,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                     if (tab != 0) {
                         when (tab) {
                             3 -> TrashScreen(lib, ui) { settings.section = SettingsSection.TRASH; tab = 4 }
-                            4 -> SettingsScreen(settings, lib, ui)
+                            4 -> SettingsScreen(settings, lib, ui, storage)
                             else -> {
                                 val (title, blurb) = if (tab == 1) "Nexus" to "A graph of how your notes link together. It comes later."
                                 else "Itinerarium" to "Paths you choose through your notes, in an order you set. It comes later."

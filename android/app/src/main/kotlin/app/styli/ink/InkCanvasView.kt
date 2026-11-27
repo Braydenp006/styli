@@ -84,6 +84,15 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private var shownZoom = -1
 
     /** Flies into [p]: fitted to the screen and in the middle of it, as one camera move. It becomes the page being worked on. */
+    /** The page being worked on. */
+    val workPage: PageModel get() = work
+
+    /** The pages in reading order: row by row from the top, left to right. */
+    fun readingOrder(): List<PageModel> = notebook.pages.sortedWith(compareBy({ it.page.row }, { it.page.col }))
+
+    /** Flies to [p] and makes it the page being worked on. */
+    fun showPage(p: PageModel) = zoomIntoPage(p)
+
     private fun zoomIntoPage(p: PageModel) {
         if (p !== work) becomeWork(p)
         flyTo(p)
@@ -233,7 +242,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         else brushFor(penFamily, penColor, penWidth)
 
     /** What the erasers may touch (all, ink only, highlights only or straight lines only). */
-    var eraseOnly = EraseOnly.ALL
+    var eraseOnly: Set<EraseOnly> = emptySet() // which kinds the erasers may touch (none ticked = everything)
 
     /** The eraser's reach on screen, so it feels the same at any zoom. */
     private val eraserPx = 10f
@@ -261,8 +270,22 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                 canvas.drawColor(if (vp.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
                 val l = layout
                 val pages = if (l == null) listOf(work) else vp.visible().let { l.visible(it[0], it[1], it[2], it[3]) }
+                var budget = CACHE_PER_FRAME
                 for (p in pages) {
                     activate(p)
+                    val g = geometry
+                    // Pages seen small (the overview) are drawn from a small picture of each, not stroke by stroke, so panning stays smooth.
+                    if (!sampling && !g.infinite && dragMap == null && g.pageW * g.scale < SMALL_PAGE_PX) {
+                        val hit = pageCache.get(p)?.takeIf { it.rev == p.revision }
+                        val pic = hit ?: if (budget > 0) { budget--; renderCached(p) } else null
+                        if (pic != null) {
+                            val m = PageGeometry.MARGIN.toInt()
+                            val sheet = RectF(g.toScreenX(0.0).toFloat(), g.toScreenY(0.0).toFloat(), g.toScreenX(g.pageW.toDouble()).toFloat(), g.toScreenY(g.pageH.toDouble()).toFloat())
+                            canvas.drawBitmap(pic.bmp, android.graphics.Rect(m, m, pic.bmp.width - m, pic.bmp.height - m), sheet, cachePaint)
+                            continue
+                        }
+                        if (budget <= 0) postInvalidateOnAnimation() // some pages still wait for their picture: carry on next frame
+                    }
                     drawPage(canvas)
                 }
                 activate(work)
@@ -288,6 +311,29 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                 drawDropper(canvas)
             }
         }
+
+    // ---- Small pages: a picture of each page, kept until the page changes ----
+
+    private class PageShot(val bmp: Bitmap, val rev: Int)
+    private val pageCache = object : android.util.LruCache<PageModel, PageShot>(64 * 1024 * 1024) {
+        override fun sizeOf(key: PageModel, value: PageShot) = value.bmp.byteCount
+    }
+    private val cachePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    /** Draws page [p] whole into a small bitmap (sheet [CACHE_PX] wide, with the margin round it) and keeps it. Null for an infinite canvas. */
+    private fun renderCached(p: PageModel): PageShot? {
+        val ps = p.page
+        if (ps.infinite) return null
+        val m = PageGeometry.MARGIN.toInt()
+        val w = CACHE_PX + 2 * m; val h = (CACHE_PX.toLong() * ps.height / ps.width).toInt() + 2 * m
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val tmp = PageGeometry(ps.width, ps.height, false, pxPerUnit).also { it.fit(w, h) } // the page at the bitmap's size, at its top left
+        val keepGeometry = geometry; val keepActive = active
+        active = p
+        geometry = PageView(tmp, 0.0, 0.0, ps.width, ps.height, false)
+        try { drawPage(Canvas(bmp)) } finally { active = keepActive; geometry = keepGeometry }
+        return PageShot(bmp, p.revision).also { pageCache.put(p, it) }
+    }
 
     /** Draws the active page: its sheet, template, strokes and text boxes, clipped to the sheet. */
     private fun drawPage(canvas: Canvas) {
@@ -2004,6 +2050,28 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private val handle = Paint().apply { color = 0xFF1565C0.toInt() }
     private val geoHandle = Paint().apply { color = 0xFFEF6C00.toInt(); isAntiAlias = true } // geometry handles are orange, frame handles blue
 
+    /** What is selected, for the bar that floats under it: where it is on the screen, and what kinds it holds. Null when nothing is selected or it is being dragged. */
+    data class SelectionInfo(
+        val rect: RectF, val table: Boolean, val chart: Boolean, val picture: Boolean, val cropped: Boolean,
+        val text: Boolean, val shape: Boolean, val connector: Boolean,
+    )
+
+    fun selectionInfo(): SelectionInfo? {
+        if (tool != Tool.LASSO || selection.isEmpty() || dragMap != null || drag != Drag.LOOP && lassoRun) return null
+        val q = selectionQuad() ?: return null
+        val g = geometry
+        val xs = (0..3).map { g.toScreenX(q.corner(it).first.toDouble()).toFloat() }
+        val ys = (0..3).map { g.toScreenY(q.corner(it).second.toDouble()).toFloat() }
+        val pic = selection.singleOrNull()?.let { model.pictureOf(it) }
+        return SelectionInfo(
+            RectF(xs.min(), ys.min(), xs.max(), ys.max()),
+            table = lineTable() != null || selection.singleOrNull()?.let { model.tableOf(it) } != null,
+            chart = selection.singleOrNull()?.let { model.chartOf(it) } != null,
+            picture = pic != null, cropped = pic?.isCropped == true,
+            text = model.texts.any { it.id in selection }, shape = model.shapes.any { it.id in selection }, connector = model.connectors.any { it.id in selection },
+        )
+    }
+
     fun deleteSelection() {
         if (model.delete(selection)) {
             selection.clear()
@@ -2316,73 +2384,101 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         pageLayer.invalidate()
     }
 
+    private var lassoX = 0f // where the pen last was, so the edge scroll can keep the drag going while it stands still
+    private var lassoY = 0f
+    private var lassoTick = 0L
+    private var lassoRun = false
+
+    /** While the pen drags a selection (or a lasso loop) near the edge of the screen, the view scrolls that way. */
+    private val lassoScroll = object : Runnable {
+        override fun run() {
+            if (!lassoRun) return
+            val now = android.os.SystemClock.uptimeMillis()
+            val dt = (now - lassoTick).coerceIn(0L, 50L) / 1000.0
+            lassoTick = now
+            val d = resources.displayMetrics.density
+            val zone = 72 * d
+            fun push(pos: Float, size: Float): Double =
+                if (pos < zone) (1 - pos / zone).coerceIn(0f, 1f).toDouble() else if (pos > size - zone) -(1 - (size - pos) / zone).coerceIn(0f, 1f).toDouble() else 0.0
+            val dx = push(lassoX, width.toFloat())
+            val dy = push(lassoY, height.toFloat())
+            if (dx != 0.0 || dy != 0.0) { vp.panBy(dx * 900 * d * dt, dy * 900 * d * dt); lassoAt(lassoX, lassoY); pageLayer.invalidate() }
+            postOnAnimation(this)
+        }
+    }
+
+        private fun lassoAt(sx: Float, sy: Float) {
+        val g = geometry
+            val px = g.toPageX(sx.toDouble())
+            val py = g.toPageY(sy.toDouble())
+            when (drag) {
+                Drag.LOOP -> { loop.add(px.toFloat()); loop.add(py.toFloat()) }
+                Drag.MOVE -> dragMap = Affine.translate(px - dragStartX, py - dragStartY)
+                Drag.RESIZE -> dragMap = LassoGeometry.scaleFromCorner(dragBox!!, dragCorner, px, py)
+                Drag.LINE -> linePreview = lineBase!!.moveLine(lineVertical, lineIndex, (if (lineVertical) px - dragStartX else py - dragStartY).toFloat())
+                Drag.CONN_FROM -> connPreview = connBase!!.let { c ->
+                    val other = c.via.firstOrNull() ?: c.ends(model::shapeOf).b
+                    c.copy(from = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.from, other) }
+                }
+                Drag.CONN_TO -> connPreview = connBase!!.let { c ->
+                    val other = c.via.lastOrNull() ?: c.ends(model::shapeOf).a
+                    c.copy(to = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.to, other) }
+                }
+                Drag.ADD -> {}
+                Drag.CROP -> cropBase?.let { b -> cropPreview = b.cropDragged(cropHandle, px.toFloat(), py.toFloat()) }
+                Drag.SHAPE_VERTEX -> shapeBase?.let { b ->
+                    val e = ShapeEdit.moveVertex(b, geoIndex, px.toFloat(), py.toFloat(), SNAP_PX / geometry.scale.toFloat())
+                    shapePreview = e.shape; guides = e.guides
+                }
+                Drag.SHAPE_CORNER -> shapeBase?.let { b ->
+                    shapePreview = ShapeEdit.setCorner(b, px.toFloat(), py.toFloat(), CORNER_INSET_PX / geometry.scale.toFloat(), SNAP_PX / geometry.scale.toFloat())
+                }
+                Drag.CONN_VIA -> connPreview = connBase!!.let { c ->
+                    var at = px.toFloat() to py.toFloat()
+                    if (c.route == Route.ELBOW) { // right angles line up with the points on either side
+                        val e = c.ends(model::shapeOf)
+                        val chain = listOf(e.a) + c.via + listOf(e.b) // only the two points either side of this one count
+                        val sn = Routes.snapPointWith(at, listOf(chain[connViaIndex], chain[connViaIndex + 2]), SNAP_PX / geometry.scale.toFloat())
+                        at = sn.p
+                        guides = listOfNotNull(sn.xFrom?.let { guide(at, it) }, sn.yFrom?.let { guide(at, it) })
+                    }
+                    c.copy(via = c.via.toMutableList().also { it[connViaIndex] = at })
+                }
+                Drag.CONN_BEND -> {
+                    val c = connBase!!
+                    val e = c.ends(model::shapeOf)
+                    val route = if (c.route == Route.STRAIGHT) Route.CURVE else c.route // pulling a straight line bends it into a curve
+                    val bend = Routes.bendFor(route, e.a, e.da, e.b, e.db, px.toFloat() to py.toFloat())
+                    val (snapped, at) = Routes.snappedBend(route, e.a, e.da, e.b, e.db, bend, SNAP_PX / geometry.scale.toFloat())
+                    connPreview = c.copy(route = route, bend = snapped)
+                    // The line it lined up on, along the span between the ends.
+                    guides = if (at == null) emptyList() else {
+                        val vertical = Routes.middle(Routes.path(route, e.a, e.da, e.b, e.db, snapped)).let { m -> Math.abs(m.first - at) < Math.abs(m.second - at) }
+                        listOf(if (vertical) guide(at to e.a.second, at to e.b.second) else guide(e.a.first to at, e.b.first to at))
+                    }
+                }
+                Drag.ROTATE -> {
+                    val (cx, cy) = dragBox!!.centre
+                    val turn = LassoGeometry.snap(LassoGeometry.turn(cx, cy, dragStartX, dragStartY, px, py))
+                    dragMap = Affine.rotateAbout(turn, cx, cy)
+                }
+            }
+        }
+
     private fun lasso(event: MotionEvent): Boolean {
         val g = geometry
         val i = event.findPointerIndex(pointerId)
         when (event.actionMasked) {
             MotionEvent.ACTION_MOVE -> if (i >= 0) {
-                fun at(sx: Float, sy: Float) {
-                    val px = g.toPageX(sx.toDouble())
-                    val py = g.toPageY(sy.toDouble())
-                    when (drag) {
-                        Drag.LOOP -> { loop.add(px.toFloat()); loop.add(py.toFloat()) }
-                        Drag.MOVE -> dragMap = Affine.translate(px - dragStartX, py - dragStartY)
-                        Drag.RESIZE -> dragMap = LassoGeometry.scaleFromCorner(dragBox!!, dragCorner, px, py)
-                        Drag.LINE -> linePreview = lineBase!!.moveLine(lineVertical, lineIndex, (if (lineVertical) px - dragStartX else py - dragStartY).toFloat())
-                        Drag.CONN_FROM -> connPreview = connBase!!.let { c ->
-                            val other = c.via.firstOrNull() ?: c.ends(model::shapeOf).b
-                            c.copy(from = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.from, other) }
-                        }
-                        Drag.CONN_TO -> connPreview = connBase!!.let { c ->
-                            val other = c.via.lastOrNull() ?: c.ends(model::shapeOf).a
-                            c.copy(to = snapFree(endAt(px.toFloat() to py.toFloat()), c.route, other)).also { guides = freeGuides(it.to, other) }
-                        }
-                        Drag.ADD -> {}
-                        Drag.CROP -> cropBase?.let { b -> cropPreview = b.cropDragged(cropHandle, px.toFloat(), py.toFloat()) }
-                        Drag.SHAPE_VERTEX -> shapeBase?.let { b ->
-                            val e = ShapeEdit.moveVertex(b, geoIndex, px.toFloat(), py.toFloat(), SNAP_PX / geometry.scale.toFloat())
-                            shapePreview = e.shape; guides = e.guides
-                        }
-                        Drag.SHAPE_CORNER -> shapeBase?.let { b ->
-                            shapePreview = ShapeEdit.setCorner(b, px.toFloat(), py.toFloat(), CORNER_INSET_PX / geometry.scale.toFloat(), SNAP_PX / geometry.scale.toFloat())
-                        }
-                        Drag.CONN_VIA -> connPreview = connBase!!.let { c ->
-                            var at = px.toFloat() to py.toFloat()
-                            if (c.route == Route.ELBOW) { // right angles line up with the points on either side
-                                val e = c.ends(model::shapeOf)
-                                val chain = listOf(e.a) + c.via + listOf(e.b) // only the two points either side of this one count
-                                val sn = Routes.snapPointWith(at, listOf(chain[connViaIndex], chain[connViaIndex + 2]), SNAP_PX / geometry.scale.toFloat())
-                                at = sn.p
-                                guides = listOfNotNull(sn.xFrom?.let { guide(at, it) }, sn.yFrom?.let { guide(at, it) })
-                            }
-                            c.copy(via = c.via.toMutableList().also { it[connViaIndex] = at })
-                        }
-                        Drag.CONN_BEND -> {
-                            val c = connBase!!
-                            val e = c.ends(model::shapeOf)
-                            val route = if (c.route == Route.STRAIGHT) Route.CURVE else c.route // pulling a straight line bends it into a curve
-                            val bend = Routes.bendFor(route, e.a, e.da, e.b, e.db, px.toFloat() to py.toFloat())
-                            val (snapped, at) = Routes.snappedBend(route, e.a, e.da, e.b, e.db, bend, SNAP_PX / geometry.scale.toFloat())
-                            connPreview = c.copy(route = route, bend = snapped)
-                            // The line it lined up on, along the span between the ends.
-                            guides = if (at == null) emptyList() else {
-                                val vertical = Routes.middle(Routes.path(route, e.a, e.da, e.b, e.db, snapped)).let { m -> Math.abs(m.first - at) < Math.abs(m.second - at) }
-                                listOf(if (vertical) guide(at to e.a.second, at to e.b.second) else guide(e.a.first to at, e.b.first to at))
-                            }
-                        }
-                        Drag.ROTATE -> {
-                            val (cx, cy) = dragBox!!.centre
-                            val turn = LassoGeometry.snap(LassoGeometry.turn(cx, cy, dragStartX, dragStartY, px, py))
-                            dragMap = Affine.rotateAbout(turn, cx, cy)
-                        }
-                    }
-                }
-                for (h in 0 until event.historySize) at(event.getHistoricalX(i, h), event.getHistoricalY(i, h))
-                at(event.getX(i), event.getY(i))
+                for (h in 0 until event.historySize) lassoAt(event.getHistoricalX(i, h), event.getHistoricalY(i, h))
+                lassoAt(event.getX(i), event.getY(i))
+                lassoX = event.getX(i); lassoY = event.getY(i)
+                if (!lassoRun) { lassoRun = true; lassoTick = android.os.SystemClock.uptimeMillis(); postOnAnimation(lassoScroll) }
                 pageLayer.invalidate()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) != pointerId) return true
+                lassoRun = false
                 val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                 when (drag) {
                     Drag.LOOP -> if (!cancelled && loopIsTap()) {
@@ -3035,24 +3131,30 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     fun redoPage() = pagesChanged { notebook.redoPage() }
 
     private val plusDash = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = 0xFFB0B0B0.toInt(); isAntiAlias = true; pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 12f), 0f) }
+    private val plusSolid = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xFFB0B0B0.toInt() }
     private val plusPaint = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 6f; strokeCap = Paint.Cap.ROUND; isAntiAlias = true; color = 0xFF8A8A8A.toInt() }
 
     /** Seen from afar, every empty cell (and the ring round the grid) shows a plus: tap it to add a page there. */
     private fun drawPlusCells(canvas: Canvas) {
         val l = layout ?: return
         if (carryPage != null || vp.infinite || vp.percent(maxOf(1, work.page.width)) >= ZOOMED_OUT_PERCENT) return
+        // Far out there can be hundreds of cells: they go in one path each, and ones too small to tap are left out.
+        val boxes = android.graphics.Path(); val pluses = android.graphics.Path()
+        var biggest = 0f
         for ((c, r) in l.slots(vp.visible())) {
-            if (notebook.at(c, r) != null) continue
             val q = l.slotRect(c, r, emptyLook.width, emptyLook.height)
             val x0 = vp.toScreenX(q[0]).toFloat(); val y0 = vp.toScreenY(q[1]).toFloat()
             val x1 = vp.toScreenX(q[0] + q[2]).toFloat(); val y1 = vp.toScreenY(q[1] + q[3]).toFloat()
-            if (x1 < 0 || y1 < 0 || x0 > width || y0 > height) continue
-            canvas.drawRect(x0, y0, x1, y1, plusDash)
+            if (x1 - x0 < PLUS_MIN_PX) return // every cell is this size or smaller: nothing to tap, nothing to draw
+            if (x1 < 0 || y1 < 0 || x0 > width || y0 > height || notebook.at(c, r) != null) continue
+            biggest = maxOf(biggest, x1 - x0)
+            boxes.addRect(x0, y0, x1, y1, android.graphics.Path.Direction.CW)
             val cx = (x0 + x1) / 2; val cy = (y0 + y1) / 2
             val arm = minOf(x1 - x0, y1 - y0) * 0.15f
-            canvas.drawLine(cx - arm, cy, cx + arm, cy, plusPaint)
-            canvas.drawLine(cx, cy - arm, cx, cy + arm, plusPaint)
+            pluses.moveTo(cx - arm, cy); pluses.lineTo(cx + arm, cy); pluses.moveTo(cx, cy - arm); pluses.lineTo(cx, cy + arm)
         }
+        canvas.drawPath(boxes, if (biggest >= PLUS_DASH_PX) plusDash else plusSolid) // dashes only where they can be seen: they cost a lot
+        canvas.drawPath(pluses, plusPaint)
     }
 
     private fun drawCarry(canvas: Canvas) {
@@ -3189,7 +3291,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         vp.percent(maxOf(1, work.page.width)) in GRID_MIN_PERCENT..GRID_MAX_PERCENT
 
     /** The page nearest the middle of the screen. */
-    private fun centrePage(): PageModel? = layout?.nearest(vp.toPageX(width / 2.0), vp.toPageY(height / 2.0))
+    fun centrePage(): PageModel? = layout?.nearest(vp.toPageX(width / 2.0), vp.toPageY(height / 2.0))
 
     private fun beginGrid() {
         pullAnim?.cancel()
@@ -3355,6 +3457,11 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     }
 
     private companion object {
+        const val PLUS_MIN_PX = 14f // an empty cell narrower than this is not drawn
+        const val PLUS_DASH_PX = 70f // dashed outlines only on cells wider than this
+        const val SMALL_PAGE_PX = 380f // a page narrower than this on screen is drawn from its picture
+        const val CACHE_PX = 420 // the width of that picture's sheet
+        const val CACHE_PER_FRAME = 3 // pictures made in one frame (more would stall it)
         const val LINED_TOP = 1600 // 16 mm
         const val LINED_STEP = 800 // 8 mm
         const val GRID_STEP = 500 // 5 mm

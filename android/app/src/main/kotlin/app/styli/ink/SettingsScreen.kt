@@ -24,14 +24,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 
+/** What the Storage settings show and do (the folder picker lives with the app's start-up code). */
+class StorageControls(val path: String, val isDefault: Boolean, val onChoose: () -> Unit, val onDefault: () -> Unit)
+
 /** The groups on the Settings sidebar. New settings go in a group (or a new one); the list can keep growing. */
 enum class SettingsSection(val label: String) {
-    PENMANSHIP("Penmanship"), PAGES("Pages and scrolling"), SELECTION("Selection"), TRASH("Trash"), LATER("Coming later"),
+    PENMANSHIP("Penmanship"), PAGES("Pages and scrolling"), SIDEBAR("Sidebar"), SELECTION("Selection"), TRASH("Trash"), STORAGE("Storage"), LATER("Coming later"),
 }
 
 /** The Settings tab: a sidebar of groups on the left, the chosen group's settings on the right. */
 @Composable
-fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi) {
+fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi, storage: StorageControls) {
     val sty = LocalSty.current
     Text("Settings", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
     Text("Changes apply at once and are kept for next time.", Modifier.padding(top = StySize.space2), color = sty.inkMuted)
@@ -70,6 +73,7 @@ fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi) {
                     Chips("Scroll glide", AppSettings.LEVELS, s.scroll) { s.scroll = it }
                     Chips("When a note opens", listOf("Where I left off", "At the top, fitted to the page"), if (s.startFit) 1 else 0) { s.startFit = it == 1 }
                 }
+                SettingsSection.SIDEBAR -> SidebarEditor(s)
                 SettingsSection.SELECTION -> Chips("Outline", listOf("Dashed", "Solid"), if (s.solid) 1 else 0) { s.solid = it == 1 }
                 SettingsSection.TRASH -> {
                     Note("Deleted files stay in the trash until you bring them back or delete them for good. Keeping them for a set time and then clearing them out is not built yet.")
@@ -79,6 +83,16 @@ fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi) {
                         { lib.emptyTrash(); ui.changed() }, enabled = lib.trash.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(containerColor = sty.danger),
                     ) { Text("Empty the trash for good") }
+                }
+                SettingsSection.STORAGE -> {
+                    Note("Your notes are ordinary files in this folder, so any app or computer can open and copy them.")
+                    Text(storage.path, color = sty.ink, style = MaterialTheme.typography.titleMedium)
+                    Text(if (storage.isDefault) "This is the default folder." else "This is not the default folder.", color = sty.inkMuted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                        Button(storage.onChoose) { Text("Choose another folder") }
+                        OutlinedButton(storage.onDefault, enabled = !storage.isDefault) { Text("Use the default folder") }
+                    }
+                    Note("Changing folder asks first, and can move your notes across. The old folder is never deleted.")
                 }
                 SettingsSection.LATER -> Note("Device, storage per notebook, pen and palm rejection, tool rail position and pairing.")
             }
@@ -115,4 +129,34 @@ private fun Swatches(label: String, colours: List<Pair<String, Int>>, chosen: In
             }
         }
     }
+}
+
+/** Where the tool rail sits and what is on it: reorder, remove, add, with dividers and spaces. */
+@Composable
+private fun SidebarEditor(s: AppSettings) {
+    val sty = LocalSty.current
+    Note("The tool rail beside the page. Use the arrows to reorder; add dividers and spaces to group things.")
+    Chips("Position", RailSide.entries.map { it.label }, s.rail) { s.rail = it }
+    Text("On the rail", color = sty.inkMuted, style = MaterialTheme.typography.labelMedium)
+    for ((i, key) in s.sidebar.withIndex()) {
+        val d = SidebarItems.def(key) ?: continue
+        Row(Modifier.fillMaxWidth().clip(SquircleShape(StySize.radiusMd)).background(sty.surface).border(1.dp, sty.border, SquircleShape(StySize.radiusMd)), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(start = StySize.space3).weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                SvgIcon(d.icon, sty.ink, 24.dp)
+                Text(d.label, color = sty.ink)
+            }
+            IconBtn("Move up", Icons24.UP, enabled = i > 0, onClick = { val k = s.sidebar.removeAt(i); s.sidebar.add(i - 1, k) })
+            IconBtn("Move down", Icons24.DOWN, enabled = i < s.sidebar.size - 1, onClick = { val k = s.sidebar.removeAt(i); s.sidebar.add(i + 1, k) })
+            IconBtn("Remove from the rail", Icons24.CLOSE, onClick = { s.sidebar.removeAt(i) })
+        }
+    }
+    Text("Add", color = sty.inkMuted, style = MaterialTheme.typography.labelMedium)
+    val free = SidebarItems.all.filter { it.key !in s.sidebar } + listOf(SidebarItems.sep, SidebarItems.gap)
+    for (row in free.chunked(6)) Row(horizontalArrangement = Arrangement.spacedBy(StySize.space1)) {
+        for (d in row) OptionChip(d.label, d.icon, false) { s.sidebar.add(d.key) }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(StySize.space2)) {
+        TextButton(onClick = { s.sidebar.clear(); s.sidebar.addAll(SidebarItems.DEFAULT) }) { Text("Reset to the standard layout") }
+    }
+    Note("Planned: keep this layout the same on all your devices. For now it is kept on this device only.")
 }

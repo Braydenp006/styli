@@ -30,6 +30,15 @@ enum class EraseOnly {
     val fills get() = this == ALL || this == FILLS
 }
 
+/** The filter the screen offers: any mix of kinds. Nothing ticked, or [EraseOnly.ALL] ticked, means everything. */
+private fun Set<EraseOnly>.everything() = isEmpty() || EraseOnly.ALL in this
+fun Set<EraseOnly>.matches(item: Item) = everything() || any { it.matches(item) }
+val Set<EraseOnly>.texts: Boolean get() = everything() || EraseOnly.TEXT_BOXES in this
+val Set<EraseOnly>.shapes: Boolean get() = everything() || EraseOnly.SHAPES in this
+val Set<EraseOnly>.connectors: Boolean get() = everything() || EraseOnly.CONNECTORS in this
+val Set<EraseOnly>.tables: Boolean get() = everything() || EraseOnly.TABLES in this
+val Set<EraseOnly>.fills: Boolean get() = everything() || EraseOnly.FILLS in this
+
 /** Pure maths for the eraser. A "disc" is the eraser: centre (cx, cy), radius r, in page units. */
 object EraseGeometry {
 

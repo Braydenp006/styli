@@ -348,7 +348,7 @@ class PageModel(page: PageSet = A4_LINED) {
      * its end free where it was. Call it for each point of a drag, then [endErase]. Returns true if anything changed.
      */
     fun erase(
-        x: Float, y: Float, r: Float, partial: Boolean, only: EraseOnly = EraseOnly.ALL,
+        x: Float, y: Float, r: Float, partial: Boolean, only: Set<EraseOnly> = emptySet(),
         textHeight: (TextBox) -> Float = { it.fontSize * 1.3f },
     ): Boolean {
         val before = now()
@@ -395,6 +395,10 @@ class PageModel(page: PageSet = A4_LINED) {
         order = order.filter { it !in gone }.flatMap { replaced[it] ?: listOf(it) } // a piece keeps the layer of the stroke it came from
         return true
     }
+
+    /** The same, limited to one kind. */
+    fun erase(x: Float, y: Float, r: Float, partial: Boolean, only: EraseOnly, textHeight: (TextBox) -> Float = { it.fontSize * 1.3f }): Boolean =
+        erase(x, y, r, partial, setOf(only), textHeight)
 
     /** Distance from the page point to the box of a text box [height] tall (0 inside it). */
     private fun TextBox.distTo(px: Float, py: Float, height: Float): Float {

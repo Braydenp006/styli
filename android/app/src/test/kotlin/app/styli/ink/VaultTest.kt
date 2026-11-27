@@ -241,6 +241,34 @@ class VaultTest {
         assertEquals(0, odd.pens); assertEquals(40, odd.defPenWidth)
     }
 
+    @Test fun aPickedFolderBecomesAPathAndOddOnesAreRefused() {
+        val primary = File("/storage/emulated/0")
+        assertEquals(File(primary, "Documents/Notes"), Storage.treeIdToFile("primary:Documents/Notes", primary))
+        assertEquals(primary, Storage.treeIdToFile("primary:", primary))
+        assertEquals(File("/storage/1A2B-3C4D/Notes"), Storage.treeIdToFile("1A2B-3C4D:Notes", primary))
+        assertNull(Storage.treeIdToFile("raw:/data/x", primary)) // not a storage volume
+        assertNull(Storage.treeIdToFile("primary:a/../../etc", primary))
+        assertNull(Storage.treeIdToFile("nocolon", primary))
+        assertTrue(Storage.overlaps(File(dir, "a"), File(dir, "a/b"))); assertTrue(Storage.overlaps(File(dir, "a/b"), File(dir, "a")))
+        assertFalse(Storage.overlaps(File(dir, "a"), File(dir, "ab"))) // a name that only starts the same is another folder
+    }
+
+    @Test fun movingCopiesEverythingAndLeavesTheOldFolderAlone() {
+        val l = lib(); val v = vault()
+        val f = l.newFile(l.newFolder("A"), "N"); f.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        l.delete(l.root.folders.single(), f)
+        v.save(l); v.writeSettings(AppSettings().snapshot())
+        val dest = File(Files.createTempDirectory("moved").toFile(), "Notes")
+        try {
+            assertNull(v.copyTo(dest))
+            val back = Vault(dest).load()
+            assertEquals(1, back.trash.size); assertEquals(1, back.trash.single().file.notebook!!.current.items.size)
+            assertNotNull(Vault(dest).readSettings())
+            assertTrue(File(dir, ".trash").list()!!.isNotEmpty()) // the old folder is untouched
+            assertNotNull(v.copyTo(dest)) // a folder that now has notes in it is refused, not merged
+        } finally { dest.parentFile.deleteRecursively() }
+    }
+
     @Test fun smallJsonRoundTrips() {
         val m = mapOf("name" to "A \"q\"\n\\ é", "n" to 5_000_000_000L, "b" to true, "x" to null, "l" to listOf("a", "b c"), "e" to emptyList<String>())
         assertEquals(m, MiniJson.parse(MiniJson.write(m)))
