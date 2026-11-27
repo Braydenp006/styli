@@ -20,6 +20,19 @@ android {
         (getByName("main") as ExtensionAware).extensions.getByName<SourceDirectorySet>("proto").srcDir("../../proto")
         getByName("test").resources.srcDir("../../proto/testdata")
     }
+    buildTypes {
+        // A release build for trying the app at real speed on the tablet: not debuggable, so ART can compile it
+        // ahead of time. It is signed with the debug key so it installs over the debug build and keeps the notes
+        // folder choice and the "all files" grant. Replace the key before giving the app to anyone else.
+        // R8 is on now. The app uses protobuf-lite and hand-written JSON, so only the generated protobuf messages need
+        // an app-side keep rule (their field names are read by reflection). Review mapping/seeds after each build.
+        release {
+            isDebuggable = false
+            isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
 }
 
 val protobufVersion = "4.31.1"
@@ -44,6 +57,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("com.google.protobuf:protobuf-javalite:$protobufVersion")
     testImplementation("junit:junit:4.13.2")
 }

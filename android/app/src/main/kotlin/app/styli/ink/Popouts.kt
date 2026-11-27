@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.sp
 fun OptionChip(label: String, icon: String?, chosen: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     val sty = LocalSty.current
     Column(
-        Modifier.width(64.dp).alpha(if (enabled) 1f else 0.4f).clip(SquircleShape(StySize.radiusMd)).background(if (chosen) sty.honeyTint else Color.Transparent)
+        Modifier.width(64.dp).alpha(if (enabled) 1f else 0.4f).clip(StyShapes.Md).background(if (chosen) sty.honeyTint else Color.Transparent)
             .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 4.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -65,11 +65,11 @@ fun OptionChip(label: String, icon: String?, chosen: Boolean, enabled: Boolean =
 fun CheckRow(label: String, checked: Boolean, onToggle: () -> Unit) {
     val sty = LocalSty.current
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd)).clickable(onClick = onToggle).padding(horizontal = 12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 44.dp).clip(StyShapes.Md).clickable(onClick = onToggle).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(
-            Modifier.size(22.dp).clip(SquircleShape(6.dp)).background(if (checked) sty.honey else Color.Transparent).border(1.5.dp, if (checked) sty.honeyText else sty.borderStrong, SquircleShape(6.dp)),
+            Modifier.size(22.dp).clip(StyShapes.Sm).background(if (checked) sty.honey else Color.Transparent).border(1.5.dp, if (checked) sty.honeyText else sty.borderStrong, StyShapes.Sm),
             contentAlignment = Alignment.Center,
         ) { if (checked) SvgIcon("M20 6L9 17l-5-5", sty.onHoney, 16.dp) }
         Text(label, color = sty.ink, fontSize = 14.sp)
@@ -109,7 +109,7 @@ fun ColorPicker(color: Int, onChange: (Int) -> Unit, onEyedropper: () -> Unit) {
     val hueColor = Color(android.graphics.Color.HSVToColor(floatArrayOf(h, 1f, 1f)))
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Canvas(
-            Modifier.fillMaxWidth().height(110.dp).clip(SquircleShape(StySize.radiusMd))
+            Modifier.fillMaxWidth().height(110.dp).clip(StyShapes.Md)
                 .pointerInput(Unit) {
                     fun set(p: Offset) { s = (p.x / size.width).coerceIn(0f, 1f); v = 1f - (p.y / size.height).coerceIn(0f, 1f); onChange(rgb()) }
                     detectDragGestures(onDragStart = { set(it) }) { c, _ -> set(c.position) }
@@ -181,7 +181,7 @@ fun WidthPicker(width: Int, presets: List<Int>, max: Int, color: Int, onChange: 
         for (w in presets) {
             val on = w == width
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd)).background(if (on) sty.honeyTint else Color.Transparent)
+                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(StyShapes.Md).background(if (on) sty.honeyTint else Color.Transparent)
                     .clickable { onChange(w) }.padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -256,7 +256,7 @@ fun <T> CycleRow(title: String, options: List<T>, current: T, label: (T) -> Stri
         var open by remember { mutableStateOf(false) }
         Column(Modifier.padding(horizontal = 8.dp)) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd)).background(sty.honeyTint).clickable { open = !open }.padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(StyShapes.Md).background(sty.honeyTint).clickable { open = !open }.padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 icon(options[i])?.let { SvgIcon(it, sty.ink, 22.dp) }
@@ -264,7 +264,7 @@ fun <T> CycleRow(title: String, options: List<T>, current: T, label: (T) -> Stri
                 androidx.compose.foundation.layout.Box(Modifier.rotate(if (open) 180f else 0f)) { SvgIcon(Icons24.DOWN, sty.ink, 20.dp) }
             }
             if (open) for (o in options) Row(
-                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd)).clickable { onPick(o); open = false }.padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(StyShapes.Md).clickable { onPick(o); open = false }.padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 icon(o)?.let { SvgIcon(it, sty.ink, 22.dp) }
@@ -279,7 +279,7 @@ fun <T> CycleRow(title: String, options: List<T>, current: T, label: (T) -> Stri
 fun ShapeTile(preset: ShapePreset, chosen: Boolean, onClick: () -> Unit) {
     val sty = LocalSty.current
     Column(
-        Modifier.width(72.dp).clip(SquircleShape(StySize.radiusMd)).background(if (chosen) sty.honeyTint else Color.Transparent).clickable(onClick = onClick).padding(vertical = 6.dp),
+        Modifier.width(72.dp).clip(StyShapes.Md).background(if (chosen) sty.honeyTint else Color.Transparent).clickable(onClick = onClick).padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Canvas(Modifier.size(32.dp)) {
@@ -305,12 +305,12 @@ fun ShapeTile(preset: ShapePreset, chosen: Boolean, onClick: () -> Unit) {
 
 /** Two buttons with a label between them, for a pair of opposites ("Row above / below"). */
 @Composable
-fun PairRow(label: String, leftLabel: String, leftIcon: String, onLeft: () -> Unit, rightLabel: String, rightIcon: String, onRight: () -> Unit) {
+fun PairRow(label: String, leftLabel: String, leftIcon: String, onLeft: () -> Unit, rightLabel: String, rightIcon: String, onRight: () -> Unit, enabled: Boolean = true) {
     val sty = LocalSty.current
     Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconBtn(leftLabel, leftIcon, onClick = onLeft)
-        Text(label, Modifier.weight(1f), color = sty.ink, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 1)
-        IconBtn(rightLabel, rightIcon, onClick = onRight)
+        IconBtn(leftLabel, leftIcon, enabled = enabled, onClick = onLeft)
+        Text(label, Modifier.weight(1f).alpha(if (enabled) 1f else 0.4f), color = sty.ink, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 1)
+        IconBtn(rightLabel, rightIcon, enabled = enabled, onClick = onRight)
     }
 }
 
@@ -335,7 +335,7 @@ fun NumberWheel(label: String, value: Int, range: IntRange, onChange: (Int) -> U
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, color = sty.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         Box(Modifier.width(96.dp).height(itemH * 3), contentAlignment = Alignment.Center) {
-            Box(Modifier.fillMaxWidth().height(itemH).clip(SquircleShape(StySize.radiusMd)).background(sty.honeyTint))
+            Box(Modifier.fillMaxWidth().height(itemH).clip(StyShapes.Md).background(sty.honeyTint))
             if (typing) {
                 val focus = remember { androidx.compose.ui.focus.FocusRequester() }
                 var hadFocus by remember { mutableStateOf(false) } // only losing focus that was had ends the typing
@@ -368,4 +368,14 @@ fun NumberWheel(label: String, value: Int, range: IntRange, onChange: (Int) -> U
         }
         Text("tap the middle to type", color = sty.inkMuted, fontSize = 11.sp)
     }
+}
+
+/** A grab strip at the top of a menu: drag it (with the pen or a finger) to move the whole menu out of the way. */
+@Composable
+fun DragHandle(modifier: Modifier = Modifier, onDrag: (Offset) -> Unit) {
+    val sty = LocalSty.current
+    Box(
+        modifier.fillMaxWidth().height(22.dp).pointerInput(Unit) { detectDragGestures { change, d -> change.consume(); onDrag(d) } },
+        contentAlignment = Alignment.Center,
+    ) { Box(Modifier.width(40.dp).height(4.dp).clip(CircleShape).background(sty.borderStrong)) }
 }

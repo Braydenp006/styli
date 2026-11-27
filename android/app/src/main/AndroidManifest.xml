@@ -5,6 +5,8 @@
     <application
         android:label="Styli ink test"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!-- The release build is not debuggable; this lets Perfetto and Android Studio profile it. -->
+        <profileable android:shell="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

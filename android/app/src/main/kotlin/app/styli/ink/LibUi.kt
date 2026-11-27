@@ -6,13 +6,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
@@ -57,8 +55,9 @@ class DragState {
     var grab by mutableStateOf(Offset.Zero) // where on the tile the finger took hold, so the lifted copy does not jump
     var size by mutableStateOf(IntSize.Zero) // the tile's size
     // Every place a drop can land, by a key of the place's own (a folder can be on screen twice: its tile and its row in the panel).
-    val targets = mutableStateMapOf<Any, Pair<Folder, Rect>>()
-    var trashBox by mutableStateOf<Rect?>(null) // the trash bin that shows while dragging, once it is on screen
+    // Plain data, not snapshot state: it changes on every scroll frame, but hover is driven by the finger's position.
+    val targets = HashMap<Any, Pair<Folder, Rect>>()
+    var trashBox: Rect? = null // the trash bin that shows while dragging, once it is on screen
 
     /** Is the finger over the trash bin? */
     fun overTrash(): Boolean = item != null && trashBox?.let { pos in it } == true
@@ -77,28 +76,35 @@ fun drop(lib: Library, d: Dragged, to: Folder): Boolean = when {
     else -> false
 }
 
-/** Makes this a place a drag can end. */
-fun Modifier.dropTarget(drag: DragState, folder: Folder, key: Any = folder): Modifier = composed {
+/** Makes this a place a drag can end. Call from a composable, but no child composition is needed. */
+@Composable
+fun Modifier.dropTarget(drag: DragState, folder: Folder, key: Any = folder): Modifier {
     DisposableEffect(key) { onDispose { drag.targets.remove(key) } }
-    onGloballyPositioned { drag.targets[key] = folder to it.boundsInRoot() }
+    return this.onGloballyPositioned { drag.targets[key] = folder to it.boundsInRoot() }
+}
+
+/** Geometry is read when a long press starts, not by composition, so keep it out of snapshot state. */
+private class DragGeometry {
+    var origin = Offset.Zero
+    var tile = IntSize.Zero
 }
 
 /**
  * A tile or row that is tapped to open, or pressed and held to be dragged. Held and let go without moving, it asks
  * for its menu instead (so one gesture does both).
  */
-fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMenu: () -> Unit, onDrop: (Folder) -> Unit, enabled: Boolean = true, onTrash: () -> Unit = {}): Modifier = composed {
-    var origin by remember { mutableStateOf(Offset.Zero) }
-    var tile by remember { mutableStateOf(IntSize.Zero) }
+@Composable
+fun Modifier.dragSource(drag: DragState, item: Dragged, onTap: () -> Unit, onMenu: () -> Unit, onDrop: (Folder) -> Unit, enabled: Boolean = true, onTrash: () -> Unit = {}): Modifier {
+    val geometry = remember { DragGeometry() }
     val tap = rememberUpdatedState(onTap); val menu = rememberUpdatedState(onMenu); val dropped = rememberUpdatedState(onDrop); val trashed = rememberUpdatedState(onTrash)
     val dragged = rememberUpdatedState(item)
-    onGloballyPositioned { origin = it.positionInRoot(); tile = it.size }
+    return this.onGloballyPositioned { geometry.origin = it.positionInRoot(); geometry.tile = it.size }
         .pointerInput(Unit) { detectTapGestures(onTap = { tap.value() }) }
         .pointerInput(enabled) {
             if (!enabled) return@pointerInput // select mode: tapping picks, nothing is held or dragged
             var travel = 0f
             detectDragGesturesAfterLongPress(
-                onDragStart = { off -> travel = 0f; drag.item = dragged.value; drag.pos = origin + off; drag.grab = off; drag.size = tile },
+                onDragStart = { off -> travel = 0f; drag.item = dragged.value; drag.pos = geometry.origin + off; drag.grab = off; drag.size = geometry.tile },
                 onDrag = { change, amount -> change.consume(); drag.pos += amount; travel += amount.getDistance() },
                 onDragEnd = {
                     val target = drag.over(); val bin = drag.overTrash()

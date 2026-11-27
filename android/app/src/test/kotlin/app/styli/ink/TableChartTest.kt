@@ -58,7 +58,7 @@ class TableChartTest {
         assertEquals(t.colWidths.last(), big.colWidths.last(), 0f) // a new column is as wide as the last
         assertTrue(big.colAlign.isEmpty()) // all left: nothing stored
         assertTrue(t.withData(listOf(listOf("", "")), false, emptyList()).cellText.isEmpty()) // all empty: nothing stored
-        val tooBig = t.withData(List(30) { listOf("x") }, false, emptyList())
+        val tooBig = t.withData(List(Table.MAX_LINES + 10) { listOf("x") }, false, emptyList())
         assertEquals(Table.MAX_LINES, tooBig.rows)
         assertEquals(sample, t.textGrid())
     }

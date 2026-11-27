@@ -9,9 +9,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +27,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -37,8 +46,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -58,10 +69,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import app.styli.ink.proto.Template
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 /** "Edited just now", "Edited 5 min ago", "Edited 3 h ago", "Edited 2 days ago". */
@@ -100,6 +113,9 @@ internal fun noteWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 96.dp; Size3.ME
 private fun folderWidth(s: Size3): Dp = when (s) { Size3.SMALL -> 88.dp; Size3.MEDIUM -> 120.dp; Size3.LARGE -> 168.dp }
 internal fun kindLabel(k: FileKind) = when (k) { FileKind.INK -> "Ink"; FileKind.MARKDOWN -> "Markdown"; FileKind.PDF -> "PDF" }
 
+/** A stable key for a lazy-grid item. The same file can appear in Pinned, Recent and the folder list. */
+private fun libKey(group: String, x: Any) = "$group:${System.identityHashCode(x)}"
+
 /** Every folder of the library as a choice, indented by depth, leaving out [exclude] and what is inside it. */
 internal fun folderChoices(lib: Library, exclude: Folder? = null): List<Pair<Folder, String>> {
     val skip = exclude?.allFolders() ?: emptyList()
@@ -127,7 +143,11 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
     var tab by remember { mutableIntStateOf(0) } // 0 Tabularium, 1 Nexus, 2 Itinerarium, 3 Trash, 4 Settings
     var menuOpen by remember { mutableStateOf(false) }
     var plusOpen by remember { mutableStateOf(false) }
-    val now = System.currentTimeMillis()
+    // "Edited 5 min ago" only needs to move once a minute; recomputing it on every scroll frame was wasted work.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) { delay(60_000); now = System.currentTimeMillis() }
+    }
     val inFolder = ui.openFolder?.takeIf { lib.contains(it) }
     val here = inFolder ?: lib.root
 
@@ -207,24 +227,29 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
         }
     }
 
-    @Composable
-    fun Cards(items: List<Pair<Folder, NoteFile>>) = FlowRow(horizontalArrangement = Arrangement.spacedBy(StySize.space3), verticalArrangement = Arrangement.spacedBy(StySize.space3)) {
-        items.forEach { (f, file) -> Card(f, file) }
-    }
+    // One full-width cell for headings, empty states and the two animated accordion bodies.
+    fun LazyGridScope.fullWidth(key: Any, content: @Composable () -> Unit) =
+        item(key = key, span = { GridItemSpan(maxLineSpan) }, content = { content() })
 
-    @Composable
-    fun Tiles(items: List<Folder>) = FlowRow(horizontalArrangement = Arrangement.spacedBy(StySize.space2), verticalArrangement = Arrangement.spacedBy(StySize.space2)) {
-        items.forEach { FolderTile(it) }
-    }
+    fun LazyGridScope.gridTiles(values: List<Folder>, group: String) =
+        items(values, key = { libKey(group, it) }) { FolderTile(it) }
+
+    fun LazyGridScope.gridCards(values: List<Pair<Folder, NoteFile>>, group: String) =
+        items(values, key = { libKey(group, it.second) }) { (folder, file) -> Card(folder, file) }
 
     Box(Modifier.fillMaxSize().background(sty.bg)) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
             Row(Modifier.fillMaxSize()) {
-            androidx.compose.animation.AnimatedVisibility(
-                tab == 0 && ui.panelOpen,
-                enter = androidx.compose.animation.expandHorizontally() + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.shrinkHorizontally() + androidx.compose.animation.fadeOut(),
-            ) { FolderPanel(lib, ui, drag, hover, here, onOpen = ::open, onAction = { action = it }, onTrash = ::trashed) }
+            // The folder panel stays composed (at no width) so opening it the first time does not have to build the whole tree in the middle of the animation.
+            val panelW by androidx.compose.animation.core.animateDpAsState(
+                if (tab == 0 && ui.panelOpen) 300.dp else 0.dp, androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "folder panel",
+            )
+            Box(Modifier.width(panelW).fillMaxHeight().clipToBounds().graphicsLayer { alpha = (panelW.value / 300f).coerceIn(0f, 1f) }) {
+                Box(Modifier.wrapContentWidth(Alignment.Start, unbounded = true).width(300.dp).fillMaxHeight()) {
+                    FolderPanel(lib, ui, drag, hover, here, onOpen = ::open, onAction = { action = it }, onTrash = ::trashed)
+                }
+            }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = StySize.space6, vertical = StySize.space5)) {
                     if (tab != 0) {
@@ -249,8 +274,8 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                             Button({ action = Action.DeleteSelected }, enabled = any, colors = ButtonDefaults.buttonColors(containerColor = sty.danger)) { Text("Delete") }
                         } else Row(verticalAlignment = Alignment.CenterVertically) {
                             if (inFolder != null) Box(
-                                Modifier.padding(end = StySize.space3).size(StySize.touch).clip(SquircleShape(14.dp)).background(sty.honeyTint)
-                                    .border(2.dp, sty.honey, SquircleShape(14.dp)).clickable { ui.openFolder = inFolder.parent?.takeIf { it !== lib.root } },
+                                Modifier.padding(end = StySize.space3).size(StySize.touch).clip(StyShapes.Crumb).background(sty.honeyTint)
+                                    .border(2.dp, sty.honey, StyShapes.Crumb).clickable { ui.openFolder = inFolder.parent?.takeIf { it !== lib.root } },
                                 contentAlignment = Alignment.Center,
                             ) { Box(Modifier.rotate(180f)) { StyIcon(Ic.CHEVRON, sty.ink, 24.dp) } }
                             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -273,7 +298,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                             OutlinedTextField(query, { query = it }, Modifier.width(if (ui.panelOpen) 170.dp else 260.dp), singleLine = true, placeholder = { Text(if (ui.panelOpen) "Search" else "Search by name") })
                             Box(Modifier.padding(start = StySize.space3)) {
                                 Box(
-                                    Modifier.size(StySize.touch).clip(SquircleShape(StySize.radiusMd)).border(1.dp, sty.borderStrong, SquircleShape(StySize.radiusMd))
+                                    Modifier.size(StySize.touch).clip(StyShapes.Md).border(1.dp, sty.borderStrong, StyShapes.Md)
                                         .clickable { menuOpen = !menuOpen },
                                     contentAlignment = Alignment.Center,
                                 ) { MenuIcon(menuOpen, sty.ink) }
@@ -287,52 +312,75 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                             FilterChip(ui.filter == null, { ui.filter = null }, { Text("All") }, Modifier.heightIn(min = StySize.touch))
                             for (k in FileKind.entries) FilterChip(ui.filter == k, { ui.filter = k }, { Text(kindLabel(k)) }, Modifier.heightIn(min = StySize.touch))
                         }
-                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = StySize.space4, bottom = 96.dp)) {
+                        // A lazy grid: only the cards and covers on screen are composed. The two accordion bodies
+                        // stay as one cell each so their fold animation is unchanged; the big lists below are lazy.
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = maxOf(noteWidth(ui.noteSize), folderWidth(ui.folderSize))),
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentPadding = PaddingValues(top = StySize.space4, bottom = 96.dp),
+                            horizontalArrangement = Arrangement.spacedBy(StySize.space3),
+                            verticalArrangement = Arrangement.spacedBy(StySize.space3),
+                        ) {
                             if (query.isNotBlank()) {
                                 val hits = lib.search(query, ui.filter)
-                                if (hits.isEmpty()) Text("Nothing named like that.", color = sty.inkMuted)
-                                Cards(hits)
+                                if (hits.isEmpty()) fullWidth("search-empty") { Text("Nothing named like that.", color = sty.inkMuted) }
+                                gridCards(hits, "search")
                             } else if (inFolder != null) {
-                                if (inFolder.folders.isNotEmpty()) Tiles(inFolder.folders.sortedBy { it.name.lowercase() })
+                                val folders = inFolder.folders.sortedBy { it.name.lowercase() }
                                 val files = visible(inFolder.files)
-                                if (inFolder.folders.isEmpty() && inFolder.files.isEmpty()) Text("Empty folder. Tap the pen and paper to add a note.", color = sty.inkMuted)
-                                else if (files.isEmpty() && inFolder.files.isNotEmpty()) Text("No ${ui.filter?.let(::kindLabel)} files here.", color = sty.inkMuted)
-                                Box(Modifier.padding(top = StySize.space3)) { Cards(files.map { inFolder to it }) }
+                                if (inFolder.folders.isEmpty() && inFolder.files.isEmpty()) {
+                                    fullWidth("folder-empty") { Text("Empty folder. Tap the pen and paper to add a note.", color = sty.inkMuted) }
+                                } else {
+                                    if (files.isEmpty() && inFolder.files.isNotEmpty()) fullWidth("filter-empty") { Text("No ${ui.filter?.let(::kindLabel)} files here.", color = sty.inkMuted) }
+                                    gridTiles(folders, "folder")
+                                    gridCards(files.map { inFolder to it }, "folder")
+                                }
                             } else if (lib.root.allFolders().size == 1 && lib.root.files.isEmpty()) {
-                                Text("Nothing here yet", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineMedium)
-                                Text("Tap the pen and paper to write your first note, or the plus to add a folder.", color = sty.inkMuted)
+                                fullWidth("empty-title") { Text("Nothing here yet", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineMedium) }
+                                fullWidth("empty-body") { Text("Tap the pen and paper to write your first note, or the plus to add a folder.", color = sty.inkMuted) }
                             } else {
                                 val pinnedFolders = lib.pinnedFolders()
                                 val pinnedFiles = lib.pinnedFiles().filter { ui.filter == null || it.second.kind == ui.filter }
                                 if (pinnedFolders.isNotEmpty() || pinnedFiles.isNotEmpty()) {
-                                    Section("Pinned", ui.pinnedOpen) { ui.pinnedOpen = !ui.pinnedOpen }
-                                    Reveal(ui.pinnedOpen) {
-                                        Column {
-                                            if (pinnedFolders.isNotEmpty()) { SubHeading("Pinned folders"); Tiles(pinnedFolders) }
-                                            if (pinnedFiles.isNotEmpty()) {
-                                                Box(Modifier.padding(top = if (pinnedFolders.isNotEmpty()) StySize.space4 else 0.dp)) { SubHeading("Pinned notes") }
-                                                Cards(pinnedFiles)
+                                    fullWidth("pinned-heading") { Section("Pinned", ui.pinnedOpen) { ui.pinnedOpen = !ui.pinnedOpen } }
+                                    fullWidth("pinned-body") {
+                                        Reveal(ui.pinnedOpen) {
+                                            Column {
+                                                if (pinnedFolders.isNotEmpty()) {
+                                                    SubHeading("Pinned folders")
+                                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(StySize.space2), verticalArrangement = Arrangement.spacedBy(StySize.space2)) {
+                                                        pinnedFolders.forEach { folder -> key(libKey("pinned-folder", folder)) { FolderTile(folder) } }
+                                                    }
+                                                }
+                                                if (pinnedFiles.isNotEmpty()) {
+                                                    Box(Modifier.padding(top = if (pinnedFolders.isNotEmpty()) StySize.space4 else 0.dp)) { SubHeading("Pinned notes") }
+                                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(StySize.space3), verticalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                                                        pinnedFiles.forEach { (folder, file) -> key(libKey("pinned-file", file)) { Card(folder, file) } }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
                                 val recent = lib.recent(6, ui.filter)
                                 if (recent.isNotEmpty()) {
-                                    Box(Modifier.padding(top = StySize.space5)) { Section("Recent", ui.recentOpen) { ui.recentOpen = !ui.recentOpen } }
-                                    Reveal(ui.recentOpen) {
-                                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
-                                            recent.forEach { (f, file) -> Card(f, file) }
+                                    fullWidth("recent-heading") { Box(Modifier.padding(top = StySize.space5)) { Section("Recent", ui.recentOpen) { ui.recentOpen = !ui.recentOpen } } }
+                                    fullWidth("recent-body") {
+                                        Reveal(ui.recentOpen) {
+                                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                                                recent.forEach { (folder, file) -> key(libKey("recent", file)) { Card(folder, file) } }
+                                            }
                                         }
                                     }
                                 }
                                 if (lib.root.folders.isNotEmpty()) {
-                                    Box(Modifier.padding(top = StySize.space5)) { Section("Folders") }
-                                    Tiles(lib.root.folders.sortedBy { it.name.lowercase() })
+                                    fullWidth("folders-heading") { Box(Modifier.padding(top = StySize.space5)) { Section("Folders") } }
+                                    gridTiles(lib.root.folders.sortedBy { it.name.lowercase() }, "folders")
                                 }
                                 val loose = visible(lib.root.files)
                                 if (loose.isNotEmpty()) {
-                                    Box(Modifier.padding(top = StySize.space5)) { Section("Files") }
-                                    Cards(loose.map { lib.root to it })
+                                    fullWidth("files-heading") { Box(Modifier.padding(top = StySize.space5)) { Section("Files") } }
+                                    gridCards(loose.map { lib.root to it }, "files")
                                 }
                             }
                         }
@@ -342,7 +390,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                     Row(Modifier.align(Alignment.BottomEnd).padding(end = StySize.space6, bottom = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
                         Box {
                             Box(
-                                Modifier.size(60.dp).shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp)).background(sty.bg.copy(alpha = 0.7f)).background(sty.honeyTint).border(2.dp, sty.honey, SquircleShape(20.dp)).clickable { plusOpen = true },
+                                Modifier.size(60.dp).shadow(8.dp, StyShapes.Fab).clip(StyShapes.Fab).background(sty.bg.copy(alpha = 0.7f)).background(sty.honeyTint).border(2.dp, sty.honey, StyShapes.Fab).clickable { plusOpen = true },
                                 contentAlignment = Alignment.Center,
                             ) { StyIcon(Ic.PLUS, sty.ink, 28.dp) }
                             DropdownMenu(plusOpen, { plusOpen = false }) {
@@ -352,7 +400,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                             }
                         }
                         Box(
-                            Modifier.size(60.dp).clip(SquircleShape(20.dp)).background(sty.honey).clickable { creating = true },
+                            Modifier.size(60.dp).clip(StyShapes.Fab).background(sty.honey).clickable { creating = true },
                             contentAlignment = Alignment.Center,
                         ) { StyIcon(Ic.NEWNOTE, sty.onHoney, 28.dp) }
                     }
@@ -364,8 +412,8 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                 Row(Modifier.align(Alignment.BottomStart).padding(start = StySize.space6, bottom = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
                     // The arrow opens and closes the folder panel (same look as the plus; it points back while the panel is open).
                     Box(
-                        Modifier.size(60.dp).shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp)).background(sty.bg.copy(alpha = 0.7f)).background(sty.honeyTint)
-                            .border(2.dp, sty.honey, SquircleShape(20.dp)).clickable { ui.panelOpen = !ui.panelOpen },
+                        Modifier.size(60.dp).shadow(8.dp, StyShapes.Fab).clip(StyShapes.Fab).background(sty.bg.copy(alpha = 0.7f)).background(sty.honeyTint)
+                            .border(2.dp, sty.honey, StyShapes.Fab).clickable { ui.panelOpen = !ui.panelOpen },
                         contentAlignment = Alignment.Center,
                     ) { Box(Modifier.rotate(if (ui.panelOpen) 180f else 0f)) { StyIcon(Ic.CHEVRON, sty.ink, 28.dp) } }
                     // While something is dragged, the bin shows beside it: let go of a file or folder on it to send it to the trash.
@@ -374,12 +422,12 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                         enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn() + androidx.compose.animation.expandHorizontally(),
                         exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkHorizontally(),
                     ) {
-                        val over = drag.overTrash()
+                        val over by remember { derivedStateOf { drag.overTrash() } }
                         val grow by androidx.compose.animation.core.animateFloatAsState(if (over) 1.15f else 1f, label = "bin grows")
                         androidx.compose.runtime.DisposableEffect(Unit) { onDispose { drag.trashBox = null } }
                         Box(
-                            Modifier.size(60.dp).graphicsLayer { scaleX = grow; scaleY = grow }.shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp))
-                                .background(sty.bg.copy(alpha = 0.7f)).background(if (over) sty.danger.copy(alpha = 0.4f) else sty.danger.copy(alpha = 0.22f)).border(2.dp, sty.danger, SquircleShape(20.dp))
+                            Modifier.size(60.dp).graphicsLayer { scaleX = grow; scaleY = grow }.shadow(8.dp, StyShapes.Fab).clip(StyShapes.Fab)
+                                .background(sty.bg.copy(alpha = 0.7f)).background(if (over) sty.danger.copy(alpha = 0.4f) else sty.danger.copy(alpha = 0.22f)).border(2.dp, sty.danger, StyShapes.Fab)
                                 .onGloballyPositioned { drag.trashBox = it.boundsInRoot() },
                             contentAlignment = Alignment.Center,
                         ) { StyIcon(Ic.TRASH, sty.ink, 28.dp) }
@@ -402,7 +450,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                     val d = androidx.compose.ui.platform.LocalDensity.current
                     Box(
                         Modifier.offset { at }.size(with(d) { spotSize.width.toDp() }, with(d) { spotSize.height.toDp() })
-                            .clip(SquircleShape(14.dp)).background(sty.honeyTint),
+                            .clip(StyShapes.Crumb).background(sty.honeyTint),
                     )
                 }
                 Row(Modifier.fillMaxSize()) {
@@ -474,7 +522,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
 private fun Crumb(text: String, hovered: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val sty = LocalSty.current
     Text(
-        text, modifier.clip(SquircleShape(StySize.radiusMd)).background(if (hovered) sty.honeyTint else Color.Transparent)
+        text, modifier.clip(StyShapes.Md).background(if (hovered) sty.honeyTint else Color.Transparent)
             .clickable(onClick = onClick).padding(horizontal = StySize.space2, vertical = StySize.space1),
         color = sty.honeyText, style = MaterialTheme.typography.titleMedium,
     )
@@ -485,7 +533,7 @@ private fun Swatches(chosen: Int?, onPick: (Int?) -> Unit) {
     val sty = LocalSty.current
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
         folderColours.forEach { (label, c) ->
-            Column(Modifier.clip(SquircleShape(StySize.radiusMd)).clickable { onPick(c) }.padding(StySize.space1), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.clip(StyShapes.Md).clickable { onPick(c) }.padding(StySize.space1), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(
                     Modifier.size(40.dp).clip(CircleShape).background(c?.let { Color(it) } ?: sty.surface)
                         .border(if (c == chosen) 3.dp else 1.dp, if (c == chosen) sty.ink else sty.borderStrong, CircleShape),
@@ -519,7 +567,7 @@ private fun Section(text: String, open: Boolean? = null, onToggle: () -> Unit = 
     val sty = LocalSty.current
     val turn by androidx.compose.animation.core.animateFloatAsState(if (open == true) 90f else 0f, label = "chevron")
     Row(
-        Modifier.then(if (open != null) Modifier.clip(SquircleShape(StySize.radiusMd)).clickable(onClick = onToggle) else Modifier).padding(bottom = StySize.space2),
+        Modifier.then(if (open != null) Modifier.clip(StyShapes.Md).clickable(onClick = onToggle) else Modifier).padding(bottom = StySize.space2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (open != null) Box(Modifier.rotate(turn)) { StyIcon(Ic.CHEVRON, sty.inkMuted, 22.dp) }
@@ -535,7 +583,7 @@ private fun SubHeading(text: String) =
 @Composable
 private fun PinBadge() {
     val sty = LocalSty.current
-    Box(Modifier.size(28.dp).clip(SquircleShape(9.dp)).background(sty.surface).border(1.dp, sty.honey, SquircleShape(9.dp)), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(28.dp).clip(StyShapes.Badge).background(sty.surface).border(1.dp, sty.honey, StyShapes.Badge), contentAlignment = Alignment.Center) {
         StyIcon(Ic.PIN, sty.honey, 20.dp)
     }
 }
@@ -548,10 +596,10 @@ internal fun CardFace(color: Int?, file: NoteFile, w: Dp, sub: String, modifier:
     val sty = LocalSty.current
     Box(Modifier.width(w)) {
     Column(
-        Modifier.fillMaxWidth().clip(SquircleShape(StySize.radiusLg)).border(if (picked == true) 2.dp else 1.dp, if (picked == true) sty.honey else sty.border, SquircleShape(StySize.radiusLg))
+        Modifier.fillMaxWidth().clip(StyShapes.Lg).border(if (picked == true) 2.dp else 1.dp, if (picked == true) sty.honey else sty.border, StyShapes.Lg)
             .background(sty.surface).then(modifier).padding(StySize.space3),
     ) {
-        color?.let { Box(Modifier.fillMaxWidth().height(4.dp).clip(SquircleShape(2.dp)).background(Color(it))) }
+        color?.let { Box(Modifier.fillMaxWidth().height(4.dp).clip(StyShapes.Stripe).background(Color(it))) }
         Box {
             Cover(file, Modifier.fillMaxWidth().height(w * 1.1f).padding(top = StySize.space2))
             if (file.pinned) Box(Modifier.align(Alignment.TopEnd).padding(StySize.space1)) { PinBadge() }
@@ -569,8 +617,8 @@ private fun FolderFace(folder: Folder, w: Dp, total: Int, hovered: Boolean, modi
     val sty = LocalSty.current
     Box(Modifier.width(w)) {
     Column(
-        Modifier.fillMaxWidth().clip(SquircleShape(StySize.radiusLg)).background(if (hovered || picked == true) sty.honeyTint else if (picked == false) sty.surface else Color.Transparent)
-            .then(if (picked != null) Modifier.border(if (picked) 2.dp else 1.dp, if (picked) sty.honey else sty.border, SquircleShape(StySize.radiusLg)) else Modifier)
+        Modifier.fillMaxWidth().clip(StyShapes.Lg).background(if (hovered || picked == true) sty.honeyTint else if (picked == false) sty.surface else Color.Transparent)
+            .then(if (picked != null) Modifier.border(if (picked) 2.dp else 1.dp, if (picked) sty.honey else sty.border, StyShapes.Lg) else Modifier)
             .then(modifier).padding(start = StySize.space3, end = StySize.space3, bottom = StySize.space3, top = if (picked != null) StySize.space6 else StySize.space3),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -624,11 +672,11 @@ private fun DragGhost(drag: DragState, d: Dragged) {
     val width = with(androidx.compose.ui.platform.LocalDensity.current) { drag.size.width.toDp() }
     Box(
         Modifier.offset { IntOffset(at.x.roundToInt(), at.y.roundToInt()) }.width(width)
-            .graphicsLayer { scaleX = grow; scaleY = grow; rotationZ = swing; shadowElevation = 36f; shape = SquircleShape(StySize.radiusLg); clip = false },
+            .graphicsLayer { scaleX = grow; scaleY = grow; rotationZ = swing; shadowElevation = 36f; shape = StyShapes.Lg; clip = false },
     ) {
         val look = d.preview
         if (look != null) look()
-        else Text(d.label, Modifier.clip(SquircleShape(StySize.radiusMd)).background(sty.honey).padding(horizontal = StySize.space3, vertical = StySize.space2), color = sty.onHoney, maxLines = 1)
+        else Text(d.label, Modifier.clip(StyShapes.Md).background(sty.honey).padding(horizontal = StySize.space3, vertical = StySize.space2), color = sty.onHoney, maxLines = 1)
     }
 }
 
@@ -639,32 +687,42 @@ internal fun Cover(file: NoteFile, modifier: Modifier) {
     val p = file.notebook?.pages?.first()?.page
     val context = LocalContext.current
     val version = Covers.version(file)
-    // Made after the cover first appears (a blank page needs none), then kept until the page changes.
-    val picture by produceState<Covers.Pyramid?>(null, file, version) { value = Covers.of(context, file) }
-    Canvas(modifier) {
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier) {
         val aspect = if (p == null) 0.75f else if (p.infinite) 1f else p.width.toFloat() / p.height
-        val h = minOf(size.height, size.width / aspect)
-        val w = h * aspect
-        val x0 = (size.width - w) / 2; val y0 = (size.height - h) / 2
-        drawRect(Color.White, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h))
-        drawRect(sty.border, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1f))
-        val pic = picture?.pick(w.roundToInt())
-        if (pic != null) {
-            drawImage(pic, dstOffset = androidx.compose.ui.unit.IntOffset(x0.roundToInt(), y0.roundToInt()), dstSize = androidx.compose.ui.unit.IntSize(w.roundToInt(), h.roundToInt()), filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
-            drawRect(sty.border, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1f))
-            return@Canvas
+        val targetPx = with(density) {
+            val maxW = maxWidth.toPx()
+            val maxH = maxHeight.toPx()
+            (minOf(maxH, maxW / aspect) * aspect).roundToInt().coerceAtLeast(1)
         }
-        val step = h / 14
-        val ruling = Color(0xFFC9D3E6) // the paper is white in both themes, so its lines are too
-        when {
-            p == null -> { // Markdown or PDF: grey bars like a page of text
-                var y = y0 + step * 2; var i = 0
-                while (y < y0 + h - step) { drawLine(Color(0xFFB8B8B8), Offset(x0 + step, y), Offset(x0 + w - step * (if (i % 3 == 2) 4 else 1), y), 3f); y += step; i++ }
+        val bucket = Covers.bucket(targetPx)
+        // A cache hit is available in the first frame, so changing the card size does not flash a placeholder.
+        val initial = remember(file, version, bucket) { Covers.peek(file, bucket, version) }
+        val picture by produceState(initial, file, version, bucket) { value = Covers.of(context, file, bucket) }
+        Canvas(Modifier.fillMaxSize()) {
+            val h = minOf(size.height, size.width / aspect)
+            val w = h * aspect
+            val x0 = (size.width - w) / 2; val y0 = (size.height - h) / 2
+            drawRect(Color.White, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h))
+            drawRect(sty.border, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1f))
+            val pic = picture?.pick(w.roundToInt())
+            if (pic != null) {
+                drawImage(pic, dstOffset = androidx.compose.ui.unit.IntOffset(x0.roundToInt(), y0.roundToInt()), dstSize = androidx.compose.ui.unit.IntSize(w.roundToInt(), h.roundToInt()), filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+                drawRect(sty.border, Offset(x0, y0), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1f))
+                return@Canvas
             }
-            p.template == Template.TEMPLATE_LINED -> { var y = y0 + step * 2; while (y < y0 + h) { drawLine(ruling, Offset(x0, y), Offset(x0 + w, y)); y += step } }
-            p.template == Template.TEMPLATE_GRID -> {
-                var y = y0 + step; while (y < y0 + h) { drawLine(ruling, Offset(x0, y), Offset(x0 + w, y)); y += step }
-                var x = x0 + step; while (x < x0 + w) { drawLine(ruling, Offset(x, y0), Offset(x, y0 + h)); x += step }
+            val step = h / 14
+            val ruling = Color(0xFFC9D3E6) // the paper is white in both themes, so its lines are too
+            when {
+                p == null -> { // Markdown or PDF: grey bars like a page of text
+                    var y = y0 + step * 2; var i = 0
+                    while (y < y0 + h - step) { drawLine(Color(0xFFB8B8B8), Offset(x0 + step, y), Offset(x0 + w - step * (if (i % 3 == 2) 4 else 1), y), 3f); y += step; i++ }
+                }
+                p.template == Template.TEMPLATE_LINED -> { var y = y0 + step * 2; while (y < y0 + h) { drawLine(ruling, Offset(x0, y), Offset(x0 + w, y)); y += step } }
+                p.template == Template.TEMPLATE_GRID -> {
+                    var y = y0 + step; while (y < y0 + h) { drawLine(ruling, Offset(x0, y), Offset(x0 + w, y)); y += step }
+                    var x = x0 + step; while (x < x0 + w) { drawLine(ruling, Offset(x, y0), Offset(x, y0 + h)); x += step }
+                }
             }
         }
     }

@@ -84,8 +84,10 @@ class MainActivity : ComponentActivity() {
     }
 
     // The pen's side button is read here, before any view sees the event, so it works while the pen hovers too.
+    // The pen button's own events (and key codes) are kept from the system, so Android does not pop up its own pen menu over the page.
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean { PenButton.track(ev); return super.dispatchTouchEvent(ev) }
-    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean { PenButton.track(ev); return super.dispatchGenericMotionEvent(ev) }
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean = if (PenButton.track(ev)) true else super.dispatchGenericMotionEvent(ev)
+    override fun dispatchKeyEvent(ev: android.view.KeyEvent): Boolean = if (PenButton.isStylusKey(ev.keyCode)) true else super.dispatchKeyEvent(ev)
 }
 
 /** The Library first; opening a file shows its pages on the canvas, and Back returns to the Library. */
@@ -283,6 +285,8 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
     var sLine by remember { mutableStateOf(1) }
     var sDashed by remember { mutableStateOf(false) }
     var bColor by remember { mutableStateOf(0x99FFEB3B.toInt()) }
+    var barDrag by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) } // where the selection bar was dragged to
+    var popDrag by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) } // and the rail's popout
     var viewLocked by remember { mutableStateOf(false) } // fingers do not scroll or zoom while on
     var open by remember { mutableStateOf<String?>(null) } // the rail's popout menu that is showing
     var sheetOpen by remember { mutableStateOf(false) } // the converted text under the page
@@ -504,7 +508,8 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             PopHeading("Rows and columns (tap a cell first)")
             PairRow("Row above / below", "Row above", Icons24.UP, { canvas?.insertRow(false) }, "Row below", Icons24.DOWN, { canvas?.insertRow(true) })
             PairRow("Column left / right", "Column left", Icons24.BACK, { canvas?.insertColumn(false) }, "Column right", Icons24.NEXT, { canvas?.insertColumn(true) })
-            PairRow("Delete row / column", "Delete row", Icons24.DELETE, { canvas?.deleteRow() }, "Delete column", Icons24.DELETE, { canvas?.deleteColumn() })
+            PairRow("Delete row / column", "Delete row", Icons24.DELETE, { canvas?.deleteRow() }, "Delete column", Icons24.DELETE, { canvas?.deleteColumn() }, enabled = sel?.cell == true)
+            if (sel?.cell != true) Text("Tap a cell with the pen to choose which row and column to delete.", Modifier.padding(horizontal = 16.dp), color = LocalSty.current.inkMuted, fontSize = 12.sp)
             CycleRow("Line weight", listOf(0, 1, 2, 3), tLine, { weights[it] }, { null }) { tLine = it; canvas?.setTableStyle(null, null, listOf(20f, 40f, 80f, 160f)[it]) }
             Item("Lines colour") { picking = 3 }
             Item("Fill colour (whole table)") { picking = 4 }
@@ -605,7 +610,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                     penHoldAction.tool?.let { buttonState[1] = tool.ordinal.toLong(); choose(it) }
                 } else {
                     if (buttonState[1] >= 0) { choose(InkCanvasView.Tool.entries[buttonState[1].toInt()]); buttonState[1] = -1 }
-                    if (now - buttonState[0] < 400) when (penClickAction) {
+                    if (now - buttonState[0] < 450) when (penClickAction) {
                         PenAction.NONE -> {}
                         PenAction.PREVIOUS -> canvas?.previousTool?.let { choose(it) }
                         PenAction.UNDO -> canvas?.undo()
@@ -664,12 +669,13 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             androidx.compose.ui.layout.Layout(
                 content = {
                     Surface(
-                        Modifier.pointerInput(Unit) { detectTapGestures { } }.then(popWidth(which)).heightIn(max = 760.dp),
-                        shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp,
+                        Modifier.offset { androidx.compose.ui.unit.IntOffset(popDrag.x.toInt(), popDrag.y.toInt()) }.pointerInput(Unit) { detectTapGestures { } }.then(popWidth(which)).heightIn(max = 760.dp),
+                        shape = StyShapes.Lg, color = sty.surface, shadowElevation = 8.dp,
                         border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
                     ) {
-                        androidx.compose.runtime.CompositionLocalProvider(LocalClose provides { open = null }) {
-                            Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+                        Box {
+                            androidx.compose.runtime.CompositionLocalProvider(LocalClose provides { open = null }) {
+                            Column(Modifier.verticalScroll(rememberScrollState()).padding(top = 20.dp, bottom = 8.dp)) {
                                 when (which) {
                                     "pen" -> InkPopout(
                                         listOf(Tool.PEN, Tool.DOTTED), tool, { choose(it) },
@@ -729,6 +735,8 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                                 }
                             }
                         }
+                            DragHandle(Modifier.align(Alignment.TopCenter)) { popDrag += it }
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
@@ -770,12 +778,14 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                                 OptionChip(label, icon, selPanel == key) { selPanel = if (selPanel == key) null else key }
                             }
                         }
-                        Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(Modifier.offset { androidx.compose.ui.unit.IntOffset(barDrag.x.toInt(), barDrag.y.toInt()) }, horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Surface(
-                                Modifier.pointerInput(Unit) { detectTapGestures { } }.onSizeChanged { barW = it.width }, shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp,
+                                Modifier.pointerInput(Unit) { detectTapGestures { } }.onSizeChanged { barW = it.width }, shape = StyShapes.Lg, color = sty.surface, shadowElevation = 8.dp,
                                 border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
                             ) {
-                                Row(Modifier.horizontalScroll(rememberScrollState()).padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Column {
+                                    DragHandle { barDrag += it }
+                                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                     OptionChip("Delete", Icons24.DELETE, false) { canvas?.deleteSelection() }
                                     OptionChip("Save clip", Icons24.CLIPBOARD, false) { canvas?.saveSelection()?.let { clips = canvas!!.shelf.clips; naming = it; nameText = it.name } }
                                     PanelChip("layers", "Layers", Icons24.LAYERS)
@@ -788,6 +798,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                                     if (info.picture) OptionChip("Crop", Icons24.CROP, false) { canvas?.toggleCrop() }
                                     if (info.cropped) OptionChip("Reset crop", Icons24.RESET, false) { canvas?.resetCrop() }
                                 }
+                                }
                             }
                             val panel = selPanel
                             if (panel != null) {
@@ -796,9 +807,10 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                                 val x = (chipX[panel] ?: 0).coerceAtMost(maxOf(0, barW - with(density) { panelW.roundToPx() }))
                                 Surface(
                                     Modifier.offset { androidx.compose.ui.unit.IntOffset(x, 0) }.pointerInput(Unit) { detectTapGestures { } }.width(panelW).heightIn(max = 380.dp),
-                                    shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
+                                    shape = StyShapes.Lg, color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
                                 ) {
-                                    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+                                    Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 6.dp)) {
+                                        DragHandle { barDrag += it }
                                         when (panel) { "layers" -> layersMenu(); "text" -> textMenu(); "shape" -> shapeMenu(); "connector" -> connectorMenu(); "table" -> tableMenu() }
                                     }
                                 }
@@ -840,7 +852,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             Box(Modifier.fillMaxSize().clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { open = null })
             Surface(
                 Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 64.dp, end = 8.dp).pointerInput(Unit) { detectTapGestures { } }.width(250.dp),
-                shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
+                shape = StyShapes.Lg, color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
             ) {
                 Column(Modifier.padding(vertical = 8.dp)) {
                     PopHeading("Add to this page")
@@ -856,7 +868,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             Surface(
                 Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 64.dp, end = 8.dp).pointerInput(Unit) { detectTapGestures { } }
                     .widthIn(min = 260.dp, max = 380.dp).heightIn(max = 720.dp),
-                shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
+                shape = StyShapes.Lg, color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
             ) {
                 androidx.compose.runtime.CompositionLocalProvider(LocalClose provides { open = null }) {
                     Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
@@ -873,7 +885,8 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         // The pens are changed from the tool menus, so look at them now and then (and on the way out) to keep them.
         // The note's own tool, zoom and scroll are kept the same way.
         fun keep(c: InkCanvasView) { settings.captureFrom(c); file.view = NoteView.capture(c) }
-        LaunchedEffect(sel == null) { if (sel == null) selPanel = null }
+        LaunchedEffect(sel == null) { if (sel == null) { selPanel = null; barDrag = androidx.compose.ui.geometry.Offset.Zero } }
+        LaunchedEffect(open) { popDrag = androidx.compose.ui.geometry.Offset.Zero }
         LaunchedEffect(canvas) { while (true) { kotlinx.coroutines.delay(1000); canvas?.let { keep(it); ink = it.penColor; hlInk = it.highlighterColor; penW = it.penWidth; hlW = it.highlighterWidth } } }
         LaunchedEffect(Unit) { // a few test clips, once
             if (!settings.clipSamples && shelf.clips.isEmpty()) { sampleClips().forEach { shelf.add(it) }; clips = shelf.clips }
@@ -888,11 +901,11 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         androidx.compose.runtime.DisposableEffect(canvas) { onDispose { canvas?.let(::keep) } }
         ZoomPill(zoomState, full, sheetOpen, { canvas?.fitToScreen() }, { canvas?.overview() })
         if (full) Surface(
-            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp), shape = SquircleShape(StySize.radiusMd),
+            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp), shape = StyShapes.Md,
             color = LocalSty.current.surface, shadowElevation = 4.dp, border = androidx.compose.foundation.BorderStroke(1.dp, LocalSty.current.border),
         ) { IconBtn("Exit full screen", Icons24.EXIT_FULL, onClick = { full = false }) }
         placing?.let { c ->
-            Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), shape = SquircleShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp) {
+            Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), shape = StyShapes.Xl, tonalElevation = 6.dp, shadowElevation = 4.dp) {
                 Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Tap where \"${c.name}\" goes")
                     TextButton(onClick = { canvas?.placeClip(null) }, Modifier.padding(start = 8.dp)) { Text("Cancel") }
@@ -901,7 +914,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         }
         if (tableDialog) {
             androidx.compose.ui.window.Dialog(onDismissRequest = { tableDialog = false }) {
-                Surface(shape = SquircleShape(StySize.radiusLg), color = sty.surface, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border)) {
+                Surface(shape = StyShapes.Lg, color = sty.surface, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border)) {
                     Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         DialogTitle("Table")
                         Text("Pick how many, then drag on the page to draw it.", color = sty.inkMuted, fontSize = 13.sp)
@@ -1043,7 +1056,7 @@ private fun Choice(text: String, chosen: Boolean, onClick: () -> Unit) = PopRow(
 private fun PopRow(text: String, chosen: Boolean, onClick: () -> Unit) {
     val sty = LocalSty.current
     Text(
-        text, Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd))
+        text, Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 44.dp).clip(StyShapes.Md)
             .background(if (chosen) sty.honeyTint else androidx.compose.ui.graphics.Color.Transparent).clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 12.dp),
         color = sty.ink, fontSize = 14.sp,
@@ -1119,11 +1132,11 @@ private fun ClipPreview(c: Clip, dim: androidx.compose.ui.unit.Dp = 48.dp, thumb
 private fun ClipTile(c: Clip, thumb: (String) -> android.graphics.Bitmap?, chosen: Boolean, onTap: () -> Unit, onHold: () -> Unit) {
     val sty = LocalSty.current
     Column(
-        Modifier.width(96.dp).padding(2.dp).clip(SquircleShape(StySize.radiusMd)).background(if (chosen) sty.honeyTint else androidx.compose.ui.graphics.Color.Transparent)
+        Modifier.width(96.dp).padding(2.dp).clip(StyShapes.Md).background(if (chosen) sty.honeyTint else androidx.compose.ui.graphics.Color.Transparent)
             .pointerInput(c) { detectTapGestures(onTap = { onTap() }, onLongPress = { onHold() }) }.padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.size(76.dp).clip(SquircleShape(StySize.radiusMd)).background(sty.bg).border(1.dp, sty.border, SquircleShape(StySize.radiusMd)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(76.dp).clip(StyShapes.Md).background(sty.bg).border(1.dp, sty.border, StyShapes.Md), contentAlignment = Alignment.Center) {
             ClipPreview(c, 60.dp, thumb)
         }
         Text(c.name, color = sty.ink, fontSize = 11.sp, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
@@ -1148,7 +1161,7 @@ private fun BoxScope.ZoomPill(zoomState: androidx.compose.runtime.MutableIntStat
     if (shown || zoom != 100) {
         Surface(
             Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp).padding(bottom = if (full) 0.dp else if (sheetOpen) 268.dp else 108.dp),
-            shape = SquircleShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp,
+            shape = StyShapes.Xl, tonalElevation = 6.dp, shadowElevation = 4.dp,
         ) {
             Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("$zoom%")
@@ -1180,7 +1193,7 @@ private fun PageBarHost(pagesState: androidx.compose.runtime.State<List<PageMode
 private fun PopIconRow(text: String, icon: String, enabled: Boolean = true, onClick: () -> Unit) {
     val sty = LocalSty.current
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 48.dp).clip(SquircleShape(StySize.radiusMd)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 48.dp).clip(StyShapes.Md).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(Modifier.alpha(if (enabled) 1f else 0.4f)) { SvgIcon(icon, sty.ink, 22.dp) }

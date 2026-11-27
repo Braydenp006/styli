@@ -8,6 +8,20 @@ import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+
+/** Shared, immutable shapes for the radii the app already uses, so hot composables stop constructing them. */
+object StyShapes {
+    val Stripe = SquircleShape(2.dp)
+    val Xs = SquircleShape(4.dp)
+    val Sm = SquircleShape(6.dp)
+    val Badge = SquircleShape(9.dp)
+    val Md = SquircleShape(StySize.radiusMd)
+    val Crumb = SquircleShape(14.dp)
+    val Lg = SquircleShape(StySize.radiusLg)
+    val Fab = SquircleShape(20.dp)
+    val Xl = SquircleShape(28.dp)
+}
 
 /**
  * Styli's box shape: a "squircle". Each corner eases into the straight edge instead of meeting it at a circle's

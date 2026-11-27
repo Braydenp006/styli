@@ -2086,6 +2086,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         val rect: RectF, val table: Boolean, val chart: Boolean, val picture: Boolean, val cropped: Boolean,
         val text: Boolean, val shape: Boolean, val connector: Boolean,
         val route: Route? = null, val fromHead: Arrowhead? = null, val toHead: Arrowhead? = null, val hasVia: Boolean = false, // set when one connector is selected alone
+        val cell: Boolean = false, // a table cell is chosen (rows and columns can be deleted)
     )
 
     fun selectionInfo(): SelectionInfo? {
@@ -2103,6 +2104,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
             picture = pic != null, cropped = pic?.isCropped == true,
             text = model.texts.any { it.id in selection }, shape = model.shapes.any { it.id in selection }, connector = model.connectors.any { it.id in selection },
             route = alone?.route, fromHead = alone?.fromHead, toHead = alone?.toHead, hasVia = alone?.via?.isNotEmpty() == true,
+            cell = lineTable() != null && cellSel != null,
         )
     }
 

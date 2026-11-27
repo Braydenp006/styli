@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -34,6 +35,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -132,9 +134,14 @@ fun toolIcon(t: InkCanvasView.Tool): String = when (t) {
 /** The ink colours on the rail (black, blue and red, as in the mockup). */
 val RAIL_INKS = listOf(0xFF000000.toInt(), 0xFF2F4FA8.toInt(), 0xFFB3261E.toInt())
 
+// Paths are read-only after parsing, so share the parsed result for each path string. The tool rail and Settings
+// draw the same handful of icons many times; parsing them all again was the Toolbar hitch.
+private val svgPaths = HashMap<String, Path>()
+private fun svgPath(d: String): Path = svgPaths.getOrPut(d) { PathParser().parsePathString(d).toPath() }
+
 @Composable
 fun SvgIcon(d: String, color: Color, size: Dp = 20.dp) {
-    val path = PathParser().parsePathString(d).toPath()
+    val path = remember(d) { svgPath(d) }
     Canvas(Modifier.size(size)) {
         scale(this.size.width / 24f, Offset.Zero) { drawPath(path, color, style = Stroke(1.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)) }
     }
@@ -145,7 +152,7 @@ fun SvgIcon(d: String, color: Color, size: Dp = 20.dp) {
 fun IconBtn(label: String, chosen: Boolean = false, enabled: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
     val sty = LocalSty.current
     Box(
-        Modifier.size(StySize.touch).alpha(if (enabled) 1f else 0.4f).clip(SquircleShape(StySize.radiusMd)).background(if (chosen) sty.honeyTint else Color.Transparent)
+        Modifier.size(StySize.touch).alpha(if (enabled) 1f else 0.4f).clip(StyShapes.Md).background(if (chosen) sty.honeyTint else Color.Transparent)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick).semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) { content() }
@@ -206,7 +213,7 @@ fun NoteHeader(title: String, subtitle: String, onBack: () -> Unit, onFull: () -
             IconBtn("Full screen", Icons24.FULL, onClick = onFull)
             // The one honey button of the screen; it waits for the AI reading (phase 4).
             Box(
-                Modifier.height(40.dp).alpha(0.4f).clip(SquircleShape(StySize.radiusMd)).background(sty.honey).padding(horizontal = 16.dp),
+                Modifier.height(40.dp).alpha(0.4f).clip(StyShapes.Md).background(sty.honey).padding(horizontal = 16.dp),
                 contentAlignment = Alignment.Center,
             ) { Text("Convert now", color = sty.onHoney, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
             IconBtn("Page settings and more", Icons24.MENU, onClick = onMenu)

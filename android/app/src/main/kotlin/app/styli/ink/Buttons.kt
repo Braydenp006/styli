@@ -12,18 +12,18 @@ import androidx.compose.ui.graphics.Shape
 
 @Composable
 fun Button(
-    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, shape: Shape = SquircleShape(StySize.radiusMd),
+    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, shape: Shape = StyShapes.Md,
     colors: ButtonColors = ButtonDefaults.buttonColors(), content: @Composable RowScope.() -> Unit,
 ) = androidx.compose.material3.Button(onClick, modifier, enabled, shape, colors, content = content)
 
 @Composable
 fun OutlinedButton(
-    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, shape: Shape = SquircleShape(StySize.radiusMd),
+    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, shape: Shape = StyShapes.Md,
     colors: ButtonColors = ButtonDefaults.outlinedButtonColors(), content: @Composable RowScope.() -> Unit,
 ) = androidx.compose.material3.OutlinedButton(onClick, modifier, enabled, shape, colors, content = content)
 
 @Composable
 fun TextButton(
-    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, shape: Shape = SquircleShape(StySize.radiusMd),
+    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, shape: Shape = StyShapes.Md,
     colors: ButtonColors = ButtonDefaults.textButtonColors(), content: @Composable RowScope.() -> Unit,
 ) = androidx.compose.material3.TextButton(onClick, modifier, enabled, shape, colors, content = content)

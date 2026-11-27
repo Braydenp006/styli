@@ -81,7 +81,7 @@ fun TableDialog(
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = SquircleShape(StySize.radiusLg), color = LocalSty.current.surface,
+            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = StyShapes.Lg, color = LocalSty.current.surface,
             border = androidx.compose.foundation.BorderStroke(1.dp, LocalSty.current.border),
         ) {
             Column(Modifier.padding(16.dp)) {

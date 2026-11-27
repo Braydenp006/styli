@@ -45,14 +45,14 @@ class TableTest {
         val m = model()
         assertNull(m.addTable(0f, 0f, 6000f, 2000f, rows = 0, cols = 3))
         assertNull(m.addTable(0f, 0f, 6000f, 2000f, rows = 2, cols = 0))
-        assertNull(m.addTable(0f, 0f, 60000f, 20000f, rows = 21, cols = 3))
-        assertNull(m.addTable(0f, 0f, 60000f, 20000f, rows = 3, cols = 21))
+        assertNull(m.addTable(0f, 0f, 60000f, 20000f, rows = Table.MAX_LINES + 1, cols = 3))
+        assertNull(m.addTable(0f, 0f, 60000f, 20000f, rows = 3, cols = Table.MAX_LINES + 1))
         assertNull(m.addTable(0f, 0f, 1000f, 2000f, rows = 1, cols = 3)) // 3.3 mm wide cells: under 5 mm
         assertNull(m.addTable(0f, 0f, 6000f, 1000f, rows = 3, cols = 1)) // 3.3 mm tall cells
         assertFalse(m.canUndo)
         assertTrue(m.log.isEmpty())
         assertNotNull(m.addTable(0f, 0f, 1500f, 500f, rows = 1, cols = 3)) // exactly 5 mm cells
-        assertNotNull(m.addTable(0f, 0f, 10000f, 10000f, rows = 20, cols = 20))
+        assertNotNull(m.addTable(0f, 0f, 60000f, 60000f, rows = Table.MAX_LINES, cols = Table.MAX_LINES))
     }
 
     @Test
@@ -201,7 +201,7 @@ class TableTest {
         assertFalse(Table.fits(1499f, 500f, rows = 1, cols = 3))
         assertFalse(Table.fits(1500f, 499f, rows = 1, cols = 3))
         assertTrue(Table.fits(10000f, 10000f, rows = 20, cols = 20))
-        assertFalse(Table.fits(99999f, 99999f, rows = 21, cols = 1))
+        assertFalse(Table.fits(99999f, 99999f, rows = Table.MAX_LINES + 1, cols = 1))
         assertFalse(Table.fits(99999f, 99999f, rows = 1, cols = 0))
         assertFalse(Table.fits(0f, 0f, rows = 1, cols = 1)) // a tap
     }
@@ -346,10 +346,10 @@ class TableTest {
         assertEquals(5, m.tables.single().cols)
         assertFalse(m.insertLine(t.id, true, 99)) // no such place
         assertFalse(m.insertLine("0".repeat(32), true, 0)) // no such table
-        val big = model().addTable(0f, 0f, 20000f, 10000f, rows = 20, cols = 20)!!
-        val m2 = model(); m2.addTable(0f, 0f, 20000f, 10000f, rows = 20, cols = 20)
-        assertFalse(m2.insertLine(m2.tables.single().id, false, 0)) // already 20 rows
-        assertEquals(20, big.rows)
+        val big = model().addTable(0f, 0f, 60000f, 60000f, rows = Table.MAX_LINES, cols = Table.MAX_LINES)!!
+        val m2 = model(); m2.addTable(0f, 0f, 60000f, 60000f, rows = Table.MAX_LINES, cols = Table.MAX_LINES)
+        assertFalse(m2.insertLine(m2.tables.single().id, false, 0)) // already as many rows as there can be
+        assertEquals(Table.MAX_LINES, big.rows)
     }
 
     @Test

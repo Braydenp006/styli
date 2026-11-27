@@ -1,0 +1,27 @@
+# Styli's own hot classes. Library profiles are merged in by AGP; these rules cover the app code used on cold start,
+# Tabularium and Settings. Class rules have no flags; method rules carry hot/startup/post-startup flags where the
+# signatures are stable. Compose top-level composables get mangled names, so they are covered by their file classes.
+Lapp/styli/ink/MainActivity;
+HSPLapp/styli/ink/MainActivity;->onCreate(Landroid/os/Bundle;)V
+Lapp/styli/ink/MainActivityKt;
+Lapp/styli/ink/StyliThemeKt;
+Lapp/styli/ink/Storage;
+Lapp/styli/ink/Vault;
+Lapp/styli/ink/Library;
+Lapp/styli/ink/StorageKt;
+Lapp/styli/ink/VaultKt;
+Lapp/styli/ink/LibraryKt;
+
+Lapp/styli/ink/LibraryScreenKt;
+Lapp/styli/ink/Covers;
+HPLapp/styli/ink/Covers;->of(Landroid/content/Context;Lapp/styli/ink/NoteFile;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+HPLapp/styli/ink/Covers;->version(Lapp/styli/ink/NoteFile;)I
+HPLapp/styli/ink/Covers;->bucket(I)I
+Lapp/styli/ink/LibUi;
+HPLapp/styli/ink/LibUi;->changed()V
+Lapp/styli/ink/InkCanvasView;
+Lapp/styli/ink/TrashScreenKt;
+
+Lapp/styli/ink/SettingsScreenKt;
+Lapp/styli/ink/ToolRailKt;
+Lapp/styli/ink/ButtonsKt;

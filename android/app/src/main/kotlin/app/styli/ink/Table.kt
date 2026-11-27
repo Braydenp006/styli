@@ -194,6 +194,6 @@ class Table(
         const val MIN_CELL = 500f
 
         /** The most rows or columns. */
-        const val MAX_LINES = 20
+        const val MAX_LINES = 100
     }
 }

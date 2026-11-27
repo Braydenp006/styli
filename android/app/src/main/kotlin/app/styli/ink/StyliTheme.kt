@@ -58,8 +58,8 @@ fun StyliTheme(content: @Composable () -> Unit) {
             colorScheme = scheme, content = content,
             // Buttons, chips, menus and dialogs are squircles too, not Material's rounded corners.
             shapes = androidx.compose.material3.Shapes(
-                extraSmall = SquircleShape(4.dp), small = SquircleShape(StySize.radiusMd), medium = SquircleShape(StySize.radiusMd),
-                large = SquircleShape(StySize.radiusLg), extraLarge = SquircleShape(28.dp),
+                extraSmall = StyShapes.Xs, small = StyShapes.Md, medium = StyShapes.Md,
+                large = StyShapes.Lg, extraLarge = StyShapes.Xl,
             ),
         )
     }

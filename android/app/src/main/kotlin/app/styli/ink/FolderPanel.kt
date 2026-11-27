@@ -53,7 +53,7 @@ internal fun FolderPanel(
         val item = Dragged(null, file, folder, file.name)
         Box {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(SquircleShape(StySize.radiusMd))
+                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(StyShapes.Md)
                     .dragSource(drag, item, { onOpen(file) }, { menu = true }, { to -> drop(lib, item, to); ui.changed() }, onTrash = { onTrash(item) })
                     .padding(start = (depth * 20 + 40).dp, end = StySize.space2),
                 verticalAlignment = Alignment.CenterVertically,
@@ -79,7 +79,7 @@ internal fun FolderPanel(
         val turn by androidx.compose.animation.core.animateFloatAsState(if (open) 90f else 0f, label = "folder arrow")
         Box {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(SquircleShape(StySize.radiusMd))
+                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(StyShapes.Md)
                     .background(if (hover === folder) sty.honeyTint else if (here === folder) sty.honeyTint.copy(alpha = 0.5f) else Color.Transparent)
                     .dropTarget(drag, folder, key = "panel" to folder)
                     .dragSource(drag, item, { ui.openFolder = folder; ui.expanded[folder] = true }, { menu = true }, { to -> drop(lib, item, to); ui.changed() }, onTrash = { onTrash(item) })
@@ -88,7 +88,7 @@ internal fun FolderPanel(
             ) {
                 // The arrow folds and unfolds without going there.
                 Box(
-                    Modifier.size(StySize.touch).clip(SquircleShape(StySize.radiusMd)).clickable(enabled = has) { ui.expanded[folder] = !open }.rotate(turn),
+                    Modifier.size(StySize.touch).clip(StyShapes.Md).clickable(enabled = has) { ui.expanded[folder] = !open }.rotate(turn),
                     contentAlignment = Alignment.Center,
                 ) { if (has) StyIcon(Ic.CHEVRON, sty.inkMuted, 18.dp) }
                 FolderIcon(folder.color?.let { Color(it) } ?: sty.borderStrong, Modifier.size(width = 24.dp, height = 19.dp))
@@ -115,7 +115,7 @@ internal fun FolderPanel(
         Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
             // The top level: tap to go there, and a place to drop things too.
             Row(
-                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(SquircleShape(StySize.radiusMd))
+                Modifier.fillMaxWidth().heightIn(min = StySize.touch).clip(StyShapes.Md)
                     .background(if (hover === lib.root) sty.honeyTint else if (here === lib.root) sty.honeyTint.copy(alpha = 0.5f) else Color.Transparent)
                     .dropTarget(drag, lib.root, key = "panel" to lib.root).clickable { ui.openFolder = null }.padding(start = StySize.space3),
                 verticalAlignment = Alignment.CenterVertically,

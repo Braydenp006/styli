@@ -28,7 +28,7 @@ fun OutlinedTextField(
     val sty = LocalSty.current
     androidx.compose.material3.OutlinedTextField(
         value, onValueChange, modifier, enabled = enabled, label = label, singleLine = singleLine, isError = isError,
-        shape = SquircleShape(StySize.radiusMd), textStyle = TextStyle(fontSize = 14.sp, color = sty.ink),
+        shape = StyShapes.Md, textStyle = TextStyle(fontSize = 14.sp, color = sty.ink),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = sty.honeyText, unfocusedBorderColor = sty.border, disabledBorderColor = sty.border, errorBorderColor = sty.danger, errorLabelColor = sty.danger, errorContainerColor = sty.surface, errorTextColor = sty.ink,
             focusedLabelColor = sty.honeyText, unfocusedLabelColor = sty.inkMuted, cursorColor = sty.honeyText,
@@ -43,11 +43,11 @@ fun OutlinedTextField(
 fun Checkbox(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?) {
     val sty = LocalSty.current
     Box(
-        Modifier.size(44.dp).clip(SquircleShape(StySize.radiusMd)).clickable(enabled = onCheckedChange != null) { onCheckedChange?.invoke(!checked) },
+        Modifier.size(44.dp).clip(StyShapes.Md).clickable(enabled = onCheckedChange != null) { onCheckedChange?.invoke(!checked) },
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(22.dp).clip(SquircleShape(6.dp)).background(if (checked) sty.honey else Color.Transparent).border(1.5.dp, if (checked) sty.honeyText else sty.borderStrong, SquircleShape(6.dp)),
+            Modifier.size(22.dp).clip(StyShapes.Sm).background(if (checked) sty.honey else Color.Transparent).border(1.5.dp, if (checked) sty.honeyText else sty.borderStrong, StyShapes.Sm),
             contentAlignment = Alignment.Center,
         ) { if (checked) SvgIcon("M20 6L9 17l-5-5", sty.onHoney, 16.dp) }
     }
