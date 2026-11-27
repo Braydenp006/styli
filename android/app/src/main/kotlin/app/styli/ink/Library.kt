@@ -14,7 +14,12 @@ class NoteFile(
     val created: Long,
     var opened: Long,
     var pinned: Boolean = false,
-)
+) {
+    /** Where this file is on disk now (set and moved by [Vault]); null until it is first saved. */
+    internal var disk: java.io.File? = null
+    /** The page file name of each page of [notebook] (set by [Vault]). */
+    internal val pageNames = java.util.IdentityHashMap<PageModel, String>()
+}
 
 /** A folder. Folders nest to any depth; [parent] is null only for the root. */
 class Folder(var name: String, var color: Int? = null) { // color is ARGB, or null for the default
@@ -23,6 +28,9 @@ class Folder(var name: String, var color: Int? = null) { // color is ARGB, or nu
     val folders = mutableListOf<Folder>()
     val files = mutableListOf<NoteFile>()
     var pinned = false
+
+    /** Where this folder is on disk now (set and moved by [Vault]); null until it is first saved. */
+    internal var disk: java.io.File? = null
 
     /** This folder and every folder below it, with every file below. */
     fun allFolders(): List<Folder> = listOf(this) + folders.flatMap { it.allFolders() }
@@ -54,6 +62,10 @@ enum class Sort { NAME, EDITED, CREATED }
 class Library(private val clock: () -> Long = System::currentTimeMillis) {
     val root = Folder("Tabularium")
     val trash = mutableListOf<Trashed>()
+
+    /** Folders and files that are gone for good, waiting for [Vault] to remove them from disk. */
+    internal val goneFolders = mutableListOf<Folder>()
+    internal val purged = mutableListOf<NoteFile>()
 
     /** The top-level folders. */
     val folders: MutableList<Folder> get() = root.folders
@@ -153,6 +165,7 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
         require(folder !== root && contains(folder)) { "not in this library" }
         val at = clock()
         for ((f, file) in folder.allFiles()) trash.add(Trashed(file, path(f), at))
+        goneFolders.addAll(folder.allFolders().asReversed()) // deepest first, so empty folders can be removed from disk
         folder.parent!!.folders.remove(folder)
         folder.parent = null
     }
@@ -169,10 +182,10 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
     }
 
     /** Deletes one trashed file for good. The only way a file leaves the trash without coming back, so the screen asks first. */
-    fun purge(t: Trashed) { require(trash.remove(t)) { "not in the trash" } }
+    fun purge(t: Trashed) { require(trash.remove(t)) { "not in the trash" }; purged.add(t.file) }
 
     /** Deletes everything in the trash for good. */
-    fun emptyTrash() { trash.clear() }
+    fun emptyTrash() { purged.addAll(trash.map { it.file }); trash.clear() }
 
     fun setPinned(f: Folder, pinned: Boolean) { f.pinned = pinned }
     fun setPinned(file: NoteFile, pinned: Boolean) { file.pinned = pinned }

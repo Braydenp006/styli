@@ -24,6 +24,9 @@ class Notebook(first: PageModel = PageModel()) {
 
     val pages: List<PageModel> get() = all.toList()
 
+    /** Adds a page that was loaded from disk, keeping its own place in the grid. */
+    internal fun adopt(p: PageModel) { all.add(p) }
+
     fun at(col: Int, row: Int): PageModel? = all.firstOrNull { it.page.col == col && it.page.row == row }
 
     /** A page next to the cell ([col], [row]) on any side: the one a page added there takes its look from. Null if none. */

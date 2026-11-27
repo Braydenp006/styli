@@ -19,6 +19,17 @@ class AppSettings {
     var section by mutableStateOf(SettingsSection.PENMANSHIP) // which group the Settings tab shows (the Trash screen links to one)
     var scroll by mutableIntStateOf(2) // how far a scroll carries on, index into [GLIDE]
 
+    /** The values to keep on disk (the group the screen shows is not one of them). */
+    fun snapshot(): Map<String, Any?> = mapOf("pLines" to pLines, "pShapes" to pShapes, "pLevel" to pLevel, "pHold" to pHold, "solid" to solid, "gridScroll" to gridScroll, "scroll" to scroll)
+
+    /** Takes back what [snapshot] made; a missing or out-of-range value keeps the default. */
+    fun restore(m: Map<String, Any?>) {
+        fun level(k: String, size: Int = 4) = (m[k] as? Long)?.toInt()?.takeIf { it in 0 until size }
+        level("pLines")?.let { pLines = it }; level("pShapes")?.let { pShapes = it }; level("pLevel")?.let { pLevel = it }
+        level("pHold")?.let { pHold = it }; level("scroll")?.let { scroll = it }
+        (m["solid"] as? Boolean)?.let { solid = it }; (m["gridScroll"] as? Boolean)?.let { gridScroll = it }
+    }
+
     /** Gives a new canvas these settings (it starts with its own defaults). */
     fun applyTo(c: InkCanvasView) {
         c.penmanship = penmanship()

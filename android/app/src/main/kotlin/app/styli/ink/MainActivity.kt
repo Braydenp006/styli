@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.animation.togetherWith
 import app.styli.ink.proto.PageSet
 import app.styli.ink.proto.Template
 
@@ -61,16 +62,82 @@ class MainActivity : ComponentActivity() {
 /** The Library first; opening a file shows its pages on the canvas, and Back returns to the Library. */
 @Composable
 private fun Root() {
-    val library = remember { Library().also { it.addSamples() } }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var allowed by remember { mutableStateOf(Vault.hasAccess()) }
+    // Coming back from the system's permission screen: look again.
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allowed = Vault.hasAccess() }
+        owner.lifecycle.addObserver(obs); onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    if (!allowed) { AccessScreen(); return }
+    val vault = remember { Vault(Vault.rootDir()) }
+    val library = remember {
+        vault.load().also {
+            // A brand new vault gets some made-up folders and notes to try things with (throwaway, like SampleLibrary).
+            if (it.root.folders.isEmpty() && it.root.files.isEmpty() && it.trash.isEmpty() && vault.problems.isEmpty()) { it.addSamples(); vault.save(it) }
+        }
+    }
+    val settings = remember(vault) { AppSettings().also { s -> vault.readSettings()?.let(s::restore) } }
+    // Save about a second after anything changes, and always when the app is left.
+    androidx.compose.runtime.LaunchedEffect(library) {
+        var told = emptyList<String>()
+        var lastSettings = settings.snapshot()
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            settings.snapshot().let { if (it != lastSettings) { vault.writeSettings(it); lastSettings = it } }
+            if (vault.dirty(library)) {
+                val now = vault.save(library)
+                if (now.isNotEmpty() && now != told) android.widget.Toast.makeText(context, "Not saved: " + now.first(), android.widget.Toast.LENGTH_LONG).show()
+                told = now
+            }
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(owner, library) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) { vault.save(library); vault.writeSettings(settings.snapshot()) } }
+        owner.lifecycle.addObserver(obs); onDispose { owner.lifecycle.removeObserver(obs) }
+    }
     val ui = remember { LibUi() }
-    val settings = remember { AppSettings() }
     var open by remember { mutableStateOf<NoteFile?>(null) }
-    val file = open
-    if (file == null) LibraryScreen(library, ui, settings) { open = it }
-    else {
-        androidx.activity.compose.BackHandler { open = null }
-        // A new canvas view for each file, so it starts on that file's own pages.
-        androidx.compose.runtime.key(file) { InkScreen(file.notebook!!, settings) { open = null } }
+    // Opening a note grows it in from slightly smaller; closing it shrinks away and the Tabularium settles back in.
+    androidx.compose.animation.AnimatedContent(
+        targetState = open,
+        transitionSpec = {
+            val ease = androidx.compose.animation.core.FastOutSlowInEasing
+            if (targetState != null) {
+                (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(280, 60, ease)) + androidx.compose.animation.scaleIn(androidx.compose.animation.core.tween(340, 0, ease), initialScale = 0.92f)) togetherWith
+                    (androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220, 0, ease)) + androidx.compose.animation.scaleOut(androidx.compose.animation.core.tween(340, 0, ease), targetScale = 1.05f))
+            } else {
+                (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(280, 60, ease)) + androidx.compose.animation.scaleIn(androidx.compose.animation.core.tween(340, 0, ease), initialScale = 1.05f)) togetherWith
+                    (androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220, 0, ease)) + androidx.compose.animation.scaleOut(androidx.compose.animation.core.tween(340, 0, ease), targetScale = 0.92f))
+            }
+        },
+        label = "open or close a note",
+    ) { file ->
+        if (file == null) LibraryScreen(library, ui, settings) { open = it }
+        else {
+            androidx.activity.compose.BackHandler { open = null }
+            // A new canvas view for each file, so it starts on that file's own pages.
+            androidx.compose.runtime.key(file) { InkScreen(file.notebook!!, settings) { open = null } }
+        }
+    }
+}
+
+/** Shown until the app may keep its notes in Documents/Tabularium (the notes must stay if the app is removed). */
+@Composable
+private fun AccessScreen() {
+    val sty = LocalSty.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.foundation.layout.Column(
+        Modifier.fillMaxSize().background(sty.bg).padding(StySize.space6), verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+    ) {
+        Text("Where your notes live", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
+        Text(
+            "Styli keeps your notes as ordinary files in Documents/Tabularium, so any app or computer can open and copy them, and they stay if Styli is removed. " +
+                "To do that it needs the \"all files\" permission. Styli only ever writes inside that one folder.",
+            Modifier.padding(vertical = StySize.space4), color = sty.inkMuted,
+        )
+        Button({ Vault.openAccessSettings(context) }) { Text("Allow access to files") }
     }
 }
 

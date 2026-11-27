@@ -1,12 +1,8 @@
 proposed tools:
-
-
--  a chart maker
 - maybe handwriting to text feature? Low priority for this one
 
 
 proposed page stuff:
-- page rearrangement
 - handwriting search (can be done with our markdown I think)
 - look into heptabase
 - canvas's (will change the name to match the theme) being able to arrange pages and pdfs and whatnot spacially on a 
@@ -25,6 +21,9 @@ other features:
 
 for the infinate canvas:
 - idea where you can wreite something out, lasso it, and have it be added to the graph as it's entry, making it it's own markdown file,
+
+other ideas:
+- way to transfer in notes from other notes apps
 
 
 

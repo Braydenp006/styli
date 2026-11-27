@@ -7,7 +7,7 @@ import java.util.WeakHashMap
 
 /**
  * Small pictures of each ink file's first page, for the Library covers. A picture is made once with an off-screen
- * [InkCanvasView] and kept until the page changes (its event log grows, so the log's length says when).
+ * [InkCanvasView] and kept until the page changes (its revision number goes up, which says when).
  */
 object Covers {
     /** The picture at several sizes, each half the one before, so a cover can use the one just bigger than itself. */
@@ -20,7 +20,7 @@ object Covers {
     private val made = WeakHashMap<NoteFile, Made>()
 
     /** What the first page's picture is based on; it changes whenever the page does. */
-    fun version(file: NoteFile): Int = file.notebook?.pages?.first()?.log?.size ?: 0
+    fun version(file: NoteFile): Int = file.notebook?.pages?.first()?.let { if (it.order.isEmpty()) 0 else it.revision + 1 } ?: 0
 
     /** The pictures of [file]'s first page, made now if they are missing or out of date. Call on the main thread. */
     fun of(context: Context, file: NoteFile): Pyramid? {

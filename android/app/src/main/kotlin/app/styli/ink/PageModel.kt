@@ -167,6 +167,24 @@ class PageModel(page: PageSet = A4_LINED) {
     /** Events not yet written anywhere. */
     val log = mutableListOf<Ev>()
 
+    /** Goes up whenever the page changes (and stays when saving empties [log]), so a picture of it can tell when it is out of date. */
+    var revision = 0
+        private set
+
+    /**
+     * Sets the page to what a saved log replays to (see [InkLogReader]). Nothing is logged and there is no undo: the
+     * page opens as it was left, with an empty undo history.
+     */
+    fun load(
+        page: PageSet, items: List<Item>, texts: List<TextBox>, order: List<String>, tables: List<Table> = emptyList(),
+        shapes: List<Shape> = emptyList(), connectors: List<Connector> = emptyList(), fills: List<Fill> = emptyList(),
+        pictures: List<Picture> = emptyList(), charts: List<Chart> = emptyList(),
+    ) {
+        this.page = page; this.items = items; this.texts = texts; this.order = order; this.tables = tables
+        this.shapes = shapes; this.connectors = connectors; this.fills = fills; this.pictures = pictures; this.charts = charts
+        undoStack.clear(); redoStack.clear(); log.clear(); revision++
+    }
+
     private class Tf(val ids: List<String>, val map: Affine)
 
     /** Everything an undo step puts back: the lists are replaced, never changed, so they can be kept as they were. */
@@ -210,7 +228,7 @@ class PageModel(page: PageSet = A4_LINED) {
     fun placeAt(col: Int, row: Int) {
         if (page.col == col && page.row == row) return
         page = page.toBuilder().setCol(col).setRow(row).build()
-        log.add(Ev.PageChanged(page))
+        log.add(Ev.PageChanged(page)); revision++
     }
 
     /** A new text box. One undo step. */
@@ -725,6 +743,7 @@ class PageModel(page: PageSet = A4_LINED) {
         charts = to.charts
         page = toPage
         order = to.order
+        revision++
     }
 
     /** Writes [Ev.ZMoved] for every object whose place the format's plain rules would not give (see ink.proto). */
