@@ -129,7 +129,8 @@ private fun Root() {
     }
     val settings = remember(vault) { AppSettings().also { s -> vault.readSettings()?.let(s::restore) } }
     val shelf = remember(vault) { vault.loadClips() }
-    // Save about a second after anything changes, and always when the app is left.
+    var open by remember(vault) { mutableStateOf<NoteFile?>(null) }
+    // Save about a second after anything changes, and always when the app is left. While a note is open only that note is saved; the rest waits for leaving it.
     androidx.compose.runtime.LaunchedEffect(library) {
         var told = emptyList<String>()
         var lastSettings = settings.snapshot()
@@ -138,8 +139,7 @@ private fun Root() {
             kotlinx.coroutines.delay(1000)
             settings.snapshot().let { if (it != lastSettings) { vault.writeSettings(it); lastSettings = it } }
             if (shelf.version != lastShelf) { vault.saveClips(shelf); lastShelf = shelf.version }
-            if (vault.dirty(library)) {
-                val now = vault.save(library)
+            vault.autosave(library, open)?.let { now ->
                 if (now.isNotEmpty() && now != told) android.widget.Toast.makeText(context, "Not saved: " + now.first(), android.widget.Toast.LENGTH_LONG).show()
                 told = now
             }
@@ -150,7 +150,6 @@ private fun Root() {
         owner.lifecycle.addObserver(obs); onDispose { owner.lifecycle.removeObserver(obs) }
     }
     val ui = remember { LibUi() }
-    var open by remember(vault) { mutableStateOf<NoteFile?>(null) }
     picked?.let { dest ->
         val fresh = !dest.exists() || dest.list()?.isEmpty() == true
         val bad = Storage.overlaps(dest, root)

@@ -25,6 +25,10 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private val written = HashMap<File, String>() // the last text written to each small file, so unchanged ones are not rewritten
     private var seq = readSeq()
     private var saved = 0 // the fingerprint of the library as last saved
+    // While a note is open [autosave] saves only that note. These say what was saved, and for which note.
+    private var savedFor: NoteFile? = null
+    private var savedOutside = 0 // the fingerprint of everything but that note
+    private var savedNote = 0 // the fingerprint of that note alone
 
     /** Things that went wrong on the last [load] or [save], in plain words. */
     var problems: List<String> = emptyList()
@@ -88,6 +92,30 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
 
     /** True if the library changed since it was last saved or loaded. Cheap: it only looks at memory. */
     fun dirty(lib: Library) = fingerprint(lib) != saved
+
+    /**
+     * The one-second autosave. With a note [open], only that note's own pages are written, so drawing never walks the whole
+     * library; anything outside it (a rename, a move, a delete) or no open note takes the full [save], as does leaving the note.
+     * Null if there was nothing to save, otherwise what [save] would return.
+     */
+    fun autosave(lib: Library, open: NoteFile?): List<String>? {
+        val disk = open?.disk
+        if (open == null || disk == null || open.notebook == null || savedFor !== open) {
+            if (!dirty(lib)) { remember(lib, open); return null }
+            return save(lib).also { if (it.isEmpty()) remember(lib, open) }
+        }
+        if (fingerprint(lib, open) != savedOutside) return save(lib).also { if (it.isEmpty()) remember(lib, open) }
+        if (noteFingerprint(open) == savedNote) return null
+        val found = ArrayList<String>()
+        try { syncFile(open, disk, found) } catch (e: IOException) { found.add("could not save: ${e.message}") }
+        problems = found
+        if (found.isEmpty()) savedNote = noteFingerprint(open) // after: saving drains each page's pending events
+        return found
+    }
+
+    private fun remember(lib: Library, open: NoteFile?) {
+        savedFor = open; savedOutside = fingerprint(lib, open); savedNote = open?.let(::noteFingerprint) ?: 0
+    }
 
     /** Makes the disk match [lib]. Anything that fails is listed in [problems] and tried again next time. */
     fun save(lib: Library): List<String> {
@@ -318,16 +346,25 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private fun readSeq(): Long = try { File(meta, "seq").readText().trim().toLong() } catch (_: Exception) { 0L }
     private fun writeSeq(n: Long) { meta.mkdirs(); atomicWrite(File(meta, "seq"), n.toString().toByteArray()) }
 
-    /** A number that changes whenever anything saved on disk would. */
-    private fun fingerprint(lib: Library): Int {
+    /** A number that changes whenever what is saved for [file] alone would: its opened time, view and pages. */
+    private fun noteFingerprint(file: NoteFile): Int {
+        var h = 17
+        fun mix(x: Any?) { h = h * 31 + (x?.hashCode() ?: 0) }
+        mix(file.opened); mix(file.view)
+        file.notebook?.pages?.forEach { mix(System.identityHashCode(it)); mix(it.log.size) }
+        return h
+    }
+
+    /** A number that changes whenever anything saved on disk would. With [skip], that note's own part ([noteFingerprint]) is left out. */
+    private fun fingerprint(lib: Library, skip: NoteFile? = null): Int {
         var h = 17
         fun mix(x: Any?) { h = h * 31 + (x?.hashCode() ?: 0) }
         fun folder(f: Folder) {
             mix(f.name); mix(f.color); mix(f.pinned)
             f.folders.forEach(::folder)
             for (file in f.files) {
-                mix(file.name); mix(file.opened); mix(file.pinned); mix(file.view); mix(System.identityHashCode(file))
-                file.notebook?.pages?.forEach { mix(System.identityHashCode(it)); mix(it.log.size) }
+                mix(file.name); mix(file.pinned); mix(System.identityHashCode(file))
+                if (file !== skip) mix(noteFingerprint(file))
             }
         }
         folder(lib.root)

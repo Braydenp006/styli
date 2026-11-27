@@ -273,4 +273,37 @@ class VaultTest {
         val m = mapOf("name" to "A \"q\"\n\\ é", "n" to 5_000_000_000L, "b" to true, "x" to null, "l" to listOf("a", "b c"), "e" to emptyList<String>())
         assertEquals(m, MiniJson.parse(MiniJson.write(m)))
     }
+
+    // ---- autosave: while a note is open only that note is written ----
+
+    @Test fun autosaveWritesOnlyTheOpenNote() {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A"); val b = l.newFile(l.root, "B")
+        assertTrue(v.save(l).isEmpty()); v.autosave(l, a) // the first call after opening settles on the open note
+        l.renameFile(l.root, b, "B2") // a change outside the open note
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        assertTrue(v.autosave(l, a)!!.isEmpty()) // outside changed, so this one is the full save
+        File(dir, "B2.ink/file.json").delete() // now only the open note may be touched
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(9, 9, 12, 12))
+        assertTrue(v.autosave(l, a)!!.isEmpty())
+        assertFalse(File(dir, "B2.ink/file.json").exists()) // the other note was not visited
+        assertNull(v.autosave(l, a)) // nothing new: nothing written
+        assertEquals(2, reload().root.files.first { it.name == "A" }.notebook!!.current.items.size)
+        assertNull(v.autosave(l, null)) // leaving the note: everything outside it was already saved when it changed
+    }
+
+    @Test fun autosaveKeepsEveryStrokeAcrossManySavesAndRenamesWaitForNothingLost() {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A")
+        v.save(l)
+        repeat(5) { k ->
+            a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(k, k, k + 3, k + 3))
+            assertTrue(v.autosave(l, a)!!.isEmpty())
+        }
+        l.renameFile(l.root, a, "A renamed") // the open note itself is renamed: that is a full save
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(7, 7, 9, 9))
+        assertTrue(v.autosave(l, a)!!.isEmpty())
+        assertEquals(6, reload().root.files.single().notebook!!.current.items.size)
+        assertEquals("A renamed", reload().root.files.single().name)
+    }
 }

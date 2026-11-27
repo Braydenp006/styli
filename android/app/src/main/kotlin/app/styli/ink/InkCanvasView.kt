@@ -799,6 +799,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                         val item = (strokePage.remove(id) ?: model).add(liveTool, liveColor, liveWidth, pointsOf(it))
                         placed[item.id] = place(it, item)
                     }
+                    handoffPending = false
                     pageLayer.invalidate()
                     // Only stop drawing the live copy after the page layer has the stroke, to avoid a flicker.
                     liveLayer.removeFinishedStrokes(strokes.keys)
@@ -2922,8 +2923,9 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
 
     // The finished stroke is handed to pageLayer a moment after the pen lifts, but on the SM-P620 nothing redrew the
     // screen until the next touch. Asking for a few frames in a row makes sure that hand-off gets drawn.
+    private var handoffPending = false // set when the pen lifts, cleared once the page layer has the stroke
     private fun keepDrawing(frames: Int) {
-        if (frames <= 0) return
+        if (frames <= 0 || !handoffPending) return // stop at the hand-off: a full page redraw every frame made the next stroke lag
         pageLayer.invalidate()
         postOnAnimation { keepDrawing(frames - 1) }
     }
@@ -2959,6 +2961,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                     strokeId = null
                     // Without this, a fresh launch kept the stroke in the live layer and it vanished (seen on the SM-P620).
                     liveLayer.requestHandoff()
+                    handoffPending = true
                     keepDrawing(30)
                 }
                 MotionEvent.ACTION_CANCEL -> {
