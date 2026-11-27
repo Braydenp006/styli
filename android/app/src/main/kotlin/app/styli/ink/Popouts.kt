@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -23,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.draw.rotate
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -227,4 +233,139 @@ fun toolLabel(t: InkCanvasView.Tool) = when (t) {
     InkCanvasView.Tool.BUCKET -> "Bucket"
     InkCanvasView.Tool.CONNECTOR -> "Connector"
     InkCanvasView.Tool.CHART -> "Chart"
+}
+
+/**
+ * A choice of one from a few, as one row you step through with the arrows either side. With more than four options it
+ * becomes an accordion (the current one on a row; tap it to open the list), so nothing gets cramped.
+ */
+@Composable
+fun <T> CycleRow(title: String, options: List<T>, current: T, label: (T) -> String, icon: (T) -> String?, onPick: (T) -> Unit) {
+    val sty = LocalSty.current
+    val n = options.size
+    val i = options.indexOf(current).coerceAtLeast(0)
+    PopHeading(title)
+    if (n <= 4) Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconBtn("Previous", Icons24.BACK, onClick = { onPick(options[(i - 1 + n) % n]) })
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            icon(options[i])?.let { SvgIcon(it, sty.ink, 22.dp); Box(Modifier.width(8.dp)) }
+            Text(label(options[i]), color = sty.ink, fontSize = 14.sp, maxLines = 1)
+        }
+        IconBtn("Next", Icons24.NEXT, onClick = { onPick(options[(i + 1) % n]) })
+    } else {
+        var open by remember { mutableStateOf(false) }
+        Column(Modifier.padding(horizontal = 8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd)).background(sty.honeyTint).clickable { open = !open }.padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                icon(options[i])?.let { SvgIcon(it, sty.ink, 22.dp) }
+                Text(label(options[i]), color = sty.ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                androidx.compose.foundation.layout.Box(Modifier.rotate(if (open) 180f else 0f)) { SvgIcon(Icons24.DOWN, sty.ink, 20.dp) }
+            }
+            if (open) for (o in options) Row(
+                Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(SquircleShape(StySize.radiusMd)).clickable { onPick(o); open = false }.padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                icon(o)?.let { SvgIcon(it, sty.ink, 22.dp) }
+                Text(label(o), color = if (o == current) sty.honeyText else sty.ink, fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+/** A premade shape drawn small, with its name, for the shape menu. */
+@Composable
+fun ShapeTile(preset: ShapePreset, chosen: Boolean, onClick: () -> Unit) {
+    val sty = LocalSty.current
+    Column(
+        Modifier.width(72.dp).clip(SquircleShape(StySize.radiusMd)).background(if (chosen) sty.honeyTint else Color.Transparent).clickable(onClick = onClick).padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Canvas(Modifier.size(32.dp)) {
+            val st = androidx.compose.ui.graphics.drawscope.Stroke(1.5f * density * 1f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+            val w = size.width * 0.86f; val h = if (preset.locked) w else size.height * 0.64f
+            val ox = (size.width - w) / 2; val oy = (size.height - h) / 2
+            when (preset.kind) {
+                ShapeKind.RECT -> drawRoundRect(sty.ink, Offset(ox, oy), androidx.compose.ui.geometry.Size(w, h), androidx.compose.ui.geometry.CornerRadius(if (preset.rounded) h * 0.28f else 0f), style = st)
+                ShapeKind.ELLIPSE -> drawOval(sty.ink, Offset(ox, oy), androidx.compose.ui.geometry.Size(w, h), style = st)
+                ShapeKind.POLYGON -> {
+                    val box = if (preset.vertices.isNotEmpty() && preset.name in setOf("TRIANGLE", "DIAMOND", "PENTAGON", "HEXAGON", "STAR")) size.height * 0.86f else h
+                    val by = (size.height - box) / 2
+                    val path = androidx.compose.ui.graphics.Path()
+                    preset.vertices.forEachIndexed { k, (fx, fy) -> val x = ox + fx * w; val y = by + fy * box; if (k == 0) path.moveTo(x, y) else path.lineTo(x, y) }
+                    path.close()
+                    drawPath(path, sty.ink, style = st)
+                }
+            }
+        }
+        Text(preset.name.lowercase().replaceFirstChar { it.uppercase() }, color = if (chosen) sty.ink else sty.inkMuted, fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+/** Two buttons with a label between them, for a pair of opposites ("Row above / below"). */
+@Composable
+fun PairRow(label: String, leftLabel: String, leftIcon: String, onLeft: () -> Unit, rightLabel: String, rightIcon: String, onRight: () -> Unit) {
+    val sty = LocalSty.current
+    Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconBtn(leftLabel, leftIcon, onClick = onLeft)
+        Text(label, Modifier.weight(1f), color = sty.ink, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 1)
+        IconBtn(rightLabel, rightIcon, onClick = onRight)
+    }
+}
+
+/**
+ * A wheel of whole numbers: scroll it, tap a number beside the middle to go to it, or tap the middle one to type a number.
+ * [onChange] hears the number each time the wheel comes to rest on one (or one is typed).
+ */
+@Composable
+fun NumberWheel(label: String, value: Int, range: IntRange, onChange: (Int) -> Unit) {
+    val sty = LocalSty.current
+    val itemH = 44.dp
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val itemPx = with(density) { itemH.toPx() }
+    val state = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = (value - range.first).coerceIn(0, range.count() - 1))
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var typing by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    val centre by androidx.compose.runtime.remember { androidx.compose.runtime.derivedStateOf { state.firstVisibleItemIndex + if (state.firstVisibleItemScrollOffset > itemPx / 2) 1 else 0 } }
+    androidx.compose.runtime.LaunchedEffect(state) {
+        androidx.compose.runtime.snapshotFlow { if (state.isScrollInProgress) -1 else centre }.collect { if (it >= 0) onChange(range.first + it.coerceIn(0, range.count() - 1)) }
+    }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, color = sty.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Box(Modifier.width(96.dp).height(itemH * 3), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(itemH).clip(SquircleShape(StySize.radiusMd)).background(sty.honeyTint))
+            if (typing) {
+                val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+                var hadFocus by remember { mutableStateOf(false) } // only losing focus that was had ends the typing
+                androidx.compose.runtime.LaunchedEffect(Unit) { focus.requestFocus() }
+                fun commit() {
+                    typing = false
+                    text.toIntOrNull()?.let { n -> val v = n.coerceIn(range.first, range.last); onChange(v); scope.launch { state.scrollToItem(v - range.first) } }
+                }
+                androidx.compose.foundation.text.BasicTextField(
+                    text, { text = it.filter(Char::isDigit).take(3) }, Modifier.width(72.dp).focusRequester(focus).onFocusChanged { if (it.isFocused) hadFocus = true else if (hadFocus && typing) commit() },
+                    singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(color = sty.ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number, imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(sty.honeyText),
+                )
+            } else androidx.compose.foundation.lazy.LazyColumn(
+                state = state, flingBehavior = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(state),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = itemH), modifier = Modifier.fillMaxWidth(),
+            ) {
+                items(range.count()) { i ->
+                    val on = i == centre
+                    Box(
+                        Modifier.fillMaxWidth().height(itemH).clickable {
+                            if (on) { text = ""; typing = true } else scope.launch { state.animateScrollToItem(i) }
+                        },
+                        contentAlignment = Alignment.Center,
+                    ) { Text("${range.first + i}", color = if (on) sty.ink else sty.inkMuted, fontSize = if (on) 24.sp else 16.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal) }
+                }
+            }
+        }
+        Text("tap the middle to type", color = sty.inkMuted, fontSize = 11.sp)
+    }
 }

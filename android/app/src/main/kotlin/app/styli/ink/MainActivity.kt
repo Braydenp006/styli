@@ -1,6 +1,11 @@
 package app.styli.ink
 
 import android.os.Bundle
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.layout.boundsInWindow
@@ -77,6 +82,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent { StyliTheme { Root() } }
     }
+
+    // The pen's side button is read here, before any view sees the event, so it works while the pen hovers too.
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean { PenButton.track(ev); return super.dispatchTouchEvent(ev) }
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean { PenButton.track(ev); return super.dispatchGenericMotionEvent(ev) }
 }
 
 /** The Library first; opening a file shows its pages on the canvas, and Back returns to the Library. */
@@ -274,6 +283,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
     var sLine by remember { mutableStateOf(1) }
     var sDashed by remember { mutableStateOf(false) }
     var bColor by remember { mutableStateOf(0x99FFEB3B.toInt()) }
+    var viewLocked by remember { mutableStateOf(false) } // fingers do not scroll or zoom while on
     var open by remember { mutableStateOf<String?>(null) } // the rail's popout menu that is showing
     var sheetOpen by remember { mutableStateOf(false) } // the converted text under the page
     var full by remember { mutableStateOf(false) } // full screen: only the page, and a button to come back
@@ -283,11 +293,9 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
     var hlW by remember { mutableStateOf(settings.highlighterWidth) }
     var selPanel by remember { mutableStateOf<String?>(null) } // which settings panel is open under the selection
     var sel by remember { mutableStateOf<InkCanvasView.SelectionInfo?>(null) } // what the lasso holds, for the bar under it
-    var here by remember { mutableStateOf<PageModel?>(null) } // the page in the middle of the screen
-    var pagesNow by remember { mutableStateOf(emptyList<PageModel>()) } // the pages in reading order
-    var zoom by remember { mutableStateOf(100) }
-    var zoomShown by remember { mutableStateOf(false) }
-    var firstZoom by remember { mutableStateOf(true) }
+    val hereState = remember { mutableStateOf<PageModel?>(null) } // the page in the middle of the screen (read only by the page bar, so scrolling does not redo this whole screen)
+    val pagesState = remember { mutableStateOf(emptyList<PageModel>()) } // the pages in reading order
+    val zoomState = remember { androidx.compose.runtime.mutableIntStateOf(100) } // read only by the zoom pill, so a zoom does not redo this whole screen
     var angleOn by remember { mutableStateOf(false) }
     var route by remember { mutableStateOf(Route.STRAIGHT) }
     var auto by remember { mutableStateOf(false) }
@@ -317,6 +325,30 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         }
     }
 
+    // The camera: the phone's own camera app takes the photo into a file made for it, which is read and then deleted.
+    var photoUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
+        val uri = photoUri
+        photoUri = null
+        if (uri != null) {
+            if (taken) {
+                val data = context.contentResolver.openInputStream(uri)?.use { it.readNBytes(PictureStore.MAX_BYTES + 1) }
+                if (data == null || data.size > PictureStore.MAX_BYTES || canvas?.insertPicture(data, "jpg") != true)
+                    Toast.makeText(context, "That photo could not be added", Toast.LENGTH_LONG).show()
+            }
+            context.contentResolver.delete(uri, null, null)
+        }
+    }
+    fun openCamera() {
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "styli-photo-${System.currentTimeMillis()}.jpg")
+            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        }
+        val uri = context.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        if (uri == null) Toast.makeText(context, "The camera could not be opened", Toast.LENGTH_LONG).show()
+        else { photoUri = uri; takePhoto.launch(uri) }
+    }
+
     fun apply() {
         val (w, h) = PageSizes.of(letter, landscape)
         canvas?.setPage(PageSet.newBuilder().setWidth(w).setHeight(h).setTemplate(template).setInfinite(infinite).build())
@@ -330,7 +362,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                     it.shelf = shelf
                     settings.applyTo(it, file)
                     it.onLatency = { text -> latency = text }
-                    it.onZoom = { percent -> zoom = percent }
+                    it.onZoom = { percent -> zoomState.intValue = percent }
                     it.onPlacing = { c -> placing = c }
                     it.onToolChanged = { t -> tool = t }
                     it.onChartEdit = { c, isNew -> chartEdit = c to isNew }
@@ -371,8 +403,9 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 }
             }
             if (tool == InkCanvasView.Tool.SHAPE) {
-                Menu("Shape: " + preset.name.lowercase()) { close ->
-                    for (p in ShapePreset.entries) Choice(p.name.lowercase(), p == preset) { preset = p; canvas?.shapePreset = p; close() }
+                PopHeading("Shape")
+                for (row in ShapePreset.entries.chunked(4)) Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    for (p in row) ShapeTile(p, p == preset) { preset = p; canvas?.shapePreset = p; open = null }
                 }
             }
             if (tool == InkCanvasView.Tool.TABLE) {
@@ -402,9 +435,6 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 Item("Done") { canvas?.finishText() }
             }
 
-            if (tool == InkCanvasView.Tool.LASSO) {
-                Item("Add bend point") { canvas?.addBendPoint() }
-            }
 
         }
         @Composable fun ColumnScope.inkMenu() {
@@ -434,12 +464,17 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         }
         // What the lasso holds: each of these shows in a panel under the selection, only when it applies.
         @Composable fun ColumnScope.layersMenu() {
-            Menu("Layers") { _ ->
-                Item("To front") { canvas?.arrange(Arrange.FRONT) }
-                Item("Forward") { canvas?.arrange(Arrange.FORWARD) }
-                Item("Backward") { canvas?.arrange(Arrange.BACKWARD) }
-                Item("To back") { canvas?.arrange(Arrange.BACK) }
+            // Two by two: forward and to front above, backward and to back below.
+            val close = LocalClose.current
+            Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                OptionChip("To front", Icons24.TO_FRONT, false) { canvas?.arrange(Arrange.FRONT) }
+                OptionChip("Forward", Icons24.FORWARD, false) { canvas?.arrange(Arrange.FORWARD) }
             }
+            Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                OptionChip("Backward", Icons24.BACKWARD, false) { canvas?.arrange(Arrange.BACKWARD) }
+                OptionChip("To back", Icons24.TO_BACK, false) { canvas?.arrange(Arrange.BACK) }
+            }
+            close.hashCode()
         }
         @Composable fun ColumnScope.textMenu() {
             Menu("Text") { _ ->
@@ -448,41 +483,31 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             }
         }
         @Composable fun ColumnScope.shapeMenu() {
-            Menu("Shape") { _ ->
-                Item("Outline colour") { picking = 5 }
-                Item("Fill colour") { picking = 6 }
-                for (k in 0..3) Choice("Line: " + listOf("thin", "normal", "thick", "bold")[k], sLine == k) {
-                    sLine = k; canvas?.setShapeStyle(null, null, listOf(20f, 40f, 80f, 160f)[k], null)
-                }
-                Choice("Line: solid", !sDashed) { sDashed = false; canvas?.setShapeStyle(null, null, null, false) }
-                Choice("Line: dashed", sDashed) { sDashed = true; canvas?.setShapeStyle(null, null, null, true) }
-            }
+            val weights = listOf("Thin", "Normal", "Thick", "Bold")
+            CycleRow("Line weight", listOf(0, 1, 2, 3), sLine, { weights[it] }, { null }) { sLine = it; canvas?.setShapeStyle(null, null, listOf(20f, 40f, 80f, 160f)[it], null) }
+            CycleRow("Line style", listOf(false, true), sDashed, { if (it) "Dashed" else "Solid" }, { null }) { sDashed = it; canvas?.setShapeStyle(null, null, null, it) }
+            Item("Outline colour") { picking = 5 } // the fill is the paint bucket's job
         }
         @Composable fun ColumnScope.connectorMenu() {
-            Menu("Connector") { _ ->
-                for (r in Route.entries) Item("Route: " + routeLabel(r)) { canvas?.routeSelected(r) }
-                Item("Add bend point (then tap the line)") { canvas?.addBendPoint() }
-                Item("Remove bend point") { canvas?.removeBendPoint() }
-            }
-            Menu("Arrowheads") { _ ->
-                for (h in Arrowhead.entries) Item("Start: " + h.name.lowercase()) { canvas?.setConnectorHeads(h, null) }
-                for (h in Arrowhead.entries) Item("End: " + h.name.lowercase()) { canvas?.setConnectorHeads(null, h) }
+            val info = sel
+            CycleRow("Line route", Route.entries, info?.route ?: Route.STRAIGHT, { routeLabel(it).replaceFirstChar { c -> c.uppercase() } }, { routeIcon(it) }) { canvas?.routeSelected(it) }
+            CycleRow("Start of the line", Arrowhead.entries, info?.fromHead ?: Arrowhead.NONE, { it.name.lowercase().replaceFirstChar { c -> c.uppercase() } }, { headIcon(it) }) { canvas?.setConnectorHeads(it, null) }
+            CycleRow("End of the line", Arrowhead.entries, info?.toHead ?: Arrowhead.FILLED, { it.name.lowercase().replaceFirstChar { c -> c.uppercase() } }, { headIcon(it) }) { canvas?.setConnectorHeads(null, it) }
+            if (info?.route != null) { // one connector on its own: its bend points
+                PopHeading("Bend points")
+                Item("Add a bend point (then tap the line)") { canvas?.addBendPoint() }
+                if (info.hasVia) Item("Remove the last bend point") { canvas?.removeBendPoint() }
             }
         }
         @Composable fun ColumnScope.tableMenu() {
-            Menu("Table (tap a cell first for rows and columns)") { _ ->
-                Item("Row above") { canvas?.insertRow(false) }
-                Item("Row below") { canvas?.insertRow(true) }
-                Item("Column left") { canvas?.insertColumn(false) }
-                Item("Column right") { canvas?.insertColumn(true) }
-                Item("Delete row") { canvas?.deleteRow() }
-                Item("Delete column") { canvas?.deleteColumn() }
-                Item("Lines colour") { picking = 3 }
-                Item("Fill colour (whole table)") { picking = 4 }
-                for (k in 0..3) Choice("Lines: " + listOf("thin", "normal", "thick", "bold")[k], tLine == k) {
-                    tLine = k; canvas?.setTableStyle(null, null, listOf(20f, 40f, 80f, 160f)[k])
-                }
-            }
+            val weights = listOf("Thin", "Normal", "Thick", "Bold")
+            PopHeading("Rows and columns (tap a cell first)")
+            PairRow("Row above / below", "Row above", Icons24.UP, { canvas?.insertRow(false) }, "Row below", Icons24.DOWN, { canvas?.insertRow(true) })
+            PairRow("Column left / right", "Column left", Icons24.BACK, { canvas?.insertColumn(false) }, "Column right", Icons24.NEXT, { canvas?.insertColumn(true) })
+            PairRow("Delete row / column", "Delete row", Icons24.DELETE, { canvas?.deleteRow() }, "Delete column", Icons24.DELETE, { canvas?.deleteColumn() })
+            CycleRow("Line weight", listOf(0, 1, 2, 3), tLine, { weights[it] }, { null }) { tLine = it; canvas?.setTableStyle(null, null, listOf(20f, 40f, 80f, 160f)[it]) }
+            Item("Lines colour") { picking = 3 }
+            Item("Fill colour (whole table)") { picking = 4 }
         }
         @Composable fun ColumnScope.clipMenu() {
             // Saved groups of things: save what the lasso has selected, then put a copy on any page.
@@ -568,6 +593,29 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             tool = t; canvas?.tool = t
             if (t == Tool.TABLE) tableDialog = true // ask for the rows and columns first
         }
+        // The pen's side button: a click does one thing, holding it makes the pen another tool until it is let go.
+        val penClickAction = PenAction.entries[settings.penClick]
+        val penHoldAction = PenAction.entries[settings.penHold]
+        val buttonState = remember { longArrayOf(0L, -1L) } // when it went down; the tool to give back (ordinal), or -1
+        androidx.compose.runtime.SideEffect {
+            PenButton.listener = { down ->
+                val now = android.os.SystemClock.uptimeMillis()
+                if (down) {
+                    buttonState[0] = now
+                    penHoldAction.tool?.let { buttonState[1] = tool.ordinal.toLong(); choose(it) }
+                } else {
+                    if (buttonState[1] >= 0) { choose(InkCanvasView.Tool.entries[buttonState[1].toInt()]); buttonState[1] = -1 }
+                    if (now - buttonState[0] < 400) when (penClickAction) {
+                        PenAction.NONE -> {}
+                        PenAction.PREVIOUS -> canvas?.previousTool?.let { choose(it) }
+                        PenAction.UNDO -> canvas?.undo()
+                        PenAction.REDO -> canvas?.redo()
+                        else -> penClickAction.tool?.let { choose(it) }
+                    }
+                }
+            }
+        }
+        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { PenButton.listener = null } }
         fun setInk(highlight: Boolean, argb: Int) {
             shade = -1
             if (highlight) { hlInk = (argb and 0xFFFFFF) or 0x99000000.toInt(); canvas?.highlighterColor = hlInk } // see-through, so the writing shows
@@ -578,7 +626,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             val group = groups.getValue(key)
             return RailEntry.Btn(d.label, d.icon, tool in group, key) {
                 if (tool in group && key !in noPopout) open = if (open == key) null else key
-                else { if (tool !in group) choose(group[0]); open = null }
+                else { if (tool !in group) choose(group[0]); open = if (key == "shape") key else null } // the shape tool asks which shape at once
             }
         }
         fun menuButton(label: String, icon: String, key: String, chosen: Boolean = false) = RailEntry.Btn(label, icon, chosen || open == key, key) { open = if (open == key) null else key }
@@ -597,6 +645,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 }
                 key == "undo" -> RailEntry.Btn(d.label, d.icon, false) { canvas?.undo() }
                 key == "redo" -> RailEntry.Btn(d.label, d.icon, false) { canvas?.redo() }
+                key == "lock" -> RailEntry.Btn(d.label, d.icon, viewLocked) { viewLocked = !viewLocked; canvas?.viewLocked = viewLocked }
                 key == "image" -> RailEntry.Btn(d.label, d.icon, false) { pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
                 key == "more" -> menuButton(d.label, d.icon, "more", tool in listOf(Tool.TABLE, Tool.SHAPE, Tool.BUCKET, Tool.CONNECTOR, Tool.CHART, Tool.LASER))
                 else -> menuButton(d.label, d.icon, key)
@@ -607,7 +656,8 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         fun popWidth(which: String): Modifier = when (which) {
             "eraser" -> Modifier.width(200.dp)
             "text" -> Modifier.width(190.dp)
-            "shape", "table", "connector", "bucket", "lasso" -> Modifier.width(240.dp)
+            "shape" -> Modifier.width(312.dp)
+            "table", "connector", "bucket", "lasso" -> Modifier.width(240.dp)
             else -> Modifier.widthIn(min = 240.dp, max = 340.dp)
         }
         val popout: @Composable (String) -> Unit = { which ->
@@ -669,7 +719,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                                         PopHeading("Other tools")
                                         if (rest.isEmpty()) Text("Every tool is on the sidebar.", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = sty.inkMuted, fontSize = 13.sp)
                                         for (row in rest.chunked(4)) Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            for (t in row) OptionChip(toolLabel(t), toolIcon(t), t == tool) { choose(t); open = null }
+                                            for (t in row) OptionChip(toolLabel(t), toolIcon(t), t == tool) { choose(t); open = if (t == Tool.SHAPE) "shape" else null }
                                         }
                                     }
                                     "clip" -> clipMenu()
@@ -712,19 +762,27 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 val info = sel
                 if (info != null && open == null && !full) androidx.compose.ui.layout.Layout(
                     content = {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val chipX = remember { androidx.compose.runtime.mutableStateMapOf<String, Int>() } // where each panel's button is along the bar
+                        var barW by remember { mutableStateOf(0) }
+                        val density = androidx.compose.ui.platform.LocalDensity.current
+                        @Composable fun PanelChip(key: String, label: String, icon: String) {
+                            Box(Modifier.onGloballyPositioned { chipX[key] = it.positionInParent().x.toInt() }) {
+                                OptionChip(label, icon, selPanel == key) { selPanel = if (selPanel == key) null else key }
+                            }
+                        }
+                        Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Surface(
-                                Modifier.pointerInput(Unit) { detectTapGestures { } }, shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp,
+                                Modifier.pointerInput(Unit) { detectTapGestures { } }.onSizeChanged { barW = it.width }, shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp,
                                 border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
                             ) {
                                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                     OptionChip("Delete", Icons24.DELETE, false) { canvas?.deleteSelection() }
                                     OptionChip("Save clip", Icons24.CLIPBOARD, false) { canvas?.saveSelection()?.let { clips = canvas!!.shelf.clips; naming = it; nameText = it.name } }
-                                    OptionChip("Layers", Icons24.LAYERS, selPanel == "layers") { selPanel = if (selPanel == "layers") null else "layers" }
-                                    if (info.text) OptionChip("Text", Icons24.TEXT, selPanel == "text") { selPanel = if (selPanel == "text") null else "text" }
-                                    if (info.shape) OptionChip("Shape", Icons24.SHAPE, selPanel == "shape") { selPanel = if (selPanel == "shape") null else "shape" }
-                                    if (info.connector) OptionChip("Connector", Icons24.CONNECTOR, selPanel == "connector") { selPanel = if (selPanel == "connector") null else "connector" }
-                                    if (info.table) OptionChip("Table", Icons24.TABLE, selPanel == "table") { selPanel = if (selPanel == "table") null else "table" }
+                                    PanelChip("layers", "Layers", Icons24.LAYERS)
+                                    if (info.text) PanelChip("text", "Text", Icons24.TEXT)
+                                    if (info.shape) PanelChip("shape", "Shape", Icons24.SHAPE)
+                                    if (info.connector) PanelChip("connector", "Connector", Icons24.CONNECTOR)
+                                    if (info.table) PanelChip("table", "Table", Icons24.TABLE)
                                     if (info.table) OptionChip("Table data", Icons24.TABLE, false) { canvas?.editTableData() }
                                     if (info.chart) OptionChip("Edit chart", Icons24.CHART, false) { canvas?.editChart() }
                                     if (info.picture) OptionChip("Crop", Icons24.CROP, false) { canvas?.toggleCrop() }
@@ -732,12 +790,17 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                                 }
                             }
                             val panel = selPanel
-                            if (panel != null) Surface(
-                                Modifier.pointerInput(Unit) { detectTapGestures { } }.width(250.dp).heightIn(max = 380.dp), shape = SquircleShape(StySize.radiusLg), color = sty.surface,
-                                shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
-                            ) {
-                                Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
-                                    when (panel) { "layers" -> layersMenu(); "text" -> textMenu(); "shape" -> shapeMenu(); "connector" -> connectorMenu(); "table" -> tableMenu() }
+                            if (panel != null) {
+                                val panelW = if (panel == "layers") 148.dp else 250.dp
+                                // The panel opens under its own button (kept inside the bar's width).
+                                val x = (chipX[panel] ?: 0).coerceAtMost(maxOf(0, barW - with(density) { panelW.roundToPx() }))
+                                Surface(
+                                    Modifier.offset { androidx.compose.ui.unit.IntOffset(x, 0) }.pointerInput(Unit) { detectTapGestures { } }.width(panelW).heightIn(max = 380.dp),
+                                    shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
+                                ) {
+                                    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+                                        when (panel) { "layers" -> layersMenu(); "text" -> textMenu(); "shape" -> shapeMenu(); "connector" -> connectorMenu(); "table" -> tableMenu() }
+                                    }
                                 }
                             }
                         }
@@ -755,10 +818,8 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 }
             }
         }
-        val cells = (if (infinite) listOfNotNull(canvas?.workPage) else pagesNow).map { MapCell(it.page.col, it.page.row, PageSizes.isLandscape(it.page)) }
-        val pageIndex = pagesNow.indexOf(here).coerceAtLeast(0)
         Column(Modifier.fillMaxSize().background(sty.bg).statusBarsPadding().navigationBarsPadding()) {
-            if (!full) NoteHeader(file.name, latency, onLibrary, { full = true }, { open = if (open == "page") null else "page" })
+            if (!full) NoteHeader(file.name, latency, onLibrary, { full = true }, { open = if (open == "page") null else "page" }, { open = if (open == "add") null else "add" })
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val rail: @Composable (Modifier) -> Unit = { m -> ToolRail(side, entries, m) { k, r -> btnRects[k] = r } }
                 if (full) canvasBox(Modifier.fillMaxSize())
@@ -770,14 +831,23 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 }
             }
             if (!full) {
-                if (cells.size > 1) PageBar(
-                    cells, pageIndex,
-                    onPick = { i -> pagesNow.getOrNull(i)?.let { canvas?.showPage(it) } },
-                    onPrev = { pagesNow.getOrNull(pageIndex - 1)?.let { canvas?.showPage(it) } },
-                    onNext = { pagesNow.getOrNull(pageIndex + 1)?.let { canvas?.showPage(it) } },
-                    onAll = { canvas?.overview() },
-                )
+                PageBarHost(pagesState, hereState, infinite, canvas)
                 ConvertedSheet(sheetOpen, { sheetOpen = !sheetOpen })
+            }
+        }
+        // Adding things (a picture, a photo), from the plus button in the header.
+        if (open == "add" && !full) {
+            Box(Modifier.fillMaxSize().clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { open = null })
+            Surface(
+                Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 64.dp, end = 8.dp).pointerInput(Unit) { detectTapGestures { } }.width(250.dp),
+                shape = SquircleShape(StySize.radiusLg), color = sty.surface, shadowElevation = 8.dp, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border),
+            ) {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    PopHeading("Add to this page")
+                    PopIconRow("Image", Icons24.IMAGE) { open = null; pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                    PopIconRow("Camera", Icons24.CAMERA) { open = null; openCamera() }
+                    PopIconRow("PDF (coming later)", Icons24.PAGE, enabled = false) { }
+                }
             }
         }
         // The page settings, from the hamburger button in the header.
@@ -791,6 +861,7 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
                 androidx.compose.runtime.CompositionLocalProvider(LocalClose provides { open = null }) {
                     Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
                         pageMenu()
+                        CycleRow("Toolbar position", RailSide.entries, RailSide.entries[settings.rail], { it.label }, { null }) { settings.rail = it.ordinal }
                         PopHeading("For testing")
                         Item("Add chart samples to this note") { canvas?.addChartSamples(); open = null }
                     }
@@ -810,29 +881,12 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
         }
         LaunchedEffect(canvas) {
             while (true) {
-                canvas?.let { c -> val o = c.readingOrder(); if (o != pagesNow) pagesNow = o; val h = c.centrePage() ?: c.workPage; if (h !== here) here = h; val si = c.selectionInfo(); if (si != sel) sel = si }
+                canvas?.let { c -> val o = c.readingOrder(); if (o != pagesState.value) pagesState.value = o; val h = c.centrePage() ?: c.workPage; if (h !== hereState.value) hereState.value = h; val si = c.selectionInfo(); if (si != sel) sel = si }
                 kotlinx.coroutines.delay(200)
             }
         }
         androidx.compose.runtime.DisposableEffect(canvas) { onDispose { canvas?.let(::keep) } }
-        LaunchedEffect(zoom) {
-            if (firstZoom) { firstZoom = false; return@LaunchedEffect }
-            zoomShown = true
-            delay(2500)
-            zoomShown = false
-        }
-        if (zoomShown || zoom != 100) {
-            Surface(
-                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp).padding(bottom = if (full) 0.dp else if (sheetOpen) 268.dp else 108.dp),
-                shape = SquircleShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp,
-            ) {
-                Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("$zoom%")
-                    TextButton(onClick = { canvas?.fitToScreen() }, Modifier.padding(start = 8.dp)) { Text("Fit to screen") }
-                    TextButton(onClick = { canvas?.overview() }) { Text("Overview") }
-                }
-            }
-        }
+        ZoomPill(zoomState, full, sheetOpen, { canvas?.fitToScreen() }, { canvas?.overview() })
         if (full) Surface(
             Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp), shape = SquircleShape(StySize.radiusMd),
             color = LocalSty.current.surface, shadowElevation = 4.dp, border = androidx.compose.foundation.BorderStroke(1.dp, LocalSty.current.border),
@@ -846,27 +900,19 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             }
         }
         if (tableDialog) {
-            AlertDialog(
-                onDismissRequest = { tableDialog = false },
-                confirmButton = { TextButton(onClick = { tableDialog = false }) { Text("Done") } },
-                title = { Text("Table") },
-                text = {
-                    Column {
-                        Text("Then drag on the page to draw it.")
-                        for ((label, value, set) in listOf(
-                            Triple("Rows", tRows) { v: Int -> tRows = v; canvas?.tableRows = v },
-                            Triple("Columns", tCols) { v: Int -> tCols = v; canvas?.tableCols = v },
-                        )) {
-                            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(label, Modifier.padding(end = 16.dp))
-                                Button(onClick = { set((value - 1).coerceAtLeast(1)) }) { Text("-") }
-                                Text("$value", Modifier.padding(horizontal = 16.dp))
-                                Button(onClick = { set((value + 1).coerceAtMost(Table.MAX_LINES)) }) { Text("+") }
-                            }
+            androidx.compose.ui.window.Dialog(onDismissRequest = { tableDialog = false }) {
+                Surface(shape = SquircleShape(StySize.radiusLg), color = sty.surface, border = androidx.compose.foundation.BorderStroke(1.dp, sty.border)) {
+                    Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        DialogTitle("Table")
+                        Text("Pick how many, then drag on the page to draw it.", color = sty.inkMuted, fontSize = 13.sp)
+                        Row(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            NumberWheel("Rows", tRows, 1..Table.MAX_LINES) { tRows = it; canvas?.tableRows = it }
+                            NumberWheel("Columns", tCols, 1..Table.MAX_LINES) { tCols = it; canvas?.tableCols = it }
                         }
+                        Button(onClick = { tableDialog = false }) { Text("Done") }
                     }
-                },
-            )
+                }
+            }
         }
         naming?.let { clip ->
             val done = { naming = null }
@@ -1007,6 +1053,10 @@ private fun PopRow(text: String, chosen: Boolean, onClick: () -> Unit) {
 @Composable
 private fun Heading(text: String) = PopHeading(text)
 
+private fun routeIcon(r: Route) = when (r) { Route.STRAIGHT -> Icons24.ROUTE_STRAIGHT; Route.ELBOW -> Icons24.ROUTE_ELBOW; Route.CURVE -> Icons24.ROUTE_CURVE }
+
+private fun headIcon(h: Arrowhead) = when (h) { Arrowhead.NONE -> Icons24.HEAD_NONE; Arrowhead.OPEN -> Icons24.HEAD_OPEN; Arrowhead.FILLED -> Icons24.HEAD_FILLED; Arrowhead.DOT -> Icons24.HEAD_DOT }
+
 private fun routeLabel(r: Route) = when (r) { Route.STRAIGHT -> "straight"; Route.ELBOW -> "right angles"; Route.CURVE -> "rounded" }
 
 private fun eraseLabel(e: EraseOnly) = when (e) {
@@ -1077,5 +1127,63 @@ private fun ClipTile(c: Clip, thumb: (String) -> android.graphics.Bitmap?, chose
             ClipPreview(c, 60.dp, thumb)
         }
         Text(c.name, color = sty.ink, fontSize = 11.sp, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+/**
+ * The zoom, as a percentage of a page fitted to the screen, with buttons to fit it or see everything. It shows while the zoom
+ * changes and a moment after, and stays while it is not 100. Its own composable, so the zoom changing every frame redoes only this.
+ */
+@Composable
+private fun BoxScope.ZoomPill(zoomState: androidx.compose.runtime.MutableIntState, full: Boolean, sheetOpen: Boolean, onFit: () -> Unit, onOverview: () -> Unit) {
+    val zoom = zoomState.intValue
+    var shown by remember { mutableStateOf(false) }
+    var first by remember { mutableStateOf(true) }
+    LaunchedEffect(zoom) {
+        if (first) { first = false; return@LaunchedEffect }
+        shown = true
+        delay(2500)
+        shown = false
+    }
+    if (shown || zoom != 100) {
+        Surface(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp).padding(bottom = if (full) 0.dp else if (sheetOpen) 268.dp else 108.dp),
+            shape = SquircleShape(28.dp), tonalElevation = 6.dp, shadowElevation = 4.dp,
+        ) {
+            Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("$zoom%")
+                TextButton(onClick = onFit, Modifier.padding(start = 8.dp)) { Text("Fit to screen") }
+                TextButton(onClick = onOverview) { Text("Overview") }
+            }
+        }
+    }
+}
+
+/** The page bar. It reads the pages and the page in view itself, so those changing redoes only this. */
+@Composable
+private fun PageBarHost(pagesState: androidx.compose.runtime.State<List<PageModel>>, hereState: androidx.compose.runtime.State<PageModel?>, infinite: Boolean, canvas: InkCanvasView?) {
+    val pages = pagesState.value
+    val cells = (if (infinite) listOfNotNull(canvas?.workPage) else pages).map { MapCell(it.page.col, it.page.row, PageSizes.isLandscape(it.page)) }
+    if (cells.size <= 1) return
+    val index = pages.indexOf(hereState.value).coerceAtLeast(0)
+    PageBar(
+        cells, index,
+        onPick = { i -> pages.getOrNull(i)?.let { canvas?.showPage(it) } },
+        onPrev = { pages.getOrNull(index - 1)?.let { canvas?.showPage(it) } },
+        onNext = { pages.getOrNull(index + 1)?.let { canvas?.showPage(it) } },
+        onAll = { canvas?.overview() },
+    )
+}
+
+/** A row in a popout with an icon in front, for choices that are not a setting. */
+@Composable
+private fun PopIconRow(text: String, icon: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val sty = LocalSty.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(min = 48.dp).clip(SquircleShape(StySize.radiusMd)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.alpha(if (enabled) 1f else 0.4f)) { SvgIcon(icon, sty.ink, 22.dp) }
+        Text(text, color = if (enabled) sty.ink else sty.inkMuted, fontSize = 14.sp)
     }
 }

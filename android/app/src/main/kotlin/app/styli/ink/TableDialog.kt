@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
@@ -81,9 +80,12 @@ fun TableDialog(
     val context = LocalContext.current
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = SquircleShape(16.dp), tonalElevation = 6.dp) {
+        Surface(
+            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = SquircleShape(StySize.radiusLg), color = LocalSty.current.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, LocalSty.current.border),
+        ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Table data")
+                DialogTitle("Table data")
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(d.header, { d.header = it }); Text("Header row")
@@ -108,7 +110,7 @@ fun TableDialog(
                         TextButton(onClick = { d.addRow() }, enabled = d.rows < Table.MAX_LINES) { Text("Add row") }
                         TextButton(onClick = { d.addCol() }, enabled = d.cols < Table.MAX_LINES) { Text("Add column") }
                     }
-                    Text("Chart from cells", Modifier.padding(top = 12.dp))
+                    Text("Chart from cells", Modifier.padding(top = 12.dp), color = LocalSty.current.ink, fontFamily = DisplayFont, fontSize = 17.sp)
                     Text("Draws a chart that follows these cells: the first row and column are the names, the rest the numbers.", Modifier.padding(bottom = 4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(d.fromRow, { d.fromRow = it }, Modifier.width(110.dp), label = { Text("First row") }, singleLine = true)
@@ -123,7 +125,7 @@ fun TableDialog(
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onCancel) { Text("Cancel") }
-                    TextButton(onClick = { onDone(d.grid(), d.header, d.align.toList()) }) { Text("Done") }
+                    Button(onClick = { onDone(d.grid(), d.header, d.align.toList()) }) { Text("Done") }
                 }
             }
         }

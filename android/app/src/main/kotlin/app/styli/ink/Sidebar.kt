@@ -12,7 +12,7 @@ object SidebarItems {
         Def("image", "Add image", Icons24.IMAGE), Def("more", "More tools", Icons24.SHAPES),
         Def("ink0", "Black ink", Icons24.PEN), Def("ink1", "Blue ink", Icons24.PEN), Def("ink2", "Red ink", Icons24.PEN),
         Def("undo", "Undo", Icons24.UNDO), Def("redo", "Redo", Icons24.REDO),
-        Def("clip", "Clipboard", Icons24.CLIPBOARD), Def("ruler", "Ruler", Icons24.RULER), Def("assist", "Pen assist", Icons24.ASSIST),
+        Def("clip", "Clipboard", Icons24.CLIPBOARD), Def("ruler", "Ruler", Icons24.RULER), Def("assist", "Pen assist", Icons24.ASSIST), Def("lock", "Lock page view", Icons24.LOCK),
     )
     val sep = Def("sep", "Divider line", Icons24.DIVIDER)
     val gap = Def("gap", "Space", Icons24.SPACER)
@@ -20,6 +20,6 @@ object SidebarItems {
     fun def(key: String): Def? = all.firstOrNull { it.key == key } ?: listOf(sep, gap).firstOrNull { it.key == key }
 
     val DEFAULT = listOf(
-        "pen", "highlighter", "eraser", "line", "lasso", "text", "more", "sep", "ink0", "ink1", "ink2", "sep", "undo", "redo", "sep", "clip", "ruler", "assist",
+        "pen", "highlighter", "eraser", "line", "lasso", "text", "more", "sep", "ink0", "ink1", "ink2", "sep", "undo", "redo", "sep", "clip", "ruler", "assist", "lock",
     )
 }

@@ -29,7 +29,7 @@ class StorageControls(val path: String, val isDefault: Boolean, val onChoose: ()
 
 /** The groups on the Settings sidebar. New settings go in a group (or a new one); the list can keep growing. */
 enum class SettingsSection(val label: String) {
-    PENMANSHIP("Penmanship"), PAGES("Pages and scrolling"), SIDEBAR("Sidebar"), SELECTION("Selection"), TRASH("Trash"), STORAGE("Storage"), LATER("Coming later"),
+    PENMANSHIP("Penmanship"), PAGES("Pages and scrolling"), SIDEBAR("Toolbar"), PEN_BUTTON("Pen button"), SELECTION("Selection"), TRASH("Trash"), STORAGE("Storage"), LATER("Coming later"),
 }
 
 /** The Settings tab: a sidebar of groups on the left, the chosen group's settings on the right. */
@@ -74,6 +74,11 @@ fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi, storage: StorageCont
                     Chips("When a note opens", listOf("Where I left off", "At the top, fitted to the page"), if (s.startFit) 1 else 0) { s.startFit = it == 1 }
                 }
                 SettingsSection.SIDEBAR -> SidebarEditor(s)
+                SettingsSection.PEN_BUTTON -> {
+                    Note("The button on the side of the pen. A click is a quick press while the pen hovers or touches; hold it to turn the pen into another tool for as long as you hold it.")
+                    Chips("When I click it", PenAction.entries.map { it.label }, s.penClick) { s.penClick = it }
+                    Chips("While I hold it, the pen is", PenAction.HOLD.map { it.label }, PenAction.HOLD.indexOf(PenAction.entries[s.penHold]).coerceAtLeast(0)) { s.penHold = PenAction.HOLD[it].ordinal }
+                }
                 SettingsSection.SELECTION -> Chips("Outline", listOf("Dashed", "Solid"), if (s.solid) 1 else 0) { s.solid = it == 1 }
                 SettingsSection.TRASH -> {
                     Note("Deleted files stay in the trash until you bring them back or delete them for good. Keeping them for a set time and then clearing them out is not built yet.")
@@ -135,7 +140,7 @@ private fun Swatches(label: String, colours: List<Pair<String, Int>>, chosen: In
 @Composable
 private fun SidebarEditor(s: AppSettings) {
     val sty = LocalSty.current
-    Note("The tool rail beside the page. Use the arrows to reorder; add dividers and spaces to group things.")
+    Note("The toolbar beside the page: which side it sits on, and what is on it. Use the arrows to reorder; add dividers and spaces to group things.")
     Chips("Position", RailSide.entries.map { it.label }, s.rail) { s.rail = it }
     Text("On the rail", color = sty.inkMuted, style = MaterialTheme.typography.labelMedium)
     for ((i, key) in s.sidebar.withIndex()) {

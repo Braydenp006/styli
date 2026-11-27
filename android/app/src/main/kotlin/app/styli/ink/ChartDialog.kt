@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -215,9 +213,12 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
     val locked = d.linked // a chart that follows a table cannot be typed over
     val axes = ChartMaths.hasAxes(k)
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = SquircleShape(16.dp), tonalElevation = 6.dp) {
+        Surface(
+            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f), shape = SquircleShape(StySize.radiusLg), color = LocalSty.current.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, LocalSty.current.border),
+        ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Chart data")
+                DialogTitle("Chart data")
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     ChartKind.entries.chunked(5).forEach { row -> Row { for (kk in row) Pick(KIND_NAMES.getValue(kk), d.kind == kk) { d.pickKind(kk) } } }
                     if (locked) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,7 +345,7 @@ fun ChartDialog(chart: Chart, onDone: (Chart) -> Unit, onCancel: () -> Unit) {
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onCancel) { Text("Cancel") }
-                    TextButton(onClick = { onDone(d.toChart(chart)) }, enabled = d.valid) { Text("Done") }
+                    Button(onClick = { onDone(d.toChart(chart)) }, enabled = d.valid) { Text("Done") }
                 }
             }
         }

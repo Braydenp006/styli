@@ -299,6 +299,29 @@ class TableTest {
     }
 
     @Test
+    fun aRowOrColumnAddedAboveOrLeftGrowsTheTableBackwardsAndTheRestStaysPut() {
+        val m = model()
+        val t = m.addTable(1500f, 2000f, 3000f, 1500f, rows = 3, cols = 3)!!
+        val r0 = m.add(Tool.TOOL_PEN, 0, 40, listOf(Pt(1990f, 2250f, 0, 1f), Pt(2010f, 2250f, 5, 1f))).id // row 0
+        val r1 = m.add(Tool.TOOL_PEN, 0, 40, listOf(Pt(1990f, 2750f, 0, 1f), Pt(2010f, 2750f, 5, 1f))).id // row 1
+        assertTrue(m.insertLine(t.id, vertical = false, at = 1, growBack = true)) // above row 1
+        assertEquals(1500f, m.tables.single().y, 0f) // the top moved up by the new row
+        assertEquals(4, m.tables.single().rows)
+        assertEquals(1750f, y(m, r0), 0f) // before the new row: moved up with the table's top
+        assertEquals(2750f, y(m, r1), 0f) // from the new row on: where it was
+        assertTrue(m.insertLine(t.id, vertical = true, at = 0, growBack = true)) // a column on the left
+        assertEquals(500f, m.tables.single().x, 0f) // 1500 - 1000
+        assertTrue(m.undo()); assertTrue(m.undo())
+        assertEquals(2000f, m.tables.single().y, 0f)
+        assertEquals(2250f, y(m, r0), 0f)
+        // No room above the sheet's top: it grows downwards as before.
+        val m2 = model(); val t2 = m2.addTable(0f, 0f, 3000f, 1500f, rows = 3, cols = 3)!!
+        assertTrue(m2.insertLine(t2.id, false, 0, growBack = true))
+        assertEquals(0f, m2.tables.single().y, 0f)
+        assertEquals(4, m2.tables.single().rows)
+    }
+
+    @Test
     fun anInsertIsOneStepAndUndoPutsEverythingBack() {
         val (m, t, ids) = filled()
         m.insertLine(t.id, false, 1)

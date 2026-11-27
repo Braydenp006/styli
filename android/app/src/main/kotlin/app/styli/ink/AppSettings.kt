@@ -28,6 +28,8 @@ class AppSettings {
     val highSaved = androidx.compose.runtime.mutableStateListOf<Int>() // colours kept for the highlighter
     val inkSlots = androidx.compose.runtime.mutableStateListOf(*RAIL_INKS.toTypedArray()) // the three colours on the rail
     var clipSamples by mutableStateOf(false) // the test clips were added once
+    var penClick by mutableIntStateOf(PenAction.PREVIOUS.ordinal) // what a click of the pen's side button does (index into [PenAction])
+    var penHold by mutableIntStateOf(PenAction.NONE.ordinal) // the tool the pen becomes while the button is held
     var rail by mutableIntStateOf(0) // where the tool rail sits: index into [RailSide]
     var startFit by mutableStateOf(false) // open every note at the top, fitted to the page, instead of where it was left
     var penColor by mutableIntStateOf(0xFF000000.toInt())
@@ -38,7 +40,7 @@ class AppSettings {
 
     /** The values to keep on disk (the group the screen shows is not one of them). */
     fun snapshot(): Map<String, Any?> = mapOf("pLines" to pLines, "pShapes" to pShapes, "pLevel" to pLevel, "pHold" to pHold, "solid" to solid, "gridScroll" to gridScroll, "scroll" to scroll,
-        "pens" to pens, "defPenColor" to defPenColor, "defPenWidth" to defPenWidth, "defHighlighterColor" to defHighlighterColor, "defHighlighterWidth" to defHighlighterWidth, "startFit" to startFit, "rail" to rail, "inkSlots" to inkSlots.map { it.toString() }, "clipSamples" to clipSamples, "sidebar" to sidebar.toList(), "penSaved" to penSaved.map { it.toString() }, "highSaved" to highSaved.map { it.toString() },
+        "pens" to pens, "defPenColor" to defPenColor, "defPenWidth" to defPenWidth, "defHighlighterColor" to defHighlighterColor, "defHighlighterWidth" to defHighlighterWidth, "startFit" to startFit, "rail" to rail, "penClick" to penClick, "penHold" to penHold, "sidebarV" to 2, "inkSlots" to inkSlots.map { it.toString() }, "clipSamples" to clipSamples, "sidebar" to sidebar.toList(), "penSaved" to penSaved.map { it.toString() }, "highSaved" to highSaved.map { it.toString() },
         "penColor" to penColor, "penWidth" to penWidth, "highlighterColor" to highlighterColor, "highlighterWidth" to highlighterWidth)
 
     /** Takes back what [snapshot] made; a missing or out-of-range value keeps the default. */
@@ -47,9 +49,11 @@ class AppSettings {
         level("pLines")?.let { pLines = it }; level("pShapes")?.let { pShapes = it }; level("pLevel")?.let { pLevel = it }
         level("pHold")?.let { pHold = it }; level("scroll")?.let { scroll = it }
         level("pens", 3)?.let { pens = it }; level("rail")?.let { rail = it }
+        level("penClick", PenAction.entries.size)?.let { penClick = it }; level("penHold", PenAction.entries.size)?.let { penHold = it.takeIf { h -> PenAction.entries[h] in PenAction.HOLD } ?: 0 }
         (m["inkSlots"] as? List<*>)?.mapNotNull { (it as? String)?.toIntOrNull() }?.takeIf { it.size == 3 }?.let { for (i in 0..2) inkSlots[i] = it[i] }
         (m["clipSamples"] as? Boolean)?.let { clipSamples = it }
         (m["sidebar"] as? List<*>)?.filterIsInstance<String>()?.filter { SidebarItems.def(it) != null }?.let { sidebar.clear(); sidebar.addAll(it) }
+        if ((m["sidebarV"] as? Long ?: 0L) < 2L && "lock" !in sidebar) sidebar.add("lock") // the lock button arrived after the first layouts were saved
         (m["penSaved"] as? List<*>)?.mapNotNull { (it as? String)?.toIntOrNull() }?.let { penSaved.clear(); penSaved.addAll(it.take(MAX_SAVED)) }
         (m["highSaved"] as? List<*>)?.mapNotNull { (it as? String)?.toIntOrNull() }?.let { highSaved.clear(); highSaved.addAll(it.take(MAX_SAVED)) }
         (m["startFit"] as? Boolean)?.let { startFit = it }

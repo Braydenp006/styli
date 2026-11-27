@@ -293,13 +293,20 @@ class PageModel(page: PageSet = A4_LINED) {
      * stroke is judged by the middle of its box, a text box by the middle of its top edge). One undo step. False if
      * there is no such table or place, or the table already has [Table.MAX_LINES] of them.
      */
-    fun insertLine(tableId: String, vertical: Boolean, at: Int): Boolean {
+    fun insertLine(tableId: String, vertical: Boolean, at: Int, growBack: Boolean = false): Boolean {
         endErase()
         val t = tables.firstOrNull { it.id == tableId } ?: return false
         val sizes = if (vertical) t.colWidths else t.rowHeights
         if (sizes.size >= Table.MAX_LINES || at !in 0..sizes.size) return false
         val size = sizes[minOf(at, sizes.size - 1)]
         val edge = if (vertical) t.lineX(at) else t.lineY(at)
+        // "Above" and "left": the table grows up or left, so the rows and columns from the new line on stay where they are
+        // and the ones before it move back (when the sheet has room for that; otherwise it grows the usual way).
+        if (growBack && (page.infinite || (if (vertical) t.x else t.y) - size >= 0f)) {
+            val before = contentIn(t).filter { (if (vertical) it.second.first else it.second.second) < edge }.map { it.first }.toSet()
+            val grown = t.inserted(vertical, at, size).let { if (vertical) it.copy(x = it.x - size) else it.copy(y = it.y - size) }
+            return editTable(t, grown, before, if (vertical) -size else 0f, if (vertical) 0f else -size, emptySet())
+        }
         val shift = contentIn(t).filter { (if (vertical) it.second.first else it.second.second) >= edge }.map { it.first }.toSet()
         return editTable(t, t.inserted(vertical, at, size), shift, if (vertical) size else 0f, if (vertical) 0f else size, emptySet())
     }

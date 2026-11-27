@@ -82,6 +82,15 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     /** Called with the zoom as a percentage of a page fitted to the screen (100 is fitted) whenever it changes. */
     var onZoom: ((Int) -> Unit)? = null
     private var shownZoom = -1
+    private var zoomTold = 0L
+    private val zoomLater = Runnable { zoomTold = android.os.SystemClock.uptimeMillis(); onZoom?.invoke(shownZoom) }
+
+    /** Tells the screen the zoom, at most every 150 ms (it redraws the whole screen's layout, which would make every frame of a zoom heavy), and always the last value. */
+    private fun tellZoom() {
+        removeCallbacks(zoomLater)
+        val wait = zoomTold + 150 - android.os.SystemClock.uptimeMillis()
+        if (wait <= 0) { zoomTold = android.os.SystemClock.uptimeMillis(); onZoom?.invoke(shownZoom) } else postDelayed(zoomLater, wait)
+    }
 
     /** Flies into [p]: fitted to the screen and in the middle of it, as one camera move. It becomes the page being worked on. */
     /** The page being worked on. */
@@ -207,8 +216,16 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private val placed = HashMap<String, Placed>() // drawn strokes by ID, built once (pruned after every change)
     private val renderer = CanvasStrokeRenderer.create()
 
+    /** The tool before the current one (the pen button can go back to it). */
+    var previousTool: Tool? = null
+        private set
+
+    /** While true, fingers do not scroll or zoom the pages (the pen still writes). */
+    var viewLocked = false
+
     var tool = Tool.PEN
         set(v) {
+            if (v != field) previousTool = field
             if (v != Tool.TEXT) finishText()
             tabling = false
             charting = false
@@ -263,7 +280,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         object : View(context) {
             override fun onDraw(canvas: Canvas) {
                 activate(work)
-                vp.percent(maxOf(1, work.page.width)).let { if (it != shownZoom) { shownZoom = it; onZoom?.invoke(it) } }
+                vp.percent(maxOf(1, work.page.width)).let { if (it != shownZoom) { shownZoom = it; tellZoom() } }
                 positionEditor()
                 canvas.save()
                 canvas.translate((pullDrawX * PULL_SHIFT).toFloat(), (pullDrawY * PULL_SHIFT).toFloat()) // the surface follows a pull a little
@@ -275,7 +292,9 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                     activate(p)
                     val g = geometry
                     // Pages seen small (the overview) are drawn from a small picture of each, not stroke by stroke, so panning stays smooth.
-                    if (!sampling && !g.infinite && dragMap == null && g.pageW * g.scale < SMALL_PAGE_PX) {
+                    // While the view is flying (zooming into a page, out to the overview) pages up to a screen wide use their picture too: a little soft for half a second, and smooth.
+                    val flying = snapAnim?.isRunning == true
+                    if (!sampling && !g.infinite && dragMap == null && g.pageW * g.scale < (if (flying) FLY_PAGE_PX else SMALL_PAGE_PX)) {
                         val hit = pageCache.get(p)?.takeIf { it.rev == p.revision }
                         val pic = hit ?: if (budget > 0) { budget--; renderCached(p) } else null
                         if (pic != null) {
@@ -289,6 +308,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                     drawPage(canvas)
                 }
                 activate(work)
+                if (!sampling) { this@InkCanvasView.removeCallbacks(warm); this@InkCanvasView.postDelayed(warm, 600) }
                 if (sampling) { canvas.restore(); return } // the page as it is, with none of the tools' overlays
                 drawCarried(canvas)
                 drawLassoOverlay(canvas)
@@ -315,10 +335,21 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     // ---- Small pages: a picture of each page, kept until the page changes ----
 
     private class PageShot(val bmp: Bitmap, val rev: Int)
-    private val pageCache = object : android.util.LruCache<PageModel, PageShot>(64 * 1024 * 1024) {
+    private val pageCache = object : android.util.LruCache<PageModel, PageShot>(80 * 1024 * 1024) {
         override fun sizeOf(key: PageModel, value: PageShot) = value.bmp.byteCount
     }
     private val cachePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    // When nothing has moved for a moment, the pictures of pages not yet drawn (or out of date) are made one at a time, so
+    // the overview and the zoom into and out of it find them ready.
+    private val warm = object : Runnable {
+        override fun run() {
+            val pages = notebook.pages
+            if (layout != null && !vp.infinite && pages.size <= 30) { // more would not all fit in the cache
+                pages.firstOrNull { !it.page.infinite && pageCache.get(it)?.rev != it.revision }?.let { renderCached(it); this@InkCanvasView.postDelayed(this, 30) }
+            }
+        }
+    }
 
     /** Draws page [p] whole into a small bitmap (sheet [CACHE_PX] wide, with the margin round it) and keeps it. Null for an infinite canvas. */
     private fun renderCached(p: PageModel): PageShot? {
@@ -2054,6 +2085,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     data class SelectionInfo(
         val rect: RectF, val table: Boolean, val chart: Boolean, val picture: Boolean, val cropped: Boolean,
         val text: Boolean, val shape: Boolean, val connector: Boolean,
+        val route: Route? = null, val fromHead: Arrowhead? = null, val toHead: Arrowhead? = null, val hasVia: Boolean = false, // set when one connector is selected alone
     )
 
     fun selectionInfo(): SelectionInfo? {
@@ -2063,12 +2095,14 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         val xs = (0..3).map { g.toScreenX(q.corner(it).first.toDouble()).toFloat() }
         val ys = (0..3).map { g.toScreenY(q.corner(it).second.toDouble()).toFloat() }
         val pic = selection.singleOrNull()?.let { model.pictureOf(it) }
+        val alone = connectorAlone()
         return SelectionInfo(
             RectF(xs.min(), ys.min(), xs.max(), ys.max()),
             table = lineTable() != null || selection.singleOrNull()?.let { model.tableOf(it) } != null,
             chart = selection.singleOrNull()?.let { model.chartOf(it) } != null,
             picture = pic != null, cropped = pic?.isCropped == true,
             text = model.texts.any { it.id in selection }, shape = model.shapes.any { it.id in selection }, connector = model.connectors.any { it.id in selection },
+            route = alone?.route, fromHead = alone?.fromHead, toHead = alone?.toHead, hasVia = alone?.via?.isNotEmpty() == true,
         )
     }
 
@@ -2256,7 +2290,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         val t = lineTable() ?: return
         val r = cellSel?.first
         val at = if (r == null) (if (below) t.rows else 0) else if (below) r + 1 else r
-        if (model.insertLine(t.id, false, at)) { cellSel = at to (cellSel?.second ?: 0); changed(true) }
+        if (model.insertLine(t.id, false, at, growBack = !below)) { cellSel = at to (cellSel?.second ?: 0); changed(true) }
     }
 
     /** Adds a column left or right of the tapped cell (the left or right of the table if none is tapped). */
@@ -2264,7 +2298,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         val t = lineTable() ?: return
         val c = cellSel?.second
         val at = if (c == null) (if (right) t.cols else 0) else if (right) c + 1 else c
-        if (model.insertLine(t.id, true, at)) { cellSel = (cellSel?.first ?: 0) to at; changed(true) }
+        if (model.insertLine(t.id, true, at, growBack = !right)) { cellSel = (cellSel?.first ?: 0) to at; changed(true) }
     }
 
     /** Deletes the tapped cell's row, with what is written in it. */
@@ -2939,7 +2973,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
 
     /** Two fingers pan and zoom; one finger pans. */
     private fun moving(event: MotionEvent): Boolean {
-        if (!gestureActive) return true
+        if (!gestureActive || viewLocked) return true
         if (carryPage != null) return carry(event)
         scaleDetector.onTouchEvent(event)
         velocity?.addMovement(event)
@@ -3459,8 +3493,9 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private companion object {
         const val PLUS_MIN_PX = 14f // an empty cell narrower than this is not drawn
         const val PLUS_DASH_PX = 70f // dashed outlines only on cells wider than this
-        const val SMALL_PAGE_PX = 380f // a page narrower than this on screen is drawn from its picture
-        const val CACHE_PX = 420 // the width of that picture's sheet
+        const val FLY_PAGE_PX = 1300f // while flying, pages narrower than this use their picture
+        const val SMALL_PAGE_PX = 560f // a page narrower than this on screen is drawn from its picture
+        const val CACHE_PX = 600 // the width of that picture's sheet
         const val CACHE_PER_FRAME = 3 // pictures made in one frame (more would stall it)
         const val LINED_TOP = 1600 // 16 mm
         const val LINED_STEP = 800 // 8 mm

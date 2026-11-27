@@ -90,6 +90,18 @@ object Icons24 {
     const val CROP = "M6 2v14a2 2 0 002 2h14M2 6h14a2 2 0 012 2v14"
     const val RESET = "M3 12a9 9 0 109-9 9 9 0 00-6.7 3L3 8M3 3v5h5"
     const val LAYERS = "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5M3 17.5l9 5 9-5"
+    const val TO_FRONT = "M12 17V5M6 11l6-6 6 6M5 21h14"
+    const val TO_BACK = "M12 7v12M6 13l6 6 6-6M5 3h14"
+    const val FORWARD = "M12 19V5M5 12l7-7 7 7"
+    const val BACKWARD = "M12 5v14M19 12l-7 7-7-7"
+    const val ROUTE_STRAIGHT = "M4 20L20 4"
+    const val ROUTE_ELBOW = "M4 20h8V4h8"
+    const val ROUTE_CURVE = "M4 20C4 6 20 18 20 4"
+    const val HEAD_NONE = "M4 12h16"
+    const val HEAD_OPEN = "M4 12h16M14 6l6 6-6 6"
+    const val HEAD_FILLED = "M4 12h9M12 6l8 6-8 6z"
+    const val HEAD_DOT = "M4 12h10M14 12a3 3 0 106 0 3 3 0 10-6 0"
+    const val CAMERA = "M4 7h3l2-3h6l2 3h3a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1zM12 10a3.5 3.5 0 100 7 3.5 3.5 0 000-7z"
     const val PLUS = "M12 5v14M5 12h14"
     const val CLOSE = "M18 6L6 18M6 6l12 12"
     const val DOWN = "M6 9l6 6 6-6"
@@ -179,7 +191,7 @@ fun ToolRail(side: RailSide, entries: List<RailEntry>, modifier: Modifier = Modi
 
 /** The bar over the page: back to the library, the note's name, and the buttons that are planned but not built. */
 @Composable
-fun NoteHeader(title: String, subtitle: String, onBack: () -> Unit, onFull: () -> Unit, onMenu: () -> Unit, modifier: Modifier = Modifier) {
+fun NoteHeader(title: String, subtitle: String, onBack: () -> Unit, onFull: () -> Unit, onMenu: () -> Unit, onAdd: () -> Unit, modifier: Modifier = Modifier) {
     val sty = LocalSty.current
     Column(modifier.background(sty.surface)) {
         Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -190,6 +202,7 @@ fun NoteHeader(title: String, subtitle: String, onBack: () -> Unit, onFull: () -
             }
             Text("Not synced yet", color = sty.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             IconBtn("Lock: the AI won't change this note (not built yet)", Icons24.LOCK, enabled = false, onClick = {})
+            IconBtn("Add an image or a photo", Icons24.PLUS, onClick = onAdd)
             IconBtn("Full screen", Icons24.FULL, onClick = onFull)
             // The one honey button of the screen; it waits for the AI reading (phase 4).
             Box(

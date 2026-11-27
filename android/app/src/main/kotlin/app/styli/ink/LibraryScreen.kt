@@ -751,13 +751,14 @@ private fun NewFileDialog(lib: Library, start: Folder, onDismiss: () -> Unit, on
     )
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun Chips(label: String, options: List<String>, chosen: Int, special: Boolean = false, onPick: (Int) -> Unit) {
     val sty = LocalSty.current
     // A special (important) setting picks in solid honey, so it stands out from the ordinary ones.
     val colours = if (special) FilterChipDefaults.filterChipColors(selectedContainerColor = sty.honey, selectedLabelColor = sty.onHoney) else FilterChipDefaults.filterChipColors()
     Text(label, color = LocalSty.current.inkMuted, style = MaterialTheme.typography.labelMedium)
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space2)) {
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(StySize.space2), verticalArrangement = Arrangement.spacedBy(StySize.space1)) { // wraps, so every option is in view
         options.forEachIndexed { i, o -> FilterChip(i == chosen, { onPick(i) }, { Text(o) }, Modifier.heightIn(min = StySize.touch), colors = colours) }
     }
 }
