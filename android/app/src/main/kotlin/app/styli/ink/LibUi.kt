@@ -30,6 +30,8 @@ class LibUi {
     var sort by mutableStateOf(Sort.EDITED)
     var filter by mutableStateOf<FileKind?>(null) // null shows every kind
     var openFolder by mutableStateOf<Folder?>(null) // null is the top level
+    val expanded = androidx.compose.runtime.mutableStateMapOf<Folder, Boolean>() // folders unfolded in the folder panel
+    var panelOpen by mutableStateOf(false) // is the folder panel on the left showing?
     var pinnedOpen by mutableStateOf(true) // the Pinned and Recent sections fold up like an accordion
     var recentOpen by mutableStateOf(true)
     var selecting by mutableStateOf(false) // select mode: taps pick notes and folders instead of opening them
@@ -54,7 +56,8 @@ class DragState {
     var pos by mutableStateOf(Offset.Zero) // in the root's coordinates
     var grab by mutableStateOf(Offset.Zero) // where on the tile the finger took hold, so the lifted copy does not jump
     var size by mutableStateOf(IntSize.Zero) // the tile's size
-    val targets = mutableStateMapOf<Folder, Rect>()
+    // Every place a drop can land, by a key of the place's own (a folder can be on screen twice: its tile and its row in the panel).
+    val targets = mutableStateMapOf<Any, Pair<Folder, Rect>>()
     var trashBox by mutableStateOf<Rect?>(null) // the trash bin that shows while dragging, once it is on screen
 
     /** Is the finger over the trash bin? */
@@ -63,7 +66,7 @@ class DragState {
     /** The smallest folder box under the finger, never the folder being dragged. */
     fun over(): Folder? {
         if (item == null) return null
-        return targets.entries.filter { pos in it.value && it.key !== item?.folder }.minByOrNull { it.value.width * it.value.height }?.key
+        return targets.values.filter { pos in it.second && it.first !== item?.folder }.minByOrNull { it.second.width * it.second.height }?.first
     }
 }
 
@@ -75,9 +78,9 @@ fun drop(lib: Library, d: Dragged, to: Folder): Boolean = when {
 }
 
 /** Makes this a place a drag can end. */
-fun Modifier.dropTarget(drag: DragState, folder: Folder): Modifier = composed {
-    DisposableEffect(folder) { onDispose { drag.targets.remove(folder) } }
-    onGloballyPositioned { drag.targets[folder] = it.boundsInRoot() }
+fun Modifier.dropTarget(drag: DragState, folder: Folder, key: Any = folder): Modifier = composed {
+    DisposableEffect(key) { onDispose { drag.targets.remove(key) } }
+    onGloballyPositioned { drag.targets[key] = folder to it.boundsInRoot() }
 }
 
 /**

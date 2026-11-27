@@ -79,13 +79,16 @@ private fun Root() {
         }
     }
     val settings = remember(vault) { AppSettings().also { s -> vault.readSettings()?.let(s::restore) } }
+    val shelf = remember(vault) { vault.loadClips() }
     // Save about a second after anything changes, and always when the app is left.
     androidx.compose.runtime.LaunchedEffect(library) {
         var told = emptyList<String>()
         var lastSettings = settings.snapshot()
+        var lastShelf = shelf.version
         while (true) {
             kotlinx.coroutines.delay(1000)
             settings.snapshot().let { if (it != lastSettings) { vault.writeSettings(it); lastSettings = it } }
+            if (shelf.version != lastShelf) { vault.saveClips(shelf); lastShelf = shelf.version }
             if (vault.dirty(library)) {
                 val now = vault.save(library)
                 if (now.isNotEmpty() && now != told) android.widget.Toast.makeText(context, "Not saved: " + now.first(), android.widget.Toast.LENGTH_LONG).show()
@@ -94,7 +97,7 @@ private fun Root() {
         }
     }
     androidx.compose.runtime.DisposableEffect(owner, library) {
-        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) { vault.save(library); vault.writeSettings(settings.snapshot()) } }
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) { vault.save(library); vault.writeSettings(settings.snapshot()); vault.saveClips(shelf) } }
         owner.lifecycle.addObserver(obs); onDispose { owner.lifecycle.removeObserver(obs) }
     }
     val ui = remember { LibUi() }
@@ -118,7 +121,7 @@ private fun Root() {
         else {
             androidx.activity.compose.BackHandler { open = null }
             // A new canvas view for each file, so it starts on that file's own pages.
-            androidx.compose.runtime.key(file) { InkScreen(file.notebook!!, settings) { open = null } }
+            androidx.compose.runtime.key(file) { InkScreen(file, settings, shelf) { open = null } }
         }
     }
 }
@@ -143,14 +146,15 @@ private fun AccessScreen() {
 
 // Phase 0a prototype only: not styled with the Styli design system on purpose.
 @Composable
-private fun InkScreen(notebook: Notebook, settings: AppSettings, onLibrary: () -> Unit) {
+private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, onLibrary: () -> Unit) {
+    val notebook = file.notebook!!
     var latency by remember { mutableStateOf("Draw to measure latency") }
     var canvas by remember { mutableStateOf<InkCanvasView?>(null) }
     var infinite by remember { mutableStateOf(false) }
     var template by remember { mutableStateOf(Template.TEMPLATE_LINED) }
     var letter by remember { mutableStateOf(false) }
     var landscape by remember { mutableStateOf(false) }
-    var tool by remember { mutableStateOf(InkCanvasView.Tool.PEN) }
+    var tool by remember { mutableStateOf(NoteView.tool(file.view) ?: InkCanvasView.Tool.PEN) } // the tool this note was left on
     var units by remember { mutableStateOf(RulerUnits.METRIC) }
     var erasing by remember { mutableStateOf(EraseOnly.ALL) }
     var shade by remember { mutableStateOf(0) }
@@ -187,7 +191,7 @@ private fun InkScreen(notebook: Notebook, settings: AppSettings, onLibrary: () -
     var picking by remember { mutableStateOf(0) } // 0 none, 1 text colour, 2 highlight
     var textColor by remember { mutableStateOf(0) }
     var textHighlight by remember { mutableStateOf(0) }
-    var clips by remember { mutableStateOf(emptyList<Clip>()) }
+    var clips by remember { mutableStateOf(shelf.clips) }
     var placing by remember { mutableStateOf<Clip?>(null) } // the clip waiting for a tap
     var naming by remember { mutableStateOf<Clip?>(null) } // the clip being named
     var nameText by remember { mutableStateOf("") }
@@ -215,7 +219,8 @@ private fun InkScreen(notebook: Notebook, settings: AppSettings, onLibrary: () -
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 InkCanvasView(context, notebook).also {
-                    settings.applyTo(it)
+                    it.shelf = shelf
+                    settings.applyTo(it, file)
                     it.onLatency = { text -> latency = text }
                     it.onZoom = { percent -> zoom = percent }
                     it.onPlacing = { c -> placing = c }
@@ -436,6 +441,11 @@ private fun InkScreen(notebook: Notebook, settings: AppSettings, onLibrary: () -
         }
         // The zoom, as a percentage of a page fitted to the screen, with a button to fit it. It shows while the zoom
         // changes and a moment after, and stays while it is not 100.
+        // The pens are changed from the tool menus, so look at them now and then (and on the way out) to keep them.
+        // The note's own tool, zoom and scroll are kept the same way.
+        fun keep(c: InkCanvasView) { settings.captureFrom(c); file.view = NoteView.capture(c) }
+        LaunchedEffect(canvas) { while (true) { kotlinx.coroutines.delay(1000); canvas?.let(::keep) } }
+        androidx.compose.runtime.DisposableEffect(canvas) { onDispose { canvas?.let(::keep) } }
         LaunchedEffect(zoom) {
             if (firstZoom) { firstZoom = false; return@LaunchedEffect }
             zoomShown = true

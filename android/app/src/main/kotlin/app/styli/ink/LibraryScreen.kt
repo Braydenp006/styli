@@ -53,6 +53,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -124,7 +125,6 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
     var creating by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<Action?>(null) }
     var tab by remember { mutableIntStateOf(0) } // 0 Tabularium, 1 Nexus, 2 Itinerarium, 3 Trash, 4 Settings
-    var managing by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var plusOpen by remember { mutableStateOf(false) }
     val now = System.currentTimeMillis()
@@ -132,8 +132,8 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
     val here = inFolder ?: lib.root
 
     androidx.activity.compose.BackHandler(tab == 0 && ui.selecting) { ui.stopSelect() }
-    androidx.activity.compose.BackHandler(tab == 0 && !ui.selecting && (managing || inFolder != null)) {
-        if (managing) managing = false else ui.openFolder = inFolder?.parent?.takeIf { it !== lib.root }
+    androidx.activity.compose.BackHandler(tab == 0 && !ui.selecting && inFolder != null) {
+        ui.openFolder = inFolder?.parent?.takeIf { it !== lib.root }
     }
 
     // Closing a dialog must not leave the search box focused (that raises the keyboard).
@@ -220,6 +220,12 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
     Box(Modifier.fillMaxSize().background(sty.bg)) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
+            Row(Modifier.fillMaxSize()) {
+            androidx.compose.animation.AnimatedVisibility(
+                tab == 0 && ui.panelOpen,
+                enter = androidx.compose.animation.expandHorizontally() + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.shrinkHorizontally() + androidx.compose.animation.fadeOut(),
+            ) { FolderPanel(lib, ui, drag, hover, here, onOpen = ::open, onAction = { action = it }, onTrash = ::trashed) }
+            Box(Modifier.weight(1f).fillMaxHeight()) {
                 Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = StySize.space6, vertical = StySize.space5)) {
                     if (tab != 0) {
                         when (tab) {
@@ -232,8 +238,6 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                                 Text(blurb, Modifier.padding(top = StySize.space2), color = sty.inkMuted)
                             }
                         }
-                    } else if (managing) {
-                        ManageFolders(lib, ui, drag, hover, onOpen = ::open, onAction = { action = it }, onDone = { managing = false })
                     } else {
                         if (ui.selecting) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(StySize.space2)) {
                             Button({ ui.stopSelect() }) { Text("Done") }
@@ -252,11 +256,13 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                                 // The way back up: each folder above this one is a link, and a place to drop things.
                                 val trail = generateSequence(inFolder) { it.parent }.takeWhile { it !== lib.root }.toList().reversed()
-                                if (inFolder == null) Text("Tabularium", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
+                                if (inFolder == null) Text("Tabularium", color = sty.ink, fontFamily = DisplayFont, maxLines = 1, softWrap = false, style = MaterialTheme.typography.headlineLarge)
                                 else {
-                                    Crumb("Tabularium", hover === lib.root, Modifier.dropTarget(drag, lib.root)) { ui.openFolder = null }
+                                    // With the folder panel open the path is already on show there, so only the folder's own name is kept.
+                                    if (!ui.panelOpen) Crumb("Tabularium", hover === lib.root, Modifier.dropTarget(drag, lib.root)) { ui.openFolder = null }
                                     trail.forEachIndexed { i, f ->
-                                        Text("/", Modifier.padding(horizontal = StySize.space1), color = sty.inkMuted, style = MaterialTheme.typography.titleMedium)
+                                        if (ui.panelOpen && i != trail.lastIndex) return@forEachIndexed
+                                        if (!ui.panelOpen) Text("/", Modifier.padding(horizontal = StySize.space1), color = sty.inkMuted, style = MaterialTheme.typography.titleMedium)
                                         if (i == trail.lastIndex) {
                                             f.color?.let { Box(Modifier.padding(end = StySize.space2).size(14.dp).clip(CircleShape).background(Color(it))) }
                                             Text(f.name, color = sty.ink, fontFamily = DisplayFont, maxLines = 1, style = MaterialTheme.typography.headlineMedium)
@@ -264,7 +270,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                                     }
                                 }
                             }
-                            OutlinedTextField(query, { query = it }, Modifier.width(260.dp), singleLine = true, placeholder = { Text("Search by name") })
+                            OutlinedTextField(query, { query = it }, Modifier.width(if (ui.panelOpen) 170.dp else 260.dp), singleLine = true, placeholder = { Text(if (ui.panelOpen) "Search" else "Search by name") })
                             Box(Modifier.padding(start = StySize.space3)) {
                                 Box(
                                     Modifier.size(StySize.touch).clip(SquircleShape(StySize.radiusMd)).border(1.dp, sty.borderStrong, SquircleShape(StySize.radiusMd))
@@ -273,7 +279,6 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                                 ) { MenuIcon(menuOpen, sty.ink) }
                                 DropdownMenu(menuOpen, { menuOpen = false }) {
                                     DropdownMenuItem({ Text("Select") }, { menuOpen = false; ui.startSelect() })
-                                    DropdownMenuItem({ Text("Manage folders") }, { menuOpen = false; managing = true })
                                     DropdownMenuItem({ Text("View options") }, { menuOpen = false; action = Action.ViewOptions })
                                 }
                             }
@@ -301,7 +306,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                                 val pinnedFiles = lib.pinnedFiles().filter { ui.filter == null || it.second.kind == ui.filter }
                                 if (pinnedFolders.isNotEmpty() || pinnedFiles.isNotEmpty()) {
                                     Section("Pinned", ui.pinnedOpen) { ui.pinnedOpen = !ui.pinnedOpen }
-                                    AnimatedVisibility(ui.pinnedOpen) {
+                                    Reveal(ui.pinnedOpen) {
                                         Column {
                                             if (pinnedFolders.isNotEmpty()) { SubHeading("Pinned folders"); Tiles(pinnedFolders) }
                                             if (pinnedFiles.isNotEmpty()) {
@@ -314,7 +319,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                                 val recent = lib.recent(6, ui.filter)
                                 if (recent.isNotEmpty()) {
                                     Box(Modifier.padding(top = StySize.space5)) { Section("Recent", ui.recentOpen) { ui.recentOpen = !ui.recentOpen } }
-                                    AnimatedVisibility(ui.recentOpen) {
+                                    Reveal(ui.recentOpen) {
                                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
                                             recent.forEach { (f, file) -> Card(f, file) }
                                         }
@@ -333,24 +338,7 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                         }
                     }
                 }
-                if (tab == 0 && !managing) {
-                    Box(Modifier.align(Alignment.BottomStart).padding(start = StySize.space6, bottom = StySize.space4)) {
-                    androidx.compose.animation.AnimatedVisibility(
-                        drag.item != null,
-                        enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut(),
-                    ) {
-                        // Same style as the plus, but outlined in red: let go of a file or folder here to send it to the trash.
-                        val over = drag.overTrash()
-                        val grow by androidx.compose.animation.core.animateFloatAsState(if (over) 1.15f else 1f, label = "bin grows")
-                        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { drag.trashBox = null } }
-                        Box(
-                            Modifier.size(60.dp).graphicsLayer { scaleX = grow; scaleY = grow }.shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp))
-                                .background(sty.bg.copy(alpha = 0.7f)).background(if (over) sty.danger.copy(alpha = 0.4f) else sty.danger.copy(alpha = 0.22f)).border(2.dp, sty.danger, SquircleShape(20.dp))
-                                .onGloballyPositioned { drag.trashBox = it.boundsInRoot() },
-                            contentAlignment = Alignment.Center,
-                        ) { StyIcon(Ic.TRASH, sty.ink, 28.dp) }
-                    }
-                    }
+                if (tab == 0) {
                     Row(Modifier.align(Alignment.BottomEnd).padding(end = StySize.space6, bottom = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
                         Box {
                             Box(
@@ -370,16 +358,69 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, onOpen: (NoteF
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth().background(sty.sidebar).border(1.dp, sty.border).navigationBarsPadding().height(64.dp)) {
-                listOf(Ic.LIBRARY to "Tabularium", Ic.NEXUS to "Nexus", Ic.ITINERARIUM to "Itinerarium", Ic.TRASH to "Trash", Ic.SETTINGS to "Settings").forEachIndexed { i, (ic, label) ->
-                    Column(
-                        Modifier.weight(1f).fillMaxHeight().clickable { tab = i; if (i == 0) { ui.openFolder = null; managing = false } },
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+            }
+            // The arrow stays in the bottom left corner of the screen, over the panel when it is open (not pushed by it).
+            if (tab == 0) {
+                Row(Modifier.align(Alignment.BottomStart).padding(start = StySize.space6, bottom = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space3)) {
+                    // The arrow opens and closes the folder panel (same look as the plus; it points back while the panel is open).
+                    Box(
+                        Modifier.size(60.dp).shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp)).background(sty.bg.copy(alpha = 0.7f)).background(sty.honeyTint)
+                            .border(2.dp, sty.honey, SquircleShape(20.dp)).clickable { ui.panelOpen = !ui.panelOpen },
+                        contentAlignment = Alignment.Center,
+                    ) { Box(Modifier.rotate(if (ui.panelOpen) 180f else 0f)) { StyIcon(Ic.CHEVRON, sty.ink, 28.dp) } }
+                    // While something is dragged, the bin shows beside it: let go of a file or folder on it to send it to the trash.
+                    androidx.compose.animation.AnimatedVisibility(
+                        drag.item != null,
+                        enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn() + androidx.compose.animation.expandHorizontally(),
+                        exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkHorizontally(),
                     ) {
-                        Box(Modifier.clip(CircleShape).background(if (tab == i) sty.honeyTint else Color.Transparent).padding(horizontal = StySize.space4, vertical = StySize.space1)) {
-                            StyIcon(ic, sty.ink)
+                        val over = drag.overTrash()
+                        val grow by androidx.compose.animation.core.animateFloatAsState(if (over) 1.15f else 1f, label = "bin grows")
+                        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { drag.trashBox = null } }
+                        Box(
+                            Modifier.size(60.dp).graphicsLayer { scaleX = grow; scaleY = grow }.shadow(8.dp, SquircleShape(20.dp)).clip(SquircleShape(20.dp))
+                                .background(sty.bg.copy(alpha = 0.7f)).background(if (over) sty.danger.copy(alpha = 0.4f) else sty.danger.copy(alpha = 0.22f)).border(2.dp, sty.danger, SquircleShape(20.dp))
+                                .onGloballyPositioned { drag.trashBox = it.boundsInRoot() },
+                            contentAlignment = Alignment.Center,
+                        ) { StyIcon(Ic.TRASH, sty.ink, 28.dp) }
+                    }
+                }
+            }
+            }
+            // One honey squircle slides under whichever tab is chosen (it springs a little as it lands).
+            val spots = remember { androidx.compose.runtime.mutableStateMapOf<Int, androidx.compose.ui.unit.IntOffset>() }
+            var spotSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+            var barAt by remember { mutableStateOf(Offset.Zero) }
+            Box(
+                Modifier.fillMaxWidth().background(sty.sidebar).border(1.dp, sty.border).navigationBarsPadding().height(64.dp)
+                    .onGloballyPositioned { barAt = it.positionInRoot() },
+            ) {
+                spots[tab]?.let { target ->
+                    val at by androidx.compose.animation.core.animateIntOffsetAsState(
+                        target, androidx.compose.animation.core.spring(dampingRatio = 0.72f, stiffness = 380f), label = "tab highlight",
+                    )
+                    val d = androidx.compose.ui.platform.LocalDensity.current
+                    Box(
+                        Modifier.offset { at }.size(with(d) { spotSize.width.toDp() }, with(d) { spotSize.height.toDp() })
+                            .clip(SquircleShape(14.dp)).background(sty.honeyTint),
+                    )
+                }
+                Row(Modifier.fillMaxSize()) {
+                    listOf(Ic.LIBRARY to "Tabularium", Ic.NEXUS to "Nexus", Ic.ITINERARIUM to "Itinerarium", Ic.TRASH to "Trash", Ic.SETTINGS to "Settings").forEachIndexed { i, (ic, label) ->
+                        val labelColour by androidx.compose.animation.animateColorAsState(if (tab == i) sty.honeyText else sty.inkMuted, label = "tab label")
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight().clickable { tab = i; if (i == 0) ui.openFolder = null },
+                            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+                        ) {
+                            Box(
+                                // Measured before the padding, so the highlight covers the icon and its breathing room.
+                                Modifier.onGloballyPositioned {
+                                    spots[i] = (it.positionInRoot() - barAt).let { p -> androidx.compose.ui.unit.IntOffset(p.x.roundToInt(), p.y.roundToInt()) }
+                                    spotSize = it.size
+                                }.padding(horizontal = StySize.space4, vertical = StySize.space1),
+                            ) { StyIcon(ic, sty.ink) }
+                            Text(label, color = labelColour, style = MaterialTheme.typography.labelSmall)
                         }
-                        Text(label, color = if (tab == i) sty.honeyText else sty.inkMuted, style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }

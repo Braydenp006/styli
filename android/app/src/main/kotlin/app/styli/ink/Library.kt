@@ -17,6 +17,9 @@ class NoteFile(
 ) {
     /** Where this file is on disk now (set and moved by [Vault]); null until it is first saved. */
     internal var disk: java.io.File? = null
+    /** What is kept for this note beside its pages (see [NoteView]); null if nothing yet. */
+    var view: Map<String, Any?>? = null
+
     /** The page file name of each page of [notebook] (set by [Vault]). */
     internal val pageNames = java.util.IdentityHashMap<PageModel, String>()
 }

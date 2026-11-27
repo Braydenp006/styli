@@ -659,6 +659,25 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         rebuildLayout(true)
+        startView?.let { v -> if (w > 0 && h > 0) { applyView(v); startView = null } } // the first real size: go where the note was left
+    }
+
+    /** Where the note should open (set before the view is first laid out); it is used once. */
+    var startView: ViewState? = null
+
+    /** How the note is zoomed and scrolled now, to be kept. Null before the view has a size. */
+    fun viewState(): ViewState? {
+        if (width <= 0 || height <= 0) return null
+        val fit = vp.fitScale(maxOf(1, work.page.width))
+        if (fit <= 0.0) return null
+        return ViewState(vp.scale / fit, vp.toPageX(0.0), vp.toPageY(0.0))
+    }
+
+    private fun applyView(v: ViewState) {
+        stopGlide()
+        val s = vp.fitScale(maxOf(1, work.page.width)) * v.zoom
+        vp.viewTo(s, -v.left * s, -v.top * s)
+        pageLayer.invalidate()
     }
 
     /** The pen went down on [p]: it is the working page now, and what belonged to the last one is let go. */
@@ -1992,12 +2011,13 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         }
     }
 
-    /** The clips saved so far (in memory only for now). */
-    val shelf = ClipShelf()
+    /** The clips saved so far. The screen gives every canvas the same shelf, so a clip made in one file can be put down in another. */
+    var shelf = ClipShelf()
 
     /** Saves the selection as a clip; false if nothing is selected. */
     fun saveSelection(): Clip? {
         val c = Clip.of("", model, selection, ::boxOf) ?: return null
+        c.pictures.forEach { p -> notebook.pictureFiles.get(p.sha)?.let { shelf.pictures.put(it) } } // the pictures' files go with the clip
         return shelf.add(c)
     }
 
@@ -2024,6 +2044,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
             x = x.coerceIn(0f, maxOf(0f, g.pageW - clip.width))
             y = y.coerceIn(0f, maxOf(0f, g.pageH - clip.height))
         }
+        clip.pictures.forEach { p -> if (notebook.pictureFiles.get(p.sha) == null) shelf.pictures.get(p.sha)?.let { notebook.pictureFiles.put(it) } }
         val ids = model.paste(clip, x, y)
         selection.addAll(ids)
         changed(ids.isNotEmpty())

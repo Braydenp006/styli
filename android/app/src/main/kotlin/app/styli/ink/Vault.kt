@@ -76,6 +76,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
             (m?.get("created") as? Long) ?: clock(), (m?.get("opened") as? Long) ?: clock(), m?.get("pinned") == true,
         )
         file.disk = d
+        file.view = readMeta(File(d, "view.json"))
         pages.forEach { (n, p) -> file.pageNames[p] = n }
         return file
     }
@@ -123,6 +124,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private fun syncFile(file: NoteFile, dir: File, found: MutableList<String>) {
         File(dir, "trash.json").delete()
         writeMeta(File(dir, "file.json"), mapOf("name" to file.name, "kind" to "ink", "created" to file.created, "opened" to file.opened, "pinned" to file.pinned))
+        file.view?.let { writeMeta(File(dir, "view.json"), it) }
         val nb = file.notebook ?: return
         val live = nb.pages
         val gone = File(dir, ".deleted")
@@ -207,6 +209,44 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         return !d.exists() || d.delete() || (d.list()?.isNotEmpty() == true) // not empty: leave it, it holds something not ours
     }
 
+    // ---- The clip shelf ----
+
+    private val clipDir get() = File(meta, "clips")
+
+    /** The saved clips (a name and size beside each clip's log, and their pictures' files). Ones that cannot be read are skipped. */
+    fun loadClips(): ClipShelf {
+        val out = ArrayList<Clip>()
+        val pics = ClipShelf()
+        File(clipDir, PICTURES.trimEnd('/')).listFiles()?.filter { it.isFile }?.forEach { pics.pictures.put(it.readBytes()) }
+        for (log in clipDir.listFiles { f -> f.isFile && f.name.endsWith(".stylog") }?.sortedBy { it.name } ?: emptyList()) {
+            val m = readMeta(File(clipDir, log.name.removeSuffix(".stylog") + ".json")) ?: continue
+            try { out.add(ClipFile.decode(m["name"] as? String ?: "Clip", (m["width"] as? Long ?: 0L).toFloat(), (m["height"] as? Long ?: 0L).toFloat(), log.readBytes())) }
+            catch (_: Exception) { /* a clip that will not read is left on disk and left out */ }
+        }
+        return ClipShelf(out).also { shelf -> pics.pictures.let { p -> out.flatMap { it.pictures }.forEach { pic -> p.get(pic.sha)?.let { shelf.pictures.put(it) } } } }
+    }
+
+    /** Writes the shelf: one log and one small info file per clip, numbered in order; files left over from deleted clips are removed. */
+    fun saveClips(shelf: ClipShelf) {
+        clipDir.mkdirs()
+        val w = InkLogWriter(device, seq, clock)
+        shelf.clips.forEachIndexed { i, clip ->
+            val base = "clip-%03d".format(i + 1)
+            atomicWrite(File(clipDir, "$base.stylog"), ClipFile.encode(clip, w))
+            writeMeta(File(clipDir, "$base.json"), mapOf("name" to clip.name, "width" to clip.width.toLong(), "height" to clip.height.toLong()))
+            for (pic in clip.pictures) {
+                val f = File(File(clipDir, PICTURES.trimEnd('/')), pic.file)
+                if (!f.exists()) shelf.pictures.get(pic.sha)?.let { f.parentFile.mkdirs(); atomicWrite(f, it) }
+            }
+        }
+        writeSeq(w.nextSeq); seq = w.nextSeq
+        for (i in shelf.clips.size + 1..shelf.clips.size + 200) { // anything numbered past the last clip is from a clip since deleted
+            val base = "clip-%03d".format(i)
+            if (!File(clipDir, "$base.stylog").delete() && !File(clipDir, "$base.json").exists()) break
+            File(clipDir, "$base.json").delete(); written.remove(File(clipDir, "$base.json"))
+        }
+    }
+
     // ---- Settings ----
 
     /** The app's saved settings, or null if there are none (or the file cannot be read). */
@@ -271,7 +311,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
             mix(f.name); mix(f.color); mix(f.pinned)
             f.folders.forEach(::folder)
             for (file in f.files) {
-                mix(file.name); mix(file.opened); mix(file.pinned); mix(System.identityHashCode(file))
+                mix(file.name); mix(file.opened); mix(file.pinned); mix(file.view); mix(System.identityHashCode(file))
                 file.notebook?.pages?.forEach { mix(System.identityHashCode(it)); mix(it.log.size) }
             }
         }

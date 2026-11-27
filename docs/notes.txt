@@ -25,6 +25,13 @@ for the infinate canvas:
 other ideas:
 - way to transfer in notes from other notes apps
 
+What's still not saved
+4. Tables, shapes, connectors, fills, charts and pictures. They're covered by unit tests and the Go dump, but I haven't made one through the real tools on the tablet, and neither have you.
+5. Your earlier startup idea: choosing a different folder for the notes. We dropped that when you chose Documents/Tabularium as the default, so it isn't built. The same permission would allow it.
+6. Export: you said it would be fine as a backup option. It isn't built.
+7. Temporary data: the sample folders and notes are still written into a new vault.
+8. Notes edited outside the app: the app doesn't notice until the next launch, so a note changed by another app while Styli is open can be overwritten.
+
 
 
 

@@ -73,18 +73,26 @@ class Clip(
 }
 
 /** The clips the user has saved, in the order saved. In memory only for now. */
-class ClipShelf {
-    var clips: List<Clip> = emptyList()
+class ClipShelf(clips: List<Clip> = emptyList()) {
+    var clips: List<Clip> = clips
+        private set
+
+    /** The files of the pictures in the clips, by hash (a clip can be put down in any file, so the bytes travel with it). */
+    val pictures = PictureStore()
+
+    /** Goes up on every change, so the saver can tell when to write the shelf again. */
+    var version = 0
         private set
 
     /** Saves [clip] (if it has no name, "Clip 1", "Clip 2" and so on). */
     fun add(clip: Clip): Clip {
         val c = if (clip.name.isBlank()) clip.named("Clip ${clips.size + 1}") else clip
         clips = clips + c
+        version++
         return c
     }
 
-    fun rename(clip: Clip, name: String) { clips = clips.map { if (it === clip && name.isNotBlank()) it.named(name.trim()) else it } }
+    fun rename(clip: Clip, name: String) { clips = clips.map { if (it === clip && name.isNotBlank()) it.named(name.trim()) else it }; version++ }
 
-    fun remove(clip: Clip) { clips = clips.filter { it !== clip } }
+    fun remove(clip: Clip) { clips = clips.filter { it !== clip }; version++ }
 }

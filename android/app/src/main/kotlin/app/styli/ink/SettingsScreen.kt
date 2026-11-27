@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -32,7 +34,7 @@ enum class SettingsSection(val label: String) {
 fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi) {
     val sty = LocalSty.current
     Text("Settings", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.headlineLarge)
-    Text("Changes apply at once. They are not saved yet, so they reset when the app closes.", Modifier.padding(top = StySize.space2), color = sty.inkMuted)
+    Text("Changes apply at once and are kept for next time.", Modifier.padding(top = StySize.space2), color = sty.inkMuted)
     Row(Modifier.fillMaxWidth().padding(top = StySize.space4), horizontalArrangement = Arrangement.spacedBy(StySize.space5)) {
         Column(Modifier.width(220.dp), verticalArrangement = Arrangement.spacedBy(StySize.space1)) {
             for (g in SettingsSection.entries) {
@@ -54,11 +56,19 @@ fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi) {
                     Chips("Shapes", AppSettings.LEVELS, s.pShapes) { s.pShapes = it }
                     Chips("Snap to level and upright", AppSettings.LEVELS, s.pLevel) { s.pLevel = it }
                     Chips("Hold time", listOf("0.3 s", "0.5 s", "0.8 s", "1.2 s"), s.pHold) { s.pHold = it }
+                    Text("Pens", color = sty.ink, fontFamily = DisplayFont, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = StySize.space3))
+                    Chips("When a note opens, its pens are", listOf("The ones I used last", "Its own (starting from the defaults)", "Always the defaults"), s.pens) { s.pens = it }
+                    Note("Defaults. Choosing one here also makes it the pen you used last.")
+                    Swatches("Pen colour", PEN_COLOURS, s.defPenColor) { s.defPenColor = it; s.penColor = it }
+                    Chips("Pen width", PEN_WIDTHS.map { it.first }, PEN_WIDTHS.indexOfFirst { it.second == s.defPenWidth }) { s.defPenWidth = PEN_WIDTHS[it].second; s.penWidth = PEN_WIDTHS[it].second }
+                    Swatches("Highlighter colour", HIGHLIGHT_COLOURS, s.defHighlighterColor) { s.defHighlighterColor = it; s.highlighterColor = it }
+                    Chips("Highlighter width", HIGHLIGHT_WIDTHS.map { it.first }, HIGHLIGHT_WIDTHS.indexOfFirst { it.second == s.defHighlighterWidth }) { s.defHighlighterWidth = HIGHLIGHT_WIDTHS[it].second; s.highlighterWidth = HIGHLIGHT_WIDTHS[it].second }
                 }
                 SettingsSection.PAGES -> {
                     Note("Important: seamless scrolling cannot add pages.", special = true)
                     Chips("Scrolling over pages", listOf("Grid (pull past the end to add a page)", "Seamless"), if (s.gridScroll) 0 else 1, special = true) { s.gridScroll = it == 0 }
                     Chips("Scroll glide", AppSettings.LEVELS, s.scroll) { s.scroll = it }
+                    Chips("When a note opens", listOf("Where I left off", "At the top, fitted to the page"), if (s.startFit) 1 else 0) { s.startFit = it == 1 }
                 }
                 SettingsSection.SELECTION -> Chips("Outline", listOf("Dashed", "Solid"), if (s.solid) 1 else 0) { s.solid = it == 1 }
                 SettingsSection.TRASH -> {
@@ -81,4 +91,28 @@ fun SettingsScreen(s: AppSettings, lib: Library, ui: LibUi) {
 private fun Note(text: String, special: Boolean = false) {
     val sty = LocalSty.current
     Text(text, color = if (special) sty.honeyText else sty.inkMuted, style = MaterialTheme.typography.bodyMedium)
+}
+
+private val PEN_COLOURS = listOf("Black" to 0xFF000000.toInt(), "Blue" to 0xFF1B3A8A.toInt(), "Red" to 0xFFC0392B.toInt(), "Green" to 0xFF2E7D32.toInt(), "Orange" to 0xFFD9772B.toInt(), "Purple" to 0xFF6A3FA0.toInt())
+private val PEN_WIDTHS = listOf("Fine 0.25 mm" to 25, "Medium 0.4 mm" to 40, "Bold 0.6 mm" to 60, "Heavy 1 mm" to 100)
+private val HIGHLIGHT_COLOURS = listOf("Yellow" to 0x99FFEB3B.toInt(), "Green" to 0x9969F0AE.toInt(), "Pink" to 0x99FF80AB.toInt(), "Blue" to 0x9980D8FF.toInt(), "Orange" to 0x99FFB74D.toInt())
+private val HIGHLIGHT_WIDTHS = listOf("3 mm" to 300, "4 mm" to 400, "6 mm" to 600)
+
+/** A row of colour dots to pick from; the chosen one has a thick ring. */
+@Composable
+private fun Swatches(label: String, colours: List<Pair<String, Int>>, chosen: Int, onPick: (Int) -> Unit) {
+    val sty = LocalSty.current
+    Text(label, color = sty.inkMuted, style = MaterialTheme.typography.labelMedium)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(StySize.space2)) {
+        for ((name, c) in colours) {
+            val on = c == chosen
+            Column(Modifier.clip(SquircleShape(StySize.radiusMd)).clickable { onPick(c) }.padding(StySize.space1), horizontalAlignment = Alignment.CenterHorizontally) {
+                androidx.compose.foundation.layout.Box(
+                    Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape).background(androidx.compose.ui.graphics.Color(c))
+                        .border(if (on) 3.dp else 1.dp, if (on) sty.ink else sty.borderStrong, androidx.compose.foundation.shape.CircleShape),
+                )
+                Text(name, color = if (on) sty.ink else sty.inkMuted, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
 }

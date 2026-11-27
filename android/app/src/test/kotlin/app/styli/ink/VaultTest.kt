@@ -181,6 +181,66 @@ class VaultTest {
         assertNull(vault().let { File(dir, ".styli/settings.json").delete(); it.readSettings() })
     }
 
+    @Test fun clipsAndTheirPicturesSurviveARestartInOrder() {
+        val m = PageModel()
+        val a = m.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(100, 100, 200, 220))
+        val t = m.addText(300f, 400f, 2000f, 400f, "hello")
+        val tb = m.addTable(500f, 500f, 6000f, 3000f, 3, 4)!!
+        val pic = m.addPicture { Picture(it, 10f, 10f, 800f, 600f, "ab.jpg", "ab".repeat(32), 80, 60) }
+        m.arrange(setOf(a.id), Arrange.FRONT)
+        val clip = Clip.of("My clip", m, setOf(a.id, t.id, tb.id, pic.id)) { Box(0.0, 0.0, 1000.0, 800.0) }!!
+        val shelf = ClipShelf(); val added = shelf.add(clip); shelf.pictures.put(byteArrayOf(1, 2, 3))
+        val v = vault()
+        v.saveClips(shelf)
+        val back = vault().loadClips()
+        assertEquals(1, back.clips.size)
+        val c = back.clips.single()
+        assertEquals("My clip", c.name); assertEquals(added.order, c.order)
+        assertEquals(added.items.map { it.id }, c.items.map { it.id }); assertEquals(added.tables.map { it.id }, c.tables.map { it.id })
+        assertEquals(added.width, c.width); assertEquals(added.height, c.height)
+        // renaming and deleting rewrite the files: no stale clip is left to come back
+        shelf.rename(shelf.clips.single(), "Renamed"); v.saveClips(shelf)
+        assertEquals("Renamed", vault().loadClips().clips.single().name)
+        shelf.remove(shelf.clips.single()); v.saveClips(shelf)
+        assertEquals(0, vault().loadClips().clips.size)
+        assertEquals(emptyList<String>(), File(dir, ".styli/clips").list { _, n -> n.startsWith("clip-") }!!.toList())
+    }
+
+    @Test fun penSettingsAreKept() {
+        val s = AppSettings(); s.penColor = 0xFFAA0000.toInt(); s.penWidth = 80; s.highlighterColor = 0x66112233; s.highlighterWidth = 600
+        vault().writeSettings(s.snapshot())
+        val b = AppSettings().also { x -> vault().readSettings()?.let(x::restore) }
+        assertEquals(s.snapshot(), b.snapshot())
+        val odd = AppSettings(); odd.restore(mapOf("penWidth" to 0L, "highlighterWidth" to 99999L))
+        assertEquals(40, odd.penWidth); assertEquals(400, odd.highlighterWidth)
+    }
+
+    @Test fun aNotesOwnToolViewAndPensAreKeptWithIt() {
+        val l = lib(); val v = vault()
+        val f = l.newFile(l.root, "N"); l.newFile(l.root, "Other")
+        f.view = mapOf("tool" to "LASSO", "zoom" to 1500L, "left" to -300L, "top" to 12000L, "penColor" to 0xFFAA0000.toInt(), "penWidth" to 60)
+        assertTrue(v.dirty(l)); v.save(l); assertFalse(v.dirty(l))
+        val back = reload().root.files
+        val n = back.first { it.name == "N" }; val o = back.first { it.name == "Other" }
+        assertEquals(InkCanvasView.Tool.LASSO, NoteView.tool(n.view))
+        val vs = NoteView.view(n.view)!!
+        assertEquals(1.5, vs.zoom, 0.0); assertEquals(-300.0, vs.left, 0.0); assertEquals(12000.0, vs.top, 0.0)
+        assertEquals(0xFFAA0000.toInt(), (n.view!!["penColor"] as Long).toInt())
+        assertNull(o.view); assertNull(NoteView.tool(o.view)); assertNull(NoteView.view(o.view)) // a note never left has nothing kept
+        assertNull(NoteView.view(mapOf("zoom" to 0L, "left" to 0L, "top" to 0L))) // a zoom of nothing is ignored
+        assertNull(NoteView.tool(mapOf("tool" to "NOT_A_TOOL")))
+        f.view = f.view!! + ("top" to 13000L); assertTrue(v.dirty(l)) // moving the view makes it save again
+    }
+
+    @Test fun penDefaultsAndStartingViewSettingsAreKept() {
+        val s = AppSettings(); s.pens = 1; s.defPenColor = 0xFF1B3A8A.toInt(); s.defPenWidth = 60; s.defHighlighterColor = 0x9969F0AE.toInt(); s.defHighlighterWidth = 600; s.startFit = true
+        vault().writeSettings(s.snapshot())
+        val b = AppSettings().also { x -> vault().readSettings()?.let(x::restore) }
+        assertEquals(s.snapshot(), b.snapshot())
+        val odd = AppSettings(); odd.restore(mapOf("pens" to 7L, "defPenWidth" to 0L))
+        assertEquals(0, odd.pens); assertEquals(40, odd.defPenWidth)
+    }
+
     @Test fun smallJsonRoundTrips() {
         val m = mapOf("name" to "A \"q\"\n\\ é", "n" to 5_000_000_000L, "b" to true, "x" to null, "l" to listOf("a", "b c"), "e" to emptyList<String>())
         assertEquals(m, MiniJson.parse(MiniJson.write(m)))
