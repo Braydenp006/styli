@@ -892,8 +892,9 @@ private fun InkScreen(file: NoteFile, settings: AppSettings, shelf: ClipShelf, o
             settings.clipSamples = true
         }
         LaunchedEffect(canvas) {
+            var seen = -1
             while (true) {
-                canvas?.let { c -> val o = c.readingOrder(); if (o != pagesState.value) pagesState.value = o; val h = c.centrePage() ?: c.workPage; if (h !== hereState.value) hereState.value = h; val si = c.selectionInfo(); if (si != sel) sel = si }
+                canvas?.takeIf { it.drawCount != seen }?.let { c -> seen = c.drawCount; val o = c.readingOrder(); if (o != pagesState.value) pagesState.value = o; val h = c.centrePage() ?: c.workPage; if (h !== hereState.value) hereState.value = h; val si = c.selectionInfo(); if (si != sel) sel = si }
                 kotlinx.coroutines.delay(200)
             }
         }

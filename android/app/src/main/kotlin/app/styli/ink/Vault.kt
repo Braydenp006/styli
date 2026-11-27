@@ -25,6 +25,27 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private val written = HashMap<File, String>() // the last text written to each small file, so unchanged ones are not rewritten
     private var seq = readSeq()
     private var saved = 0 // the fingerprint of the library as last saved
+    // Ink is appended to the logs by one background thread, so the fsync never stops the screen. [sending] (UI thread only) holds,
+    // per page, the events handed to it but not yet confirmed; they stay in the page's log until the write succeeds, and a failed
+    // write simply sends them again. Anything else that touches the files (a full [save], clips, copying) calls [flush] first.
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "vault-writer").apply { isDaemon = true } }
+    private val done = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>() // run on the UI thread by [drain]
+    private val failures = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val sending = java.util.IdentityHashMap<PageModel, MutableSet<Ev>>()
+    private val creating = HashSet<File>() // logs handed over to be created, so a second batch appends instead of creating again
+    internal var beforeWrite: (() -> Unit)? = null // for tests: runs on the writer thread before each write
+
+    /** Waits for the background writes to finish, then settles them. Returns what went wrong, in plain words. */
+    fun flush(): List<String> {
+        writer.submit {}.get()
+        return drain()
+    }
+
+    private fun drain(): List<String> {
+        while (true) done.poll()?.invoke() ?: break
+        return generateSequence { failures.poll() }.toList().also { if (it.isNotEmpty()) savedNote = -1 } // a failed write: look at the note again
+    }
+
     // While a note is open [autosave] saves only that note. These say what was saved, and for which note.
     private var savedFor: NoteFile? = null
     private var savedOutside = 0 // the fingerprint of everything but that note
@@ -99,27 +120,29 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
      * Null if there was nothing to save, otherwise what [save] would return.
      */
     fun autosave(lib: Library, open: NoteFile?): List<String>? {
+        val failed = drain()
+        if (failed.isNotEmpty()) { problems = failed; return failed } // the events are still in the log: the next call sends them again
         val disk = open?.disk
         if (open == null || disk == null || open.notebook == null || savedFor !== open) {
             if (!dirty(lib)) { remember(lib, open); return null }
             return save(lib).also { if (it.isEmpty()) remember(lib, open) }
         }
         if (fingerprint(lib, open) != savedOutside) return save(lib).also { if (it.isEmpty()) remember(lib, open) }
-        if (noteFingerprint(open) == savedNote) return null
+        if (noteFingerprint(open, false) == savedNote) return null // scrolling alone is saved when the note is left
         val found = ArrayList<String>()
-        try { syncFile(open, disk, found) } catch (e: IOException) { found.add("could not save: ${e.message}") }
+        try { syncFile(open, disk, found, later = true) } catch (e: IOException) { found.add("could not save: ${e.message}") }
         problems = found
-        if (found.isEmpty()) savedNote = noteFingerprint(open) // after: saving drains each page's pending events
+        if (found.isEmpty()) savedNote = noteFingerprint(open, false) // after: saving drains each page's pending events
         return found
     }
 
     private fun remember(lib: Library, open: NoteFile?) {
-        savedFor = open; savedOutside = fingerprint(lib, open); savedNote = open?.let(::noteFingerprint) ?: 0
+        savedFor = open; savedOutside = fingerprint(lib, open); savedNote = open?.let { noteFingerprint(it, false) } ?: 0
     }
 
     /** Makes the disk match [lib]. Anything that fails is listed in [problems] and tried again next time. */
     fun save(lib: Library): List<String> {
-        val found = ArrayList<String>()
+        val found = ArrayList<String>(flush())
         try {
             root.mkdirs(); meta.mkdirs()
             File(root, ".nomedia").let { if (!it.exists()) it.createNewFile() } // keep gallery apps from scanning the notes
@@ -149,7 +172,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     }
 
     /** One file's folder: its small info file, its pages, and no trace of having been in the trash. */
-    private fun syncFile(file: NoteFile, dir: File, found: MutableList<String>) {
+    private fun syncFile(file: NoteFile, dir: File, found: MutableList<String>, later: Boolean = false) {
         File(dir, "trash.json").delete()
         writeMeta(File(dir, "file.json"), mapOf("name" to file.name, "kind" to "ink", "created" to file.created, "opened" to file.opened, "pinned" to file.pinned))
         file.view?.let { writeMeta(File(dir, "view.json"), it) }
@@ -157,17 +180,19 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         val live = nb.pages
         val gone = File(dir, ".deleted")
         for (p in live) {
+            // In the background pass, a page with nothing to send is already on disk: skip its file checks (slow on shared storage).
+            if (later && p in file.pageNames && p.log.all { it in (sending[p] ?: emptySet<Ev>()) }) continue
             val name = file.pageNames.getOrPut(p) { nextPageName(dir, file) }
             val inGone = File(gone, name)
             if (inGone.exists() && !File(dir, name).exists()) { // a deleted page was brought back
                 if (!inGone.renameTo(File(dir, name))) throw IOException("could not bring back ${inGone.name}")
             }
-            try { writePictures(nb, p, dir); writePage(file, p, File(dir, name)) } catch (e: Exception) { found.add("${file.name}: ${e.message}") }
+            try { writePictures(nb, p, dir); if (later) writePageLater(file, p, File(dir, name)) else writePage(file, p, File(dir, name)) } catch (e: Exception) { found.add("${file.name}: ${e.message}") }
         }
         for ((p, name) in file.pageNames.entries.toList()) {
             if (live.any { it === p }) continue
             val from = File(dir, name)
-            if (from.exists()) { gone.mkdirs(); if (!from.renameTo(File(gone, name))) throw IOException("could not move $name aside") }
+            if (from.exists()) { flush(); gone.mkdirs(); if (!from.renameTo(File(gone, name))) throw IOException("could not move $name aside") }
             // a deleted page keeps its name, so undoing the delete finds its file again
         }
     }
@@ -207,6 +232,34 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         if (exists) FileOutputStream(target, true).use { it.write(bytes); it.fd.sync() } else atomicWrite(target, bytes)
         seq = w.nextSeq
         p.log.removeAll(events.toSet())
+    }
+
+    /** Like [writePage], but the encoding is done here and the writing is left to the background thread (see [writer]). */
+    private fun writePageLater(file: NoteFile, p: PageModel, target: File) {
+        val mine = sending.getOrPut(p) { java.util.Collections.newSetFromMap(java.util.IdentityHashMap()) }
+        val events = p.log.filter { it !in mine }
+        val exists = target.exists() || target in creating
+        if (exists && events.isEmpty()) return
+        val w = InkLogWriter(device, seq, clock)
+        val bytes = if (exists) w.encode(events) else w.header() + w.encode(listOf(Ev.PageChanged(p.page)) + events)
+        val next = w.nextSeq
+        seq = next // the numbers are reserved now; the file on disk catches up in the job, before the log
+        mine.addAll(events)
+        val sent = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Ev, Boolean>()).apply { addAll(events) }
+        if (!exists) creating.add(target)
+        val created = !exists
+        writer.execute {
+            try {
+                beforeWrite?.invoke()
+                if (exists && !target.exists()) throw IOException("${target.name} is missing") // its creation failed: the events go round again
+                writeSeq(next)
+                if (exists) FileOutputStream(target, true).use { it.write(bytes); it.fd.sync() } else atomicWrite(target, bytes)
+                done.add { mine.removeAll(sent); p.log.removeAll { it in sent }; if (created) creating.remove(target) }
+            } catch (e: Exception) {
+                failures.add("${file.name}: ${e.message}")
+                done.add { mine.removeAll(sent); if (created) creating.remove(target) }
+            }
+        }
     }
 
     private fun syncTrash(lib: Library, found: MutableList<String>) {
@@ -256,6 +309,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
 
     /** Writes the shelf: one log and one small info file per clip, numbered in order; files left over from deleted clips are removed. */
     fun saveClips(shelf: ClipShelf) {
+        flush()
         clipDir.mkdirs()
         val w = InkLogWriter(device, seq, clock)
         shelf.clips.forEachIndexed { i, clip ->
@@ -282,6 +336,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
      * is not touched: nothing is deleted. Null if it worked (every file the same size), otherwise what went wrong.
      */
     fun copyTo(dest: File): String? {
+        flush()
         if (dest.exists() && (dest.list()?.isNotEmpty() == true)) return "That folder is not empty, so nothing was moved"
         return try {
             if (!root.copyRecursively(dest, overwrite = false)) return "Some files could not be copied"
@@ -346,12 +401,13 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private fun readSeq(): Long = try { File(meta, "seq").readText().trim().toLong() } catch (_: Exception) { 0L }
     private fun writeSeq(n: Long) { meta.mkdirs(); atomicWrite(File(meta, "seq"), n.toString().toByteArray()) }
 
-    /** A number that changes whenever what is saved for [file] alone would: its opened time, view and pages. */
-    private fun noteFingerprint(file: NoteFile): Int {
+    /** A number that changes whenever what is saved for [file] alone would: its opened time, pages and (with [view]) where it is scrolled to. */
+    private fun noteFingerprint(file: NoteFile, view: Boolean = true): Int {
         var h = 17
         fun mix(x: Any?) { h = h * 31 + (x?.hashCode() ?: 0) }
-        mix(file.opened); mix(file.view)
-        file.notebook?.pages?.forEach { mix(System.identityHashCode(it)); mix(it.log.size) }
+        mix(file.opened); if (view) mix(file.view)
+        // the last event too: a write finishing while a new stroke is added would otherwise leave the size the same
+        file.notebook?.pages?.forEach { mix(System.identityHashCode(it)); mix(it.log.size); mix(it.log.lastOrNull()?.let(System::identityHashCode)) }
         return h
     }
 

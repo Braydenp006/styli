@@ -288,6 +288,7 @@ class VaultTest {
         assertTrue(v.autosave(l, a)!!.isEmpty())
         assertFalse(File(dir, "B2.ink/file.json").exists()) // the other note was not visited
         assertNull(v.autosave(l, a)) // nothing new: nothing written
+        v.flush()
         assertEquals(2, reload().root.files.first { it.name == "A" }.notebook!!.current.items.size)
         assertNull(v.autosave(l, null)) // leaving the note: everything outside it was already saved when it changed
     }
@@ -303,7 +304,60 @@ class VaultTest {
         l.renameFile(l.root, a, "A renamed") // the open note itself is renamed: that is a full save
         a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(7, 7, 9, 9))
         assertTrue(v.autosave(l, a)!!.isEmpty())
+        v.flush()
         assertEquals(6, reload().root.files.single().notebook!!.current.items.size)
         assertEquals("A renamed", reload().root.files.single().name)
+    }
+
+    @Test fun scrollingAloneIsSavedWhenTheNoteIsLeftNotEverySecond() {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A")
+        v.save(l); v.autosave(l, a)
+        a.view = mapOf("x" to 5L)
+        assertNull(v.autosave(l, a)) // still in the note: nothing written
+        assertFalse(File(dir, "A.ink/view.json").exists())
+        assertTrue(v.autosave(l, null)!!.isEmpty()) // leaving it
+        assertTrue(File(dir, "A.ink/view.json").exists())
+    }
+
+    @Test fun strokesAddedWhileAWriteIsInFlightAreNotLostOrWrittenTwice() {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A"); v.save(l); v.autosave(l, a)
+        val gate = java.util.concurrent.CountDownLatch(1)
+        v.beforeWrite = { gate.await() } // the first write waits here, on the writer thread
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        assertTrue(v.autosave(l, a)!!.isEmpty()) // handed to the writer, not yet on disk
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(9, 9, 12, 12))
+        assertTrue(v.autosave(l, a)!!.isEmpty()) // the first stroke is not sent again
+        gate.countDown(); v.beforeWrite = null
+        assertTrue(v.flush().isEmpty())
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(20, 20, 25, 25))
+        v.autosave(l, a); v.flush()
+        assertEquals(3, reload().root.files.single().notebook!!.current.items.size)
+        assertNull(v.autosave(l, a)?.takeIf { it.isNotEmpty() }) // nothing left over
+    }
+
+    @Test fun aFailedBackgroundWriteIsReportedAndTheStrokesAreSentAgain() {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A"); v.save(l); v.autosave(l, a)
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        v.beforeWrite = { throw java.io.IOException("disk full") }
+        v.autosave(l, a)
+        val failed = v.flush()
+        assertTrue(failed.single().contains("disk full"))
+        v.beforeWrite = null
+        assertTrue(v.autosave(l, a)!!.isEmpty()) // tried again
+        v.flush()
+        assertEquals(1, reload().root.files.single().notebook!!.current.items.size)
+    }
+
+    @Test fun aFullSaveWaitsForTheBackgroundWritesFirst() {
+        val l = lib(); val v = vault()
+        val a = l.newFile(l.root, "A"); v.save(l); v.autosave(l, a)
+        a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        v.autosave(l, a)
+        l.renameFile(l.root, a, "Renamed")
+        assertTrue(v.save(l).isEmpty()) // no flush by hand: save does it
+        assertEquals(1, reload().root.files.single().notebook!!.current.items.size)
     }
 }

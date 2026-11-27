@@ -82,6 +82,10 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     /** Called with the zoom as a percentage of a page fitted to the screen (100 is fitted) whenever it changes. */
     var onZoom: ((Int) -> Unit)? = null
     private var shownZoom = -1
+
+    /** Counts the page layer's redraws. Scrolling, page changes and selections all redraw it, so the screen can skip polling the view while this stands still. */
+    var drawCount = 0
+        private set
     private var zoomTold = 0L
     private val zoomLater = Runnable { zoomTold = android.os.SystemClock.uptimeMillis(); onZoom?.invoke(shownZoom) }
 
@@ -99,6 +103,9 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     /** The pages in reading order: row by row from the top, left to right. */
     fun readingOrder(): List<PageModel> = notebook.pages.sortedWith(compareBy({ it.page.row }, { it.page.col }))
 
+    /** The page the view is flying into, if any: it is drawn for real as soon as it is more than a thumbnail, not from its small picture. */
+    private var flyTarget: PageModel? = null
+
     /** Flies to [p] and makes it the page being worked on. */
     fun showPage(p: PageModel) = zoomIntoPage(p)
 
@@ -115,6 +122,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private fun flyTo(p: PageModel) {
         val l = layout ?: return
         stopGlide()
+        flyTarget = p
         val s1 = vp.fitScale(maxOf(1, p.page.width))
         val (ox, oy) = l.origin(p)
         val pw = p.page.width.toDouble(); val ph = p.page.height.toDouble()
@@ -150,18 +158,22 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     fun overview() {
         val l = layout ?: return
         stopGlide()
+        flyTarget = null
         val s1 = vp.overviewScale()
         val cx = l.worldW / 2.0; val cy = l.worldH / 2.0
         val s0 = vp.scale
-        val px0 = vp.tx + cx * s0; val py0 = vp.ty + cy * s0
+        // The point of the surface in the middle of the screen travels to the middle of the whole surface, in step with the zoom
+        // (as far along as the zoom is, measured in 1/scale), so the page does not slide to the middle before it has zoomed out.
+        val c0x = (width / 2.0 - vp.tx) / s0; val c0y = (height / 2.0 - vp.ty) / s0
         val ease = android.view.animation.AccelerateDecelerateInterpolator()
         snapAnim?.cancel()
         snapAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 520
+            duration = 380
             addUpdateListener {
                 val e = ease.getInterpolation(it.animatedFraction).toDouble()
                 val s = s0 * Math.pow(s1 / s0, e)
-                vp.viewTo(s, px0 + (width / 2.0 - px0) * e - cx * s, py0 + (height / 2.0 - py0) * e - cy * s)
+                val u = if (s1 == s0) e else (1 / s - 1 / s0) / (1 / s1 - 1 / s0)
+                vp.viewTo(s, width / 2.0 - (c0x + (cx - c0x) * u) * s, height / 2.0 - (c0y + (cy - c0y) * u) * s)
                 pageLayer.invalidate()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
@@ -279,6 +291,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private val pageLayer =
         object : View(context) {
             override fun onDraw(canvas: Canvas) {
+                drawCount++
                 activate(work)
                 vp.percent(maxOf(1, work.page.width)).let { if (it != shownZoom) { shownZoom = it; tellZoom() } }
                 positionEditor()
@@ -287,28 +300,30 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
                 canvas.drawColor(if (vp.infinite) Color.WHITE else 0xFFD9D9D9.toInt())
                 val l = layout
                 val pages = if (l == null) listOf(work) else vp.visible().let { l.visible(it[0], it[1], it[2], it[3]) }
-                var budget = CACHE_PER_FRAME
+                val t0 = android.os.SystemClock.uptimeMillis()
+                var made = 0
+                var waiting = false
                 for (p in pages) {
                     activate(p)
                     val g = geometry
                     // Pages seen small (the overview) are drawn from a small picture of each, not stroke by stroke, so panning stays smooth.
                     // While the view is flying (zooming into a page, out to the overview) pages up to a screen wide use their picture too: a little soft for half a second, and smooth.
                     val flying = snapAnim?.isRunning == true
-                    if (!sampling && !g.infinite && dragMap == null && g.pageW * g.scale < (if (flying) FLY_PAGE_PX else SMALL_PAGE_PX)) {
-                        val hit = pageCache.get(p)?.takeIf { it.rev == p.revision }
-                        val pic = hit ?: if (budget > 0) { budget--; renderCached(p) } else null
-                        if (pic != null) {
-                            val m = PageGeometry.MARGIN.toInt()
-                            val sheet = RectF(g.toScreenX(0.0).toFloat(), g.toScreenY(0.0).toFloat(), g.toScreenX(g.pageW.toDouble()).toFloat(), g.toScreenY(g.pageH.toDouble()).toFloat())
-                            canvas.drawBitmap(pic.bmp, android.graphics.Rect(m, m, pic.bmp.width - m, pic.bmp.height - m), sheet, cachePaint)
-                            continue
-                        }
-                        if (budget <= 0) postInvalidateOnAnimation() // some pages still wait for their picture: carry on next frame
+                    if (!sampling && !g.infinite && dragMap == null && g.pageW * g.scale < (if (flying && p !== flyTarget) FLY_PAGE_PX else SMALL_PAGE_PX)) {
+                        val old = pageCache.get(p)
+                        // Pictures are made until the frame has spent CACHE_MS on them (always at least one), so a first overview fills in over a few frames, not one stall.
+                        val pic = old?.takeIf { it.rev == p.revision } ?: if (made == 0 || android.os.SystemClock.uptimeMillis() - t0 < CACHE_MS) { made++; renderCached(p) } else old // an out-of-date picture is better than none
+                        val m = PageGeometry.MARGIN.toInt()
+                        val sheet = RectF(g.toScreenX(0.0).toFloat(), g.toScreenY(0.0).toFloat(), g.toScreenX(g.pageW.toDouble()).toFloat(), g.toScreenY(g.pageH.toDouble()).toFloat())
+                        if (pic != null) canvas.drawBitmap(pic.bmp, android.graphics.Rect(m, m, pic.bmp.width - m, pic.bmp.height - m), sheet, cachePaint)
+                        else { canvas.drawRect(sheet, sheetFill); canvas.drawRect(sheet, sheetEdge) } // no picture yet: a plain sheet, not a second full draw
+                        if (pic == null || pic.rev != p.revision) waiting = true
+                        continue
                     }
                     drawPage(canvas)
                 }
+                if (waiting) postInvalidateOnAnimation() // some pages still wait for a fresh picture: carry on next frame
                 activate(work)
-                if (!sampling) { this@InkCanvasView.removeCallbacks(warm); this@InkCanvasView.postDelayed(warm, 600) }
                 if (sampling) { canvas.restore(); return } // the page as it is, with none of the tools' overlays
                 drawCarried(canvas)
                 drawLassoOverlay(canvas)
@@ -340,15 +355,19 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     }
     private val cachePaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
-    // When nothing has moved for a moment, the pictures of pages not yet drawn (or out of date) are made one at a time, so
-    // the overview and the zoom into and out of it find them ready.
-    private val warm = object : Runnable {
-        override fun run() {
-            val pages = notebook.pages
-            if (layout != null && !vp.infinite && pages.size <= 30) { // more would not all fit in the cache
-                pages.firstOrNull { !it.page.infinite && pageCache.get(it)?.rev != it.revision }?.let { renderCached(it); this@InkCanvasView.postDelayed(this, 30) }
-            }
-        }
+    // A page with many strokes, drawn small for its picture, uses plain rounded lines instead of the ink renderer: it looks the same
+    // at that size and costs a fraction of the time. (No pressure shading; the picture is only seen small.)
+    private var cheap = false
+    private val cheapPaint = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
+    private val cheapPath = android.graphics.Path()
+
+    private fun drawCheap(canvas: Canvas, item: Item) {
+        cheapPath.rewind()
+        item.pts.forEachIndexed { i, p -> if (i == 0) cheapPath.moveTo(p.x, p.y) else cheapPath.lineTo(p.x, p.y) }
+        item.pts.firstOrNull()?.let { cheapPath.lineTo(it.x + 0.01f, it.y) } // a single point still makes a dot
+        cheapPaint.color = item.color
+        cheapPaint.strokeWidth = item.width * thicken
+        canvas.drawPath(cheapPath, cheapPaint)
     }
 
     /** Draws page [p] whole into a small bitmap (sheet [CACHE_PX] wide, with the margin round it) and keeps it. Null for an infinite canvas. */
@@ -362,7 +381,8 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         val keepGeometry = geometry; val keepActive = active
         active = p
         geometry = PageView(tmp, 0.0, 0.0, ps.width, ps.height, false)
-        try { drawPage(Canvas(bmp)) } finally { active = keepActive; geometry = keepGeometry }
+        cheap = p.items.size > CHEAP_STROKES
+        try { drawPage(Canvas(bmp)) } finally { active = keepActive; geometry = keepGeometry; cheap = false }
         return PageShot(bmp, p.revision).also { pageCache.put(p, it) }
     }
 
@@ -565,6 +585,19 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private fun pictureBitmap(sha: String): Bitmap? =
         pictureBitmaps.get(sha) ?: notebook.pictureFiles.get(sha)?.let { PictureDecoder.decode(it)?.bitmap }?.also { pictureBitmaps.put(sha, it) }
 
+    /** Decodes the notebook's pictures on a background thread soon after it opens, so the first overview does not stop to do it. Decoding only turns bytes into a bitmap, so it is safe off the UI thread. */
+    private fun predecodePictures() {
+        val todo = notebook.pages.flatMap { it.pictures }.map { it.sha }.distinct().filter { pictureBitmaps.get(it) == null }
+            .mapNotNull { sha -> notebook.pictureFiles.get(sha)?.let { sha to it } }
+        if (todo.isEmpty()) return
+        Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            for ((sha, bytes) in todo) if (pictureBitmaps.get(sha) == null) PictureDecoder.decode(bytes)?.bitmap?.let { pictureBitmaps.put(sha, it) }
+        }.start()
+    }
+
+    init { post { predecodePictures() } }
+
     private fun drawPicture(canvas: Canvas, pic: Picture, vl: Float, vt: Float, vr: Float, vb: Float) {
         val corners = pic.corners()
         if (corners.maxOf { it.first } < vl || corners.minOf { it.first } > vr || corners.maxOf { it.second } < vt || corners.minOf { it.second } > vb) return
@@ -614,6 +647,7 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
         if (table != null) { drawTable(canvas, linePreview?.takeIf { it.id == table.id } ?: table, vl, vt, vr, vb); return }
         val item = model.itemOf(id)
         if (item != null && item.tool == StrokeTool.TOOL_DOTTED) { drawDotted(canvas, item, vl, vt, vr, vb); return }
+        if (item != null && cheap) { drawCheap(canvas, item); return }
         if (item != null) {
             // A transform makes a new Item under the same ID, so an old picture is not reused.
             val p = placed[item.id]?.takeIf { it.item === item } ?: place(buildStroke(item), item).also { placed[item.id] = it }
@@ -3498,10 +3532,11 @@ class InkCanvasView(context: Context, val notebook: Notebook = Notebook()) : Fra
     private companion object {
         const val PLUS_MIN_PX = 14f // an empty cell narrower than this is not drawn
         const val PLUS_DASH_PX = 70f // dashed outlines only on cells wider than this
-        const val FLY_PAGE_PX = 1300f // while flying, pages narrower than this use their picture
+        const val FLY_PAGE_PX = 640f // while flying, pages narrower than this use their picture (the picture is 600 wide, so the swap is not seen)
         const val SMALL_PAGE_PX = 560f // a page narrower than this on screen is drawn from its picture
         const val CACHE_PX = 600 // the width of that picture's sheet
-        const val CACHE_PER_FRAME = 3 // pictures made in one frame (more would stall it)
+        const val CHEAP_STROKES = 40 // a page with more strokes than this is drawn with plain lines for its picture
+        const val CACHE_MS = 6L // the most time a frame spends making page pictures once it has made one
         const val LINED_TOP = 1600 // 16 mm
         const val LINED_STEP = 800 // 8 mm
         const val GRID_STEP = 500 // 5 mm
