@@ -77,7 +77,11 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         for (d in dir.listFiles()?.sortedBy { it.name.lowercase() } ?: emptyList()) {
             if (!d.isDirectory || d.name.startsWith(".")) continue
             if (d.name.endsWith(".ink")) { loadFile(d, found)?.let { f.files.add(it) }; continue }
-            val m = readMeta(File(d, ".folder.json"))
+            // Remember what the info file says, so a save after launch does not rewrite it when nothing changed.
+            val info = File(d, ".folder.json")
+            val text = try { if (info.isFile) info.readText() else null } catch (_: Exception) { null }
+            if (text != null) written[info] = text
+            val m = text?.let { try { MiniJson.parse(it) } catch (_: Exception) { null } }
             val child = Folder((m?.get("name") as? String) ?: d.name, (m?.get("color") as? Long)?.toInt())
             child.pinned = m?.get("pinned") == true
             child.parent = f; child.disk = d

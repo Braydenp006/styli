@@ -23,6 +23,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -462,8 +467,42 @@ fun LibraryScreen(lib: Library, ui: LibUi, settings: AppSettings, storage: Stora
                 Row(Modifier.fillMaxSize()) {
                     listOf(Ic.LIBRARY to "Tabularium", Ic.NEXUS to "Nexus", Ic.ITINERARIUM to "Itinerarium", Ic.TRASH to "Trash", Ic.SETTINGS to "Settings").forEachIndexed { i, (ic, label) ->
                         val labelColour by androidx.compose.animation.animateColorAsState(if (tab == i) sty.honeyText else sty.inkMuted, label = "tab label")
+                        // A little ripple from the touch, drawn inside the squircle (the default ripple is square here, so it is drawn by hand).
+                        val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        val rippleScope = rememberCoroutineScope()
+                        val rippleR = remember { androidx.compose.animation.core.Animatable(0f) }
+                        val rippleA = remember { androidx.compose.animation.core.Animatable(0f) }
+                        var rippleAt by remember { mutableStateOf(Offset.Zero) }
+                        var rippleSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+                        val rippleIn = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) } // this press's fade-in, so a quick tap still shows it
+                        androidx.compose.runtime.LaunchedEffect(press) {
+                            press.interactions.collect { ev ->
+                                when (ev) {
+                                    is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                                        rippleAt = ev.pressPosition
+                                        // Starts the same frame as the touch (no waiting to be scheduled), already faintly there, then settles.
+                                        rippleScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                                            rippleA.snapTo(0.07f); rippleR.snapTo(0f)
+                                            rippleIn[0] = rippleScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { rippleA.animateTo(0.16f, androidx.compose.animation.core.tween(160)) }
+                                            rippleR.animateTo(maxOf(rippleSize.width, rippleSize.height) * 1.2f, androidx.compose.animation.core.tween(420))
+                                        }
+                                    }
+                                    is androidx.compose.foundation.interaction.PressInteraction.Release,
+                                    is androidx.compose.foundation.interaction.PressInteraction.Cancel ->
+                                        rippleScope.launch { rippleIn[0]?.join(); rippleA.animateTo(0f, androidx.compose.animation.core.tween(380)) } // it finishes coming in, then goes
+                                    else -> {}
+                                }
+                            }
+                        }
                         Column(
-                            Modifier.weight(1f).fillMaxHeight().clickable { tab = i; if (i == 0) ui.openFolder = null },
+                            Modifier.weight(1f).fillMaxHeight().padding(horizontal = 6.dp, vertical = 4.dp)
+                                .clip(StyShapes.Lg)
+                                .onSizeChanged { rippleSize = it }
+                                .drawWithContent {
+                                    drawContent()
+                                    if (rippleA.value > 0f) drawCircle(sty.honeyText.copy(alpha = rippleA.value), rippleR.value, rippleAt)
+                                }
+                                .clickable(interactionSource = press, indication = null) { tab = i; if (i == 0) ui.openFolder = null },
                             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
                         ) {
                             Box(

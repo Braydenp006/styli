@@ -154,4 +154,16 @@ class VaultStoreTest {
         v.autosave(l, null); v.flush()
         assertEquals(setOf("Same", "Same 2"), reload().root.folders.single().files.map { it.name }.toSet())
     }
+
+    @Test fun aSaveAfterLaunchDoesNotRewriteFolderInfoFilesThatDidNotChange() {
+        val v = vault(); val l = v.load()
+        l.newFolder("F"); l.newFolder("G")
+        v.save(l)
+        val info = File(dir, "G/.folder.json"); info.setLastModified(1_000_000L)
+        val v2 = vault(); val l2 = v2.load() // a new launch: nothing is remembered yet
+        l2.setPinned(l2.root.folders.first { it.name == "F" }, true) // G is in the same list, so its info file is checked
+        v2.autosave(l2, null); v2.flush()
+        assertEquals(1_000_000L, info.lastModified()) // G did not change, so it is left alone
+        assertTrue(reload().root.folders.first { it.name == "F" }.pinned)
+    }
 }
