@@ -1,5 +1,7 @@
 package app.styli.ink
 
+import kotlinx.coroutines.flow.conflate
+
 import android.os.Bundle
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.BoxScope
@@ -122,7 +124,7 @@ private fun Root() {
     val vault = remember(root) { Vault(root) }
     val library = remember(vault) {
         val fresh = !root.exists()
-        vault.load().also {
+        vault.load(pages = false).also { // the ink of each note is read in the background, below
             // The very first vault, in the default place, gets some made-up folders and notes to try things with (throwaway, like SampleLibrary).
             if (fresh && root == Storage.default() && it.root.folders.isEmpty() && it.root.files.isEmpty() && it.trash.isEmpty() && vault.problems.isEmpty()) { it.addSamples(); vault.save(it) }
         }
@@ -150,6 +152,22 @@ private fun Root() {
         owner.lifecycle.addObserver(obs); onDispose { owner.lifecycle.removeObserver(obs) }
     }
     val ui = remember { LibUi() }
+    // Each note's pages are read on a background thread once the library shows, most recently opened first; a note being
+    // opened goes to the front. Reading makes only new objects; they are handed over here, on the UI thread.
+    var wanted by remember(vault) { mutableStateOf<NoteFile?>(null) }
+    androidx.compose.runtime.LaunchedEffect(library) {
+        fun waiting(f: NoteFile) = f.kind == FileKind.INK && f.notebook == null && f.loadError == null && f.disk != null
+        androidx.compose.runtime.snapshotFlow { ui.version to wanted }.conflate().collect { // a change to the library (a restore, say) may bring back a note to read
+            while (true) {
+                val next = wanted?.takeIf(::waiting)
+                    ?: (library.recent(Int.MAX_VALUE).map { it.second } + library.trash.map { it.file }).firstOrNull(::waiting)
+                    ?: break
+                val dir = next.disk!!
+                val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { vault.readPages(dir) } }
+                got.onSuccess { vault.attachPages(next, dir, it) }.onFailure { vault.pagesFailed(next, dir, it.message) } // moved meanwhile: read again
+            }
+        }
+    }
     picked?.let { dest ->
         val fresh = !dest.exists() || dest.list()?.isEmpty() == true
         val bad = Storage.overlaps(dest, root)
@@ -198,13 +216,25 @@ private fun Root() {
         if (file == null) LibraryScreen(
             library, ui, settings,
             StorageControls(Storage.shortName(root), root == Storage.default(), { pickFolder.launch(null) }, { if (root != Storage.default()) picked = Storage.default() }),
-        ) { open = it }
+        ) { wanted = it; open = it }
         else {
             androidx.activity.compose.BackHandler { open = null }
-            // A new canvas view for each file, so it starts on that file's own pages.
-            androidx.compose.runtime.key(file) { InkScreen(file, settings, shelf) { open = null } }
+            val why = file.loadError
+            when {
+                // A new canvas view for each file, so it starts on that file's own pages.
+                file.notebook != null -> androidx.compose.runtime.key(file) { InkScreen(file, settings, shelf) { open = null } }
+                why != null -> NoteMessage("This note could not be read, so it is left exactly as it is: $why")
+                else -> { androidx.compose.runtime.LaunchedEffect(file) { wanted = file }; NoteMessage("Opening…") }
+            }
         }
     }
+}
+
+/** Shown in place of a note while its pages are read, or if they cannot be. */
+@Composable
+private fun NoteMessage(text: String) {
+    val sty = LocalSty.current
+    Box(Modifier.fillMaxSize().background(sty.surface).padding(StySize.space6), contentAlignment = Alignment.Center) { Text(text, color = sty.inkMuted) }
 }
 
 /** Moves to [dest]: everything is saved first, the notes are copied if asked (the old folder stays as it was), then the app opens the new folder. */

@@ -10,11 +10,26 @@ enum class FileKind { INK, MARKDOWN, PDF }
 class NoteFile(
     var name: String,
     val kind: FileKind,
-    val notebook: Notebook?, // null unless kind is INK
+    notebook: Notebook?, // null unless kind is INK (and until its pages are read, see below)
     val created: Long,
     var opened: Long,
     var pinned: Boolean = false,
 ) {
+    /**
+     * For ink, its pages. A note read from disk starts without them: the library shows first, then [Vault] reads every
+     * note's pages in the background and hands them over here. Until then nothing writes this note's pages.
+     */
+    // Snapshot state, so whatever shows this note (its cover, its screen) redraws when its pages arrive.
+    private val pages = androidx.compose.runtime.mutableStateOf(notebook)
+    var notebook: Notebook?
+        get() = pages.value
+        internal set(v) { pages.value = v }
+
+    /** Why this note's pages could not be read, if they could not. Such a note is never written: its files stay as they are. */
+    private val failed = androidx.compose.runtime.mutableStateOf<String?>(null)
+    var loadError: String?
+        get() = failed.value
+        internal set(v) { failed.value = v }
     /** Where this file is on disk now (set and moved by [Vault]); null until it is first saved. */
     internal var disk: java.io.File? = null
     /** What is kept for this note beside its pages (see [NoteView]); null if nothing yet. */
@@ -86,7 +101,7 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
     val root = Folder("Tabularium")
     val trash = mutableListOf<Trashed>()
 
-    /** Where changes are made on the spot; null keeps the library in memory only (the tests, and [Vault.save] catching up). */
+    /** Where changes are made on the spot ([Vault] attaches itself); null keeps the library in memory only, as the model tests do. */
     var store: Store? = null
 
     private inline fun <T> change(vararg folders: Folder?, trash: Boolean = false, block: () -> T): T {
@@ -94,10 +109,6 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
         s.begin(folders.filterNotNull(), trash)
         try { return block() } finally { s.settled() }
     }
-
-    /** Folders and files that are gone for good, waiting for [Vault] to remove them from disk (only without a [store]). */
-    internal val goneFolders = mutableListOf<Folder>()
-    internal val purged = mutableListOf<NoteFile>()
 
     /** The top-level folders. */
     val folders: MutableList<Folder> get() = root.folders
@@ -222,8 +233,7 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
                 trash.add(Trashed(file, from, at))
             }
             val all = folder.allFolders().asReversed() // deepest first, so each is empty when its turn comes
-            val s = store
-            if (s != null) all.forEach(s::removeFolder) else goneFolders.addAll(all)
+            store?.let { s -> all.forEach(s::removeFolder) }
             parent.folders.remove(folder)
             folder.parent = null
         }
@@ -249,8 +259,7 @@ class Library(private val clock: () -> Long = System::currentTimeMillis) {
     fun purge(t: Trashed) {
         require(t in trash) { "not in the trash" }
         change(trash = true) {
-            val s = store
-            if (s != null) s.purge(t.file) else purged.add(t.file)
+            store?.purge(t.file)
             trash.remove(t)
         }
     }

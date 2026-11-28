@@ -15,16 +15,15 @@ import java.io.IOException
  *   <root>/.trash/<time>-<File>.ink/              a deleted file, with trash.json (where it came from, when)
  *   <root>/.styli/seq                             the next event number for this device
  *
- * [save] makes the disk match the [Library] (creating, renaming and moving folders and files, appending new ink
- * events, moving deleted files into the trash). Nothing is ever deleted except what the user chose "delete for
- * good" on. No Android in here, so it is tested on the JVM.
+ * Folders and notes are made, renamed, moved, trashed and restored on disk the moment the [Library] asks (see [Store]);
+ * [autosave] writes the rest as it changes: new ink, and the small info files. Nothing is ever deleted except what the
+ * user chose "delete for good" on. No Android in here, so it is tested on the JVM.
  */
 class Vault(val root: File, private val device: String = DEVICE, private val clock: () -> Long = System::currentTimeMillis) {
     private val meta = File(root, ".styli")
     private val trashDir = File(root, ".trash")
     private val written = HashMap<File, String>() // the last text written to each small file, so unchanged ones are not rewritten
     private var seq = readSeq()
-    private var saved = 0 // the fingerprint of the library as last saved
     // Ink is appended to the logs by one background thread, so the fsync never stops the screen. [sending] (UI thread only) holds,
     // per page, the events handed to it but not yet confirmed; they stay in the page's log until the write succeeds, and a failed
     // write simply sends them again. Anything else that touches the files (a full [save], clips, copying) calls [flush] first.
@@ -33,6 +32,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private val failures = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val sending = java.util.IdentityHashMap<PageModel, MutableSet<Ev>>()
     private val creating = HashSet<File>() // logs handed over to be created, so a second batch appends instead of creating again
+    private val aside = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<PageModel, Boolean>()) // pages whose log was moved to .deleted
     internal var beforeWrite: (() -> Unit)? = null // for tests: runs on the writer thread before each write
 
     /** Waits for the background writes to finish, then settles them. Returns what went wrong, in plain words. */
@@ -49,7 +49,6 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     // [autosave] saves only what changed: each folder (its list of children) and each note has its own fingerprint, remembered here.
     private val savedFolder = java.util.IdentityHashMap<Folder, Int>()
     private val savedNote = java.util.IdentityHashMap<NoteFile, Int>()
-    private var savedTrash = 0
     private var retryAll = false // after a failed write: look at every note again
 
     /** Things that went wrong on the last [load] or [save], in plain words. */
@@ -58,58 +57,101 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
 
     // ---- Loading ----
 
-    /** Reads the vault into a library. A file that cannot be read is left alone on disk and reported in [problems]. */
-    fun load(): Library {
+    /**
+     * Reads the vault into a library. With [pages] every note's ink is read too, and a note whose ink cannot be read is
+     * left out (alone on disk) and reported in [problems]. Without, only the folders and the small info files are read,
+     * which is quick; the app then reads each note's pages in the background ([readPages], [attachPages]).
+     */
+    fun load(pages: Boolean = true): Library {
         val lib = Library(clock)
         val found = ArrayList<String>()
-        loadFolder(lib.root, root, found)
+        loadFolder(lib.root, root, found, pages)
         trashDir.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { d ->
             val m = readMeta(File(d, "trash.json")) ?: return@forEach
-            loadFile(d, found)?.let { f -> lib.trash.add(Trashed(f, (m["from"] as? List<*>)?.map { it as String } ?: emptyList(), (m["at"] as? Long) ?: 0L)) }
+            loadFile(d, found, pages)?.let { f -> lib.trash.add(Trashed(f, (m["from"] as? List<*>)?.map { it as String } ?: emptyList(), (m["at"] as? Long) ?: 0L)) }
         }
         problems = found
-        saved = fingerprint(lib)
         attach(lib)
         return lib
     }
 
-    private fun loadFolder(f: Folder, dir: File, found: MutableList<String>) {
+    private fun loadFolder(f: Folder, dir: File, found: MutableList<String>, pages: Boolean) {
         for (d in dir.listFiles()?.sortedBy { it.name.lowercase() } ?: emptyList()) {
             if (!d.isDirectory || d.name.startsWith(".")) continue
-            if (d.name.endsWith(".ink")) { loadFile(d, found)?.let { f.files.add(it) }; continue }
+            if (d.name.endsWith(".ink")) { loadFile(d, found, pages)?.let { f.files.add(it) }; continue }
             // Remember what the info file says, so a save after launch does not rewrite it when nothing changed.
-            val info = File(d, ".folder.json")
-            val text = try { if (info.isFile) info.readText() else null } catch (_: Exception) { null }
-            if (text != null) written[info] = text
-            val m = text?.let { try { MiniJson.parse(it) } catch (_: Exception) { null } }
+            val m = readInfo(File(d, ".folder.json"))
             val child = Folder((m?.get("name") as? String) ?: d.name, (m?.get("color") as? Long)?.toInt())
             child.pinned = m?.get("pinned") == true
             child.parent = f; child.disk = d
             f.folders.add(child)
-            loadFolder(child, d, found)
+            loadFolder(child, d, found, pages)
         }
     }
 
-    private fun loadFile(d: File, found: MutableList<String>): NoteFile? {
-        val m = readMeta(File(d, "file.json"))
-        val names = d.listFiles { x -> x.isFile && PAGE.matches(x.name) }?.map { it.name }?.sorted() ?: emptyList()
-        if (names.isEmpty()) return null
-        val pages = ArrayList<Pair<String, PageModel>>()
-        for (n in names) {
-            try { pages.add(n to InkLogReader.read(File(d, n).readBytes()).page) }
-            catch (e: Exception) { found.add("${d.name}/$n could not be read (${e.message}); it is left as it is"); return null }
-        }
-        val nb = Notebook(pages[0].second)
-        pages.drop(1).forEach { nb.adopt(it.second) }
-        File(d, PICTURES.trimEnd('/')).listFiles()?.filter { it.isFile && !it.name.startsWith(".") }?.forEach { nb.pictureFiles.put(it.readBytes()) }
+    private fun loadFile(d: File, found: MutableList<String>, pages: Boolean): NoteFile? {
+        if (d.listFiles { x -> x.isFile && PAGE.matches(x.name) }.isNullOrEmpty()) return null
+        val read = if (pages) try { readPages(d) } catch (e: IOException) { found.add(e.message ?: d.name); return null } else null
+        val m = readInfo(File(d, "file.json"))
         val file = NoteFile(
-            (m?.get("name") as? String) ?: d.name.removeSuffix(".ink"), FileKind.INK, nb,
+            (m?.get("name") as? String) ?: d.name.removeSuffix(".ink"), FileKind.INK, null,
             (m?.get("created") as? Long) ?: clock(), (m?.get("opened") as? Long) ?: clock(), m?.get("pinned") == true,
         )
         file.disk = d
-        file.view = readMeta(File(d, "view.json"))
-        pages.forEach { (n, p) -> file.pageNames[p] = n }
+        file.view = readInfo(File(d, "view.json"))
+        read?.let { hand(file, it) }
         return file
+    }
+
+    /** A note's pages as read from disk, not yet handed to its [NoteFile]. */
+    class Pages internal constructor(internal val notebook: Notebook, internal val names: List<Pair<String, PageModel>>)
+
+    /**
+     * Reads the pages (and pictures) of the note in [dir]. It makes only new objects and touches nothing shared, so it may
+     * run on a background thread. Throws, in plain words, if a page cannot be read.
+     */
+    fun readPages(dir: File): Pages {
+        val names = dir.listFiles { x -> x.isFile && PAGE.matches(x.name) }?.map { it.name }?.sorted().orEmpty()
+        if (names.isEmpty()) throw IOException("${dir.name} has no pages")
+        val pages = names.map { n ->
+            try { n to InkLogReader.read(File(dir, n).readBytes()).page }
+            catch (e: Exception) { throw IOException("${dir.name}/$n could not be read (${e.message}); it is left as it is") }
+        }
+        val nb = Notebook(pages[0].second)
+        pages.drop(1).forEach { nb.adopt(it.second) }
+        File(dir, PICTURES.trimEnd('/')).listFiles()?.filter { it.isFile && !it.name.startsWith(".") }?.forEach { nb.pictureFiles.put(it.readBytes()) }
+        return Pages(nb, pages)
+    }
+
+    /**
+     * Hands pages read by [readPages] from [dir] to [file] (on the UI thread). False if they no longer fit, because the
+     * note moved while they were read or already has pages: read it again.
+     */
+    fun attachPages(file: NoteFile, dir: File, pages: Pages): Boolean {
+        if (file.disk != dir || file.notebook != null) return false
+        // A note that was saved stays saved: its pages arriving is not a change to write.
+        val clean = savedNote[file]?.let { it == noteFingerprint(file, view = true) || it == noteFingerprint(file, view = false) } == true
+        val withView = savedNote[file] == noteFingerprint(file, view = true)
+        hand(file, pages)
+        if (clean) savedNote[file] = noteFingerprint(file, view = withView)
+        return true
+    }
+
+    /** The pages of [file], read from [dir], could not be read: it is marked so it is never written. Ignored if it moved meanwhile. */
+    fun pagesFailed(file: NoteFile, dir: File, why: String?) {
+        if (file.disk == dir && file.notebook == null) file.loadError = why ?: "its pages could not be read"
+    }
+
+    private fun hand(file: NoteFile, pages: Pages) {
+        file.notebook = pages.notebook
+        pages.names.forEach { (n, p) -> file.pageNames[p] = n }
+    }
+
+    /** Reads a small info file, remembering its text so a save that would write the same text leaves it alone. */
+    private fun readInfo(f: File): Map<String, Any?>? {
+        val text = try { if (f.isFile) f.readText() else null } catch (_: Exception) { null } ?: return null
+        written[f] = text
+        return try { MiniJson.parse(text) } catch (_: Exception) { null }
     }
 
     private fun readMeta(f: File): Map<String, Any?>? =
@@ -117,15 +159,17 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
 
     // ---- Saving ----
 
-    /** True if the library changed since it was last saved or loaded. Cheap: it only looks at memory. */
-    fun dirty(lib: Library) = fingerprint(lib) != saved
+    /** True if something has changed that is not saved yet. Cheap: it only looks at memory. */
+    fun dirty(lib: Library, open: NoteFile? = null): Boolean = retryAll || lib.root.allFolders().any { f ->
+        savedFolder[f] != folderFingerprint(f) || f.files.any { savedNote[it] != noteFingerprint(it, view = it !== open) }
+    }
 
     /**
      * The one-second autosave: writes only what changed since the last save. A folder whose list of children changed (a new,
      * renamed, moved or deleted note or folder, a folder's colour or pin) is synced on its own, a note whose own content changed
-     * (ink, its name, pin, opened time) is saved on its own, and the trash is looked at only when it changed. Where [open] is
-     * scrolled to is left for when it is left. Nothing here walks the whole library. Null if there was nothing to save,
-     * otherwise what [save] would return.
+     * (ink, its name, pin, opened time) is saved on its own. (The trash changes on the spot, see [Store].) Where [open] is
+     * scrolled to is left for when it is left. Nothing here walks the disk. Null if there was nothing to save, otherwise
+     * what went wrong (empty if nothing did).
      */
     fun autosave(lib: Library, open: NoteFile?): List<String>? {
         val failed = drain()
@@ -137,18 +181,12 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
             if (retryAll || savedFolder[f] != folderFingerprint(f)) dirtyFolders.add(f)
             for (n in f.files) if (retryAll || savedNote[n] != noteFingerprint(n, view = n !== open)) dirtyNotes.add(n)
         }
-        val trashDirty = retryAll || savedTrash != trashFingerprint(lib)
-        if (dirtyFolders.isEmpty() && dirtyNotes.isEmpty() && !trashDirty) return null
+        if (dirtyFolders.isEmpty() && dirtyNotes.isEmpty()) return null
         val found = ArrayList<String>()
         try {
-            if (dirtyFolders.isNotEmpty() || trashDirty) { root.mkdirs(); meta.mkdirs(); File(root, ".nomedia").let { if (!it.exists()) it.createNewFile() } }
+            if (dirtyFolders.isNotEmpty()) { root.mkdirs(); meta.mkdirs(); File(root, ".nomedia").let { if (!it.exists()) it.createNewFile() } }
             val done = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<NoteFile, Boolean>())
             for (f in dirtyFolders) syncChildren(f, if (f === lib.root) root else f.disk ?: continue, dirtyNotes, done, found)
-            if (trashDirty) {
-                syncTrash(lib, found)
-                lib.purged.toList().forEach { f -> if (removeFromTrash(f, found)) lib.purged.remove(f) }
-                lib.goneFolders.toList().forEach { f -> if (removeFolder(f)) lib.goneFolders.remove(f) }
-            }
             for (n in dirtyNotes) if (n !in done) n.disk?.let { syncFile(n, it, found, later = true) }
         } catch (e: IOException) { found.add("could not save: ${e.message}") }
         problems = found
@@ -156,7 +194,7 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         return found
     }
 
-    /** One folder's own children, as [syncFolder] does them, but without going into the folders inside (they are synced if they changed). */
+    /** One folder's own children: each in its place, with its info file; the folders inside are synced if they changed. */
     private fun syncChildren(f: Folder, dir: File, dirtyNotes: Set<NoteFile>, done: MutableSet<NoteFile>, found: MutableList<String>) {
         val used = HashSet<String>()
         for (c in f.folders) {
@@ -171,46 +209,26 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         }
     }
 
-    /** What was saved, as of now: each folder's and note's fingerprint ([open]'s scroll position left out), and the trash's. */
+    /** What was saved, as of now: each folder's and note's fingerprint ([open]'s scroll position left out). */
     private fun remember(lib: Library, open: NoteFile?) {
         savedFolder.clear(); savedNote.clear()
         for (f in lib.root.allFolders()) {
             savedFolder[f] = folderFingerprint(f)
             for (n in f.files) savedNote[n] = noteFingerprint(n, view = n !== open)
         }
-        savedTrash = trashFingerprint(lib)
     }
 
-    /** Makes the disk match [lib]. Anything that fails is listed in [problems] and tried again next time. */
+    /**
+     * Saves everything not saved yet, scroll positions included, and waits until it is on disk: for leaving the app, and
+     * before anything that copies the files. Anything that fails is listed in [problems] and tried again next time.
+     */
     fun save(lib: Library): List<String> {
-        working = lib
-        val found = ArrayList<String>(flush())
-        try {
-            root.mkdirs(); meta.mkdirs()
-            File(root, ".nomedia").let { if (!it.exists()) it.createNewFile() } // keep gallery apps from scanning the notes
-            syncFolder(lib.root, root, found)
-            syncTrash(lib, found)
-            lib.purged.toList().forEach { f -> if (removeFromTrash(f, found)) lib.purged.remove(f) }
-            lib.goneFolders.toList().forEach { f -> if (removeFolder(f)) lib.goneFolders.remove(f) }
-        } catch (e: IOException) { found.add("could not save: ${e.message}") }
+        flush() // a write that failed earlier is sent again by the autosave below
+        val found = ArrayList(autosave(lib, null) ?: emptyList())
+        found.addAll(flush())
         problems = found
-        if (found.isEmpty()) { saved = fingerprint(lib); remember(lib, null); retryAll = false } // after: saving drains each page's pending events
+        if (found.isEmpty()) remember(lib, null) // the writes are confirmed: their pages' logs are empty now
         return found
-    }
-
-    private fun syncFolder(f: Folder, dir: File, found: MutableList<String>) {
-        val used = HashSet<String>()
-        for (c in f.folders) {
-            val want = pick(dir, safe(c.name), "", c.disk, used)
-            c.disk = place(c.disk, want) { old, new -> shift(c, old, new) }
-            writeMeta(File(want, ".folder.json"), mapOf("name" to c.name, "color" to c.color?.toLong(), "pinned" to c.pinned))
-            syncFolder(c, want, found)
-        }
-        for (file in f.files) {
-            val want = pick(dir, safe(file.name), ".ink", file.disk, used)
-            file.disk = place(file.disk, want) { old, new -> shiftFile(file, old, new) }
-            syncFile(file, want, found)
-        }
     }
 
     /** One file's folder: its small info file, its pages, and no trace of having been in the trash. */
@@ -223,18 +241,20 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         val gone = File(dir, ".deleted")
         for (p in live) {
             // In the background pass, a page with nothing to send is already on disk: skip its file checks (slow on shared storage).
-            if (later && p in file.pageNames && p.log.all { it in (sending[p] ?: emptySet<Ev>()) }) continue
+            // A page whose log was moved aside (deleted, then brought back by an undo) is never skipped: its file has to come back.
+            if (later && p in file.pageNames && p !in aside && p.log.all { it in (sending[p] ?: emptySet<Ev>()) }) continue
             val name = file.pageNames.getOrPut(p) { nextPageName(dir, file) }
             val inGone = File(gone, name)
             if (inGone.exists() && !File(dir, name).exists()) { // a deleted page was brought back
                 if (!inGone.renameTo(File(dir, name))) throw IOException("could not bring back ${inGone.name}")
             }
+            aside.remove(p)
             try { writePictures(nb, p, dir); if (later) writePageLater(file, p, File(dir, name)) else writePage(file, p, File(dir, name)) } catch (e: Exception) { found.add("${file.name}: ${e.message}") }
         }
         for ((p, name) in file.pageNames.entries.toList()) {
             if (live.any { it === p }) continue
             val from = File(dir, name)
-            if (from.exists()) { flush(); gone.mkdirs(); if (!from.renameTo(File(gone, name))) throw IOException("could not move $name aside") }
+            if (from.exists()) { flush(); gone.mkdirs(); if (!from.renameTo(File(gone, name))) throw IOException("could not move $name aside"); aside.add(p) }
             // a deleted page keeps its name, so undoing the delete finds its file again
         }
     }
@@ -304,17 +324,6 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         }
     }
 
-    private fun syncTrash(lib: Library, found: MutableList<String>) {
-        val used = HashSet<String>()
-        for (t in lib.trash) {
-            val file = t.file
-            val want = pick(trashDir, "${t.at}-${safe(file.name)}", ".ink", file.disk, used)
-            file.disk = place(file.disk, want) { old, new -> shiftFile(file, old, new) }
-            syncFile(file, want, found)
-            writeMeta(File(want, "trash.json"), mapOf("from" to t.from, "at" to t.at))
-        }
-    }
-
     /** Deletes a file the user chose to delete for good. Only ever inside the trash folder. */
     private fun removeFromTrash(f: NoteFile, found: MutableList<String>): Boolean {
         val d = f.disk ?: return true
@@ -344,7 +353,6 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     fun attach(lib: Library) { working = lib; lib.store = store; remember(lib, null) }
 
     private val settleFolders = ArrayList<Folder>()
-    private var settleTrash = false
     private var settleOk = true
 
     private fun dirOf(f: Folder): File =
@@ -355,15 +363,11 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
             settleFolders.clear(); settleOk = true
             // Only what was saved before the change can be marked saved after it: anything else still waits for [autosave].
             folders.filterTo(settleFolders) { savedFolder[it] == folderFingerprint(it) }
-            settleTrash = trash && working?.let { savedTrash == trashFingerprint(it) } == true
         }
 
         override fun settled() {
-            if (settleOk) {
-                settleFolders.forEach { savedFolder[it] = folderFingerprint(it) }
-                if (settleTrash) working?.let { savedTrash = trashFingerprint(it) }
-            }
-            settleFolders.clear(); settleTrash = false
+            if (settleOk) settleFolders.forEach { savedFolder[it] = folderFingerprint(it) }
+            settleFolders.clear()
         }
 
         override fun folderAt(f: Folder, to: Folder, name: String) {
@@ -500,11 +504,8 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
     private fun shift(folder: Folder, old: File, new: File) {
         folder.folders.forEach { it.disk = relocate(it.disk, old, new); shift(it, old, new) }
         folder.files.forEach { it.disk = relocate(it.disk, old, new) }
-        // A note or folder moved out of this one since the last save is not in it now, but it is still on disk inside it until it is placed.
-        working?.let { lib -> lib.root.allFolders().forEach { f -> inside(f.disk, old)?.let { f.disk = relocate(it, old, new) }; f.files.forEach { n -> inside(n.disk, old)?.let { n.disk = relocate(it, old, new) } } } }
     }
-    private fun inside(f: File?, dir: File): File? = f?.takeIf { it.path.startsWith(dir.path + File.separator) }
-    private var working: Library? = null // the library being saved, so [shift] can reach what has moved out of a renamed folder
+    private var working: Library? = null // the attached library, so [dirOf] knows its root
     private fun shiftFile(file: NoteFile, old: File, new: File) { file.disk = new } // its pages are named relative to it
 
     private fun writeMeta(f: File, map: Map<String, Any?>) {
@@ -539,23 +540,6 @@ class Vault(val root: File, private val device: String = DEVICE, private val clo
         fun mix(x: Any?) { h = h * 31 + (x?.hashCode() ?: 0) }
         for (c in f.folders) { mix(System.identityHashCode(c)); mix(c.name); mix(c.color); mix(c.pinned) }
         for (n in f.files) { mix(System.identityHashCode(n)); mix(n.name) }
-        return h
-    }
-
-    private fun trashFingerprint(lib: Library): Int {
-        var h = 17
-        fun mix(x: Any?) { h = h * 31 + (x?.hashCode() ?: 0) }
-        for (t in lib.trash) { mix(System.identityHashCode(t.file)); mix(t.at); mix(t.from); mix(noteFingerprint(t.file)) }
-        mix(lib.purged.size); mix(lib.goneFolders.size)
-        return h
-    }
-
-    /** A number that changes whenever anything saved on disk would. */
-    private fun fingerprint(lib: Library): Int {
-        var h = 17
-        fun mix(x: Any?) { h = h * 31 + (x?.hashCode() ?: 0) }
-        for (f in lib.root.allFolders()) { mix(folderFingerprint(f)); f.files.forEach { mix(noteFingerprint(it)) } }
-        mix(trashFingerprint(lib))
         return h
     }
 

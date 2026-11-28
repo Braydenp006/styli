@@ -27,7 +27,7 @@ class VaultTest {
     private fun reload(): Library = vault().load()
 
     @Test fun foldersFilesAndTheirDetailsSurviveARestart() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val physics = l.newFolder("Physics", 0xFF4A78C2.toInt()); val labs = l.newFolder("Labs", parent = physics)
         val a = l.newFile(physics, "Lecture 1"); val b = l.newFile(labs, "Pendulum"); val c = l.newFile(l.root, "Loose")
         l.setPinned(a, true); l.setPinned(physics, true)
@@ -46,7 +46,7 @@ class VaultTest {
     }
 
     @Test fun editsAreAppendedNotRewrittenAndUndoneStrokesStayUndone() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.root, "N"); val page = f.notebook!!.current
         page.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.save(l)
@@ -61,7 +61,7 @@ class VaultTest {
     }
 
     @Test fun renamingAndMovingMoveTheFilesOnDisk() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFolder("A"); val b = l.newFolder("B")
         val f = l.newFile(a, "Note"); f.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.save(l)
@@ -76,7 +76,7 @@ class VaultTest {
     }
 
     @Test fun deletingMovesToTrashAndRestoreAndPurgeWork() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFolder("A"); val keep = l.newFile(a, "Keep"); val gone = l.newFile(a, "Gone")
         keep.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.save(l)
@@ -97,7 +97,7 @@ class VaultTest {
     }
 
     @Test fun aDeletedPageKeepsItsFileAndAnUndoBringsItBack() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.root, "N"); val nb = f.notebook!!
         val p1 = nb.current; p1.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         val p2 = nb.add(p1, Dir.RIGHT)!!; p2.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(7, 7, 9, 9))
@@ -111,7 +111,7 @@ class VaultTest {
     }
 
     @Test fun oddNamesAreSafeAndNeverClash() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         l.newFile(l.root, "a/b"); l.newFile(l.root, "a_b"); l.newFile(l.root, ".hidden")
         assertTrue(v.save(l).isEmpty())
         val back = reload()
@@ -120,7 +120,7 @@ class VaultTest {
     }
 
     @Test fun anUnreadableFileIsLeftAloneAndReported() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         l.newFile(l.root, "Fine"); l.newFile(l.root, "Broken")
         v.save(l)
         val broken = File(dir, "Broken.ink/page-001.stylog")
@@ -132,7 +132,7 @@ class VaultTest {
     }
 
     @Test fun cleanSavesChangeNothingAndNumbersNeverRepeat() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.root, "N"); f.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.save(l); assertFalse(v.dirty(l))
         val seq1 = File(dir, ".styli/seq").readText().toLong()
@@ -150,7 +150,7 @@ class VaultTest {
     }
 
     @Test fun aPictureAndItsFileComeBack() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.root, "Pics"); val nb = f.notebook!!
         val bytes = byteArrayOf(9, 8, 7, 6, 5)
         val sha = nb.pictureFiles.put(bytes)
@@ -163,7 +163,7 @@ class VaultTest {
     }
 
     @Test fun aPictureWhoseFileIsMissingIsReportedAndStaysUnsaved() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.root, "Pics")
         f.notebook!!.current.addPicture { Picture(it, 0f, 0f, 500f, 400f, "zz.jpg", "zz".repeat(32), 50, 40) } // its bytes were never stored
         assertEquals(1, v.save(l).size)
@@ -216,7 +216,7 @@ class VaultTest {
     }
 
     @Test fun aNotesOwnToolViewAndPensAreKeptWithIt() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.root, "N"); l.newFile(l.root, "Other")
         f.view = mapOf("tool" to "LASSO", "zoom" to 1500L, "left" to -300L, "top" to 12000L, "penColor" to 0xFFAA0000.toInt(), "penWidth" to 60)
         assertTrue(v.dirty(l)); v.save(l); assertFalse(v.dirty(l))
@@ -254,7 +254,7 @@ class VaultTest {
     }
 
     @Test fun movingCopiesEverythingAndLeavesTheOldFolderAlone() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFile(l.newFolder("A"), "N"); f.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         l.delete(l.root.folders.single(), f)
         v.save(l); v.writeSettings(AppSettings().snapshot())
@@ -277,7 +277,7 @@ class VaultTest {
     // ---- autosave: while a note is open only that note is written ----
 
     @Test fun autosaveWritesOnlyTheOpenNote() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A"); val b = l.newFile(l.root, "B")
         assertTrue(v.save(l).isEmpty()); v.autosave(l, a) // the first call after opening settles on the open note
         l.renameFile(l.root, b, "B2") // a change outside the open note
@@ -296,7 +296,7 @@ class VaultTest {
     }
 
     @Test fun autosaveKeepsEveryStrokeAcrossManySavesAndRenamesWaitForNothingLost() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A")
         v.save(l)
         repeat(5) { k ->
@@ -312,7 +312,7 @@ class VaultTest {
     }
 
     @Test fun scrollingAloneIsSavedWhenTheNoteIsLeftNotEverySecond() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A")
         v.save(l); v.autosave(l, a)
         a.view = mapOf("x" to 5L)
@@ -323,7 +323,7 @@ class VaultTest {
     }
 
     @Test fun strokesAddedWhileAWriteIsInFlightAreNotLostOrWrittenTwice() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A"); v.save(l); v.autosave(l, a)
         val gate = java.util.concurrent.CountDownLatch(1)
         v.beforeWrite = { gate.await() } // the first write waits here, on the writer thread
@@ -340,7 +340,7 @@ class VaultTest {
     }
 
     @Test fun aFailedBackgroundWriteIsReportedAndTheStrokesAreSentAgain() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A"); v.save(l); v.autosave(l, a)
         a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.beforeWrite = { throw java.io.IOException("disk full") }
@@ -354,7 +354,7 @@ class VaultTest {
     }
 
     @Test fun aFullSaveWaitsForTheBackgroundWritesFirst() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A"); v.save(l); v.autosave(l, a)
         a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.autosave(l, a)
@@ -366,7 +366,7 @@ class VaultTest {
     // ---- autosave saves only what changed: opening, pinning, renaming and moving no longer walk the library ----
 
     private fun twoNotes(): Triple<Library, Vault, Pair<NoteFile, NoteFile>> {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val a = l.newFile(l.root, "A"); val b = l.newFile(l.root, "B")
         a.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         assertTrue(v.save(l).isEmpty())
@@ -411,12 +411,12 @@ class VaultTest {
     }
 
     @Test fun renamingAFolderKeepsTheNotesInsideItAndANewNoteOrADeleteIsSaved() {
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFolder("F"); val n = l.newFile(f, "N")
         n.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         v.save(l)
         l.renameFolder(f, "Renamed")
-        assertTrue(v.autosave(l, null)!!.isEmpty())
+        assertNull(v.autosave(l, null)) // the rename happened on the spot: nothing is left to save
         n.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(9, 9, 12, 12)) // the note's path moved: writes must follow
         val fresh = l.newFile(f, "Fresh")
         l.delete(l.root.folders.single(), n) // to the trash
@@ -428,12 +428,25 @@ class VaultTest {
     }
 
     @Test fun aNoteMovedOutOfAFolderThatIsRenamedInTheSameSaveStillMoves() { // the full save used to fail on this, every time
-        val l = lib(); val v = vault()
+        val v = vault(); val l = v.load()
         val f = l.newFolder("F"); val g = l.newFolder("G"); val inside = l.newFile(f, "Inside")
         inside.notebook!!.current.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
         assertTrue(v.save(l).isEmpty())
         l.moveFile(f, inside, g); l.renameFolder(f, "F2")
         assertEquals(emptyList<String>(), v.save(l))
         assertEquals(1, reload().root.folders.first { it.name == "G" }.files.single().notebook!!.current.items.size)
+    }
+
+    @Test fun aDeletedPageBroughtBackByAnUndoIsBackOnDiskAfterAnAutosave() { // the autosave used to skip it: the page came back empty after a restart
+        val v = vault(); val l = v.load()
+        val f = l.newFile(l.root, "N"); val nb = f.notebook!!
+        val p1 = nb.current; p1.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(1, 1, 5, 5))
+        val p2 = nb.add(p1, Dir.RIGHT)!!; p2.add(Tool.TOOL_PEN, 0xFF000000.toInt(), 40, pts(7, 7, 9, 9))
+        v.autosave(l, f); v.flush()
+        nb.deletePage(p2); v.autosave(l, f); v.flush()
+        assertTrue(File(dir, "N.ink/.deleted/page-002.stylog").exists())
+        nb.undoPage(); v.autosave(l, f); v.flush()
+        assertTrue(File(dir, "N.ink/page-002.stylog").exists())
+        assertEquals(2, reload().root.files.single().notebook!!.pages.size)
     }
 }
